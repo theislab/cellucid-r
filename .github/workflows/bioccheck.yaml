@@ -1,0 +1,83 @@
+# Bioconductor-specific checks (BiocCheck).
+#
+# Why this exists:
+# - `R CMD check` is necessary but not sufficient for Bioconductor submission.
+# - `BiocCheck::BiocCheck()` enforces additional Bioconductor policies and
+#   catches issues reviewers will ask you to fix.
+#
+# Recommended usage:
+# - Keep the `bioccheck-release` job green on every PR.
+# - Before opening a Bioconductor submission issue, run the workflow manually
+#   with `run_devel=true` to test against Bioconductor devel.
+
+name: BiocCheck
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      run_devel:
+        description: "Also run BiocCheck against Bioconductor devel (recommended before submission)"
+        required: false
+        default: "false"
+
+jobs:
+  bioccheck-release:
+    name: BiocCheck (Bioconductor release)
+    runs-on: ubuntu-latest
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "release"
+          bioc-version: "release"
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: bioc::BiocCheck, local::.
+          needs: check
+
+      - name: Run BiocCheck
+        run: |
+          BiocCheck::BiocCheck(".")
+        shell: Rscript {0}
+
+  bioccheck-devel:
+    name: BiocCheck (Bioconductor devel)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_devel == 'true'
+    runs-on: ubuntu-latest
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "devel"
+          bioc-version: "devel"
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: bioc::BiocCheck, local::.
+          needs: check
+
+      - name: Run BiocCheck
+        run: |
+          BiocCheck::BiocCheck(".")
+        shell: Rscript {0}

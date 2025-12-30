@@ -1,0 +1,57 @@
+name: R-CMD-check
+
+# This is the main CI gate for development and releases.
+# It runs `R CMD check` across multiple OSes and R versions using r-lib/actions.
+# If this workflow is green, you are generally in good shape for:
+# - GitHub releases
+# - CRAN submission (see docs/publishing.md for the final `--as-cran` steps)
+# - Bioconductor submission (also run the BiocCheck workflow)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {os: macos-latest, r: 'release'}
+          - {os: windows-latest, r: 'release'}
+          - {os: ubuntu-latest, r: 'devel', http-user-agent: 'release'}
+          - {os: ubuntu-latest, r: 'release'}
+          - {os: ubuntu-latest, r: 'oldrel-1'}
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
+
+      # Installs package dependencies and rcmdcheck.
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      # Runs `R CMD check` (via rcmdcheck) and uploads the check results on failure.
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true

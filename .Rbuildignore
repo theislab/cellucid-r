@@ -1,0 +1,5 @@
+^\.github$
+^docs$
+^_pkgdown\.yml$
+^\.DS_Store$
+^LICENSE\\.md$

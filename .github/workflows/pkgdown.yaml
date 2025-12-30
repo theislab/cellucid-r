@@ -1,0 +1,55 @@
+name: pkgdown
+
+# Builds the pkgdown documentation website and publishes it to GitHub Pages.
+#
+# One-time setup in your GitHub repo:
+# - Settings → Pages → Build and deployment:
+#   - Source: "Deploy from a branch"
+#   - Branch: "gh-pages" / "(root)"
+#
+# This workflow deploys the generated site from the `docs/` directory to the
+# `gh-pages` branch (without committing `docs/` to your default branch).
+
+on:
+  push:
+    branches: [main, master]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  pkgdown:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pkgdown-${{ github.event_name != 'pull_request' || github.run_id }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      # Installs pkgdown + package dependencies.
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::pkgdown, local::.
+          needs: website
+
+      - name: Build site
+        run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+        shell: Rscript {0}
+
+      # Publishes `docs/` to the `gh-pages` branch.
+      - name: Deploy to GitHub pages
+        if: github.event_name != 'pull_request'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          clean: false
+          branch: gh-pages
+          folder: docs

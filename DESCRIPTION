@@ -1,0 +1,28 @@
+Package: cellucid
+Type: Package
+Title: Export Single-Cell Data to the Cellucid Viewer Format
+Version: 0.99.0
+Authors@R: c(
+    person("Kemal", "Inecik", email = "k.inecik@gmail.com", role = c("aut", "cre"))
+  )
+Description: Exports single-cell embeddings, metadata, gene expression, and
+    graph connectivity to the binary/JSON interchange format consumed by the
+    Cellucid WebGL viewer. The primary entry point is cellucid_prepare(),
+    which mirrors the prepare() function in the cellucid Python package.
+License: BSD_3_clause + file LICENSE
+Encoding: UTF-8
+Depends:
+    R (>= 4.3.0)
+Imports:
+    jsonlite
+Suggests:
+    BiocStyle,
+    knitr,
+    Matrix,
+    rmarkdown,
+    testthat (>= 3.1.0)
+VignetteBuilder: knitr
+biocViews: SingleCell, Visualization, DataRepresentation
+Config/testthat/edition: 3
+URL: https://github.com/theislab/cellucid-r
+BugReports: https://github.com/theislab/cellucid-r/issues

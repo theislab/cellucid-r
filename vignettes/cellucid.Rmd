@@ -1,0 +1,154 @@
+---
+title: "Exporting data for Cellucid"
+package: cellucid
+output:
+  BiocStyle::html_document:
+    toc: true
+vignette: >
+  %\\VignetteIndexEntry{Exporting data for Cellucid}
+  %\\VignetteEngine{knitr::rmarkdown}
+  %\\VignetteEncoding{UTF-8}
+---
+
+```{r, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Overview
+
+The `cellucid` package exports single-cell data (embeddings, metadata, gene
+expression, and connectivity) to the binary/JSON format consumed by the
+Cellucid WebGL viewer.
+
+The main entry point is `cellucid_prepare()` (also exported as `prepare()` to
+mirror the Python API).
+
+## Minimal example
+
+```{r}
+library(cellucid)
+
+latent <- matrix(c(0, 0,
+                   1, 1,
+                   2, 2),
+                 ncol = 2, byrow = TRUE)
+
+obs <- data.frame(
+  cluster = factor(c("A", "A", "B")),
+  score = c(0.1, 0.2, 0.3)
+)
+
+umap2 <- matrix(c(0, 0,
+                  1, 0,
+                  0, 1),
+                ncol = 2, byrow = TRUE)
+
+expr <- matrix(c(0, 1,
+                 2, 3,
+                 4, 5),
+               nrow = 3, ncol = 2, byrow = TRUE)
+
+var <- data.frame(symbol = c("G1", "G2"))
+rownames(var) <- var$symbol
+
+out_dir <- file.path(tempdir(), "cellucid_vignette_export")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+cellucid_prepare(
+  latent_space = latent,
+  obs = obs,
+  var = var,
+  gene_expression = expr,
+  X_umap_2d = umap2,
+  out_dir = out_dir,
+  centroid_min_points = 1,
+  force = TRUE
+)
+
+list.files(out_dir, recursive = TRUE)
+```
+
+## Using Seurat
+
+Seurat objects typically store expression as **genes × cells**, but
+`cellucid_prepare()` expects **cells × genes**, so transpose before passing.
+
+```{r, eval=FALSE}
+if (requireNamespace("Seurat", quietly = TRUE) &&
+    requireNamespace("Matrix", quietly = TRUE)) {
+
+  seu <- your_seurat_object
+
+  umap2 <- Seurat::Embeddings(seu, "umap")[, 1:2, drop = FALSE]
+  latent <- tryCatch(
+    Seurat::Embeddings(seu, "pca"),
+    error = function(e) umap2
+  )
+
+  obs <- seu@meta.data
+
+  expr_genes_by_cells <- Seurat::GetAssayData(seu, slot = "data")
+  expr_cells_by_genes <- Matrix::t(expr_genes_by_cells)
+
+  var <- data.frame(symbol = rownames(expr_genes_by_cells))
+  rownames(var) <- var$symbol
+
+  cellucid_prepare(
+    latent_space = latent,
+    obs = obs,
+    var = var,
+    gene_expression = expr_cells_by_genes,
+    X_umap_2d = umap2,
+    out_dir = "exports/seurat_export",
+    force = TRUE
+  )
+}
+```
+
+## Using SingleCellExperiment
+
+SingleCellExperiment assays are also typically **genes × cells**, so transpose
+before passing.
+
+```{r, eval=FALSE}
+if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
+    requireNamespace("SummarizedExperiment", quietly = TRUE) &&
+    requireNamespace("Matrix", quietly = TRUE)) {
+
+  sce <- your_sce_object
+
+  umap2 <- SingleCellExperiment::reducedDim(sce, "UMAP")
+  latent <- tryCatch(
+    SingleCellExperiment::reducedDim(sce, "PCA"),
+    error = function(e) umap2
+  )
+
+  obs <- as.data.frame(SummarizedExperiment::colData(sce))
+
+  expr_genes_by_cells <- SummarizedExperiment::assay(sce, "logcounts")
+  expr_cells_by_genes <- Matrix::t(expr_genes_by_cells)
+
+  var <- as.data.frame(SummarizedExperiment::rowData(sce))
+  rownames(var) <- rownames(sce)
+
+  cellucid_prepare(
+    latent_space = latent,
+    obs = obs,
+    var = var,
+    gene_expression = expr_cells_by_genes,
+    X_umap_2d = umap2,
+    out_dir = "exports/sce_export",
+    force = TRUE
+  )
+}
+```
+
+## Output format (high level)
+
+The export directory contains:
+
+- Embeddings: `points_1d.bin`, `points_2d.bin`, `points_3d.bin` (float32)
+- Cell metadata: `obs_manifest.json` + `obs/` binaries
+- Gene expression: `var_manifest.json` + `var/` binaries (one file per gene)
+- Connectivity (optional): `connectivity_manifest.json` + `connectivity/` binaries
+- Dataset metadata: `dataset_identity.json`
