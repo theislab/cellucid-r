@@ -1,152 +1,247 @@
-# Publishing `cellucid` (beginner-friendly)
+# Publishing `cellucid` (R package) — very beginner-friendly
 
-This guide is a step-by-step checklist for publishing the `cellucid` R package
-via GitHub Actions, with minimal local setup.
+This guide explains how to publish the **R package** `cellucid` from the **GitHub repo**
+`cellucid-r`, even if you’ve never published an R package before.
 
-It covers:
-- GitHub releases
-- r-universe
-- CRAN
-- Bioconductor
-- conda-forge (after CRAN)
+It focuses on a “CI-first” approach:
+- GitHub Actions builds and checks the package
+- you download the resulting `cellucid_<version>.tar.gz`
+- you upload it to CRAN / reference it for Bioconductor / use it for conda packaging
 
-## What GitHub Actions can and cannot do
+## Naming (read this first)
+
+You asked for:
+- **R package name**: `cellucid`
+- **conda package name only**: `cellucid-r`
+- everywhere else: `cellucid`
+
+That mapping is intentional and valid.
+
+| Thing | Name | Where it appears |
+|---|---|---|
+| R package name | `cellucid` | `cellucid-r/DESCRIPTION` → `Package:` |
+| What users type in R | `cellucid` | `library(cellucid)` |
+| GitHub repo name | `cellucid-r` | `https://github.com/theislab/cellucid-r` |
+| Source tarball name | `cellucid_<version>.tar.gz` | built by CI (`R CMD build`) |
+| CRAN / Bioconductor | `cellucid` | indexed by R package name |
+| conda | `cellucid-r` | `conda install ... cellucid-r` |
+
+Notes:
+- R package names cannot contain `-`, so the package itself must stay `cellucid`.
+- conda package names can contain `-`, which is why the conda name can be `cellucid-r`.
+
+## What you need (accounts + prerequisites)
+
+### Accounts (what requires what)
+
+- GitHub: required (to push changes + create releases)
+- CRAN: no account required up front, but you must provide a working email and reply to CRAN emails
+- Bioconductor: GitHub account required (submission happens via a GitHub issue)
+- r-universe: GitHub account required (one-time registration)
+- conda-forge: GitHub account required (submission happens via a PR)
+
+### Local tooling (optional, but helpful)
+
+You can ship releases using only GitHub Actions (no local R install), but for day-to-day development
+you’ll eventually want:
+- R (this package depends on `R (>= 4.3.0)`; see `cellucid-r/DESCRIPTION`)
+- (Optional) RStudio
+- Build tools (Windows: Rtools; macOS: Xcode Command Line Tools; Linux: build-essential)
+
+If you don’t have these yet, you can still do the “CI-first” release flow below.
+
+## Glossary (2-minute)
+
+- **Tag**: a git reference like `v0.99.0` pointing at a commit <!-- CELLUCID_VERSION -->
+- **GitHub Release**: a GitHub UI entry for a tag (with release notes + attached files)
+- **Workflow**: a GitHub Actions automation (CI)
+- **Artifact**: a file produced by a workflow that you can download (here: the tarball)
+- **Source tarball**: `cellucid_<version>.tar.gz` — this is what CRAN expects you to upload
+
+## How publishing works in this repo
 
 GitHub Actions can reliably automate:
-- Running `R CMD check` on multiple OSes / R versions
-- Running `BiocCheck::BiocCheck()` for Bioconductor readiness
-- Building a source tarball (`.tar.gz`) you can submit to CRAN/Bioconductor
-- Building and publishing the pkgdown documentation website
+- running `R CMD check` on multiple OSes / R versions
+- running `BiocCheck::BiocCheck()` for Bioconductor readiness
+- building a reproducible source tarball (`cellucid_<version>.tar.gz`)
+- building + publishing the docs website (pkgdown) to GitHub Pages
 
 GitHub Actions cannot (by design) fully automate:
-- **CRAN submission** (you must upload via the CRAN web form and respond to email)
-- **Bioconductor submission** (you must open a GitHub issue in the Bioconductor Contributions tracker)
-- **conda-forge onboarding** (you must open a PR to `staged-recipes`)
+- CRAN submission (you must upload via a web form + respond to email)
+- Bioconductor submission (you must open an issue in the Bioconductor Contributions tracker)
+- conda-forge onboarding (you must open PR(s) to `conda-forge/staged-recipes`)
 
-This guide shows how to make those manual steps “download artifact → upload”.
+## Quick start: “I only want a correct tarball I can submit”
 
-## One-time setup (do this once per repo)
+1. Merge a PR to `main` that bumps the version and updates `NEWS.md`.
+2. Create a GitHub Release with tag `vX.Y.Z`.
+3. Download `cellucid_<version>.tar.gz` from:
+   - GitHub → Actions → `Build Release Tarball` → workflow run → Artifacts → `r-source-tarball`
+4. Upload that tarball to CRAN, or reference it for Bioconductor/conda packaging.
+
+If you want the full, beginner-friendly detail, keep reading.
+
+---
+
+## One-time setup (do once per GitHub repo)
 
 ### 1) Confirm workflows exist
 
-In `.github/workflows/` you should have:
+In `cellucid-r/.github/workflows/` you should have:
 - `R-CMD-check.yaml` (main CI gate)
-- `BiocCheck` workflow (`bioccheck.yaml`)
-- `Build Release Tarball` workflow (`release.yaml`)
+- `bioccheck.yaml` (Bioconductor policy gate)
+- `release.yaml` (workflow name: “Build Release Tarball”)
 - `pkgdown.yaml` (website)
-- `test-coverage.yaml` (optional Codecov)
-
-What each workflow does:
-
-| Workflow | When it runs | What you use it for |
-|---|---|---|
-| `R-CMD-check` | push/PR/manual | Main correctness gate across OS + R versions |
-| `BiocCheck` | push/PR/manual | Bioconductor readiness gate (policy + structure) |
-| `Build Release Tarball` | release/manual | Produces `cellucid_<version>.tar.gz` for CRAN/Bioc |
-| `pkgdown` | push/release/manual | Builds and publishes your docs website |
-| `test-coverage` | push/PR/manual | Coverage reporting (optional) |
 
 ### 2) Enable GitHub Actions
 
-In your GitHub repo:
-- **Settings → Actions → General**
-  - Allow Actions to run (default is fine for most repos)
-
-### 2b) Learn where to click (Actions + Artifacts)
-
-You will use these two pages constantly:
-- **Actions tab**: shows workflow runs and logs
-- **A workflow run page**: contains the **Artifacts** section (downloadable `.zip` files)
-
-For CRAN/Bioconductor submissions, you typically download the artifact from:
-- Actions → `Build Release Tarball` → latest successful run → Artifacts → `r-source-tarball`
+In GitHub:
+- Settings → Actions → General → ensure Actions are enabled
 
 ### 3) Enable GitHub Pages (for pkgdown)
 
-This repo uses `pkgdown` + the `gh-pages` branch.
-The `pkgdown` workflow builds into `docs/site/` and deploys that folder to `gh-pages`.
+This repo deploys a generated website to the `gh-pages` branch (root).
 
-In your GitHub repo:
-- **Settings → Pages**
+In GitHub:
+- Settings → Pages
   - Source: “Deploy from a branch”
   - Branch: `gh-pages` / `(root)`
 
 After the next successful `pkgdown` workflow run, your site should appear at:
-`https://<github-username>.github.io/<repo>/`
+- `https://theislab.github.io/cellucid-r/` (adjust org/repo if you fork)
 
-### 4) (Optional) Configure Codecov
+---
 
-If you want coverage reporting:
-- Create a Codecov project for your repo.
-- If the repo is private, add a `CODECOV_TOKEN` secret in:
-  - **Settings → Secrets and variables → Actions**
+## Every release (detailed checklist)
 
-If you don’t want Codecov, you can delete `test-coverage.yaml`.
+### Step 0 — Decide where you’re publishing
 
-## The release flow (recommended)
+Pick your targets up front:
+- **GitHub only**: easiest; good for early alpha
+- **r-universe**: easiest “binary install” path for users
+- **CRAN**: broad R audience; stricter checks and policy expectations
+- **Bioconductor**: best fit for bioinformatics tooling; additional policies
+- **conda**: for conda env installs; we want the conda name to be `cellucid-r`
 
-Use this flow for every release, even “small” ones.
+A common, low-friction order is:
+GitHub Release → r-universe (optional) → CRAN or Bioconductor → conda packaging
 
-### Step A — Prepare the release PR
+### Step 1 — Update the version number (and keep it consistent)
 
-1. Update `DESCRIPTION`:
-   - Bump `Version:`
-2. Update `CITATION.cff` (if present):
-   - Keep `version:` in sync with `DESCRIPTION`
-3. Update `NEWS.md`:
-   - Add a bullet list of user-visible changes
-4. Ensure documentation is up to date:
-   - `README.md`
-   - vignette(s) in `vignettes/`
+Update these files:
+- `cellucid-r/DESCRIPTION` → `Version:`
+- `cellucid-r/CITATION.cff` → `version:` (keep in sync)
+- `cellucid-r/NEWS.md` → add a new section for the version
 
-### Step B — Merge, then create a GitHub Release
+Versioning tips:
+- Versions must be monotonically increasing. Never re-use a version number.
+- Git tags/releases use a `v` prefix: tag `v0.99.0` corresponds to `Version: 0.99.0`. <!-- CELLUCID_VERSION -->
 
-1. Merge your PR to `main`.
-2. Create a GitHub Release:
-   - **Releases → Draft a new release**
-   - Tag: `vX.Y.Z` (example: `v0.99.1`)
-   - Target: `main`
-   - Title: `cellucid X.Y.Z`
-   - Release notes: paste the matching section from `NEWS.md`
+Bioconductor note (important for first-time submitters):
+- New Bioconductor submissions commonly start at `0.99.0` (not `0.0.x`).
+- If you plan to submit to Bioconductor soon, consider making a “Bioconductor submission release”
+  where you bump `Version:` to `0.99.0` and tag `v0.99.0`.
 
-This triggers the `Build Release Tarball` workflow.
+### Step 2 — Update docs + generated files (optional, requires local R)
 
-### Step C — Wait for CI to go green
+If you have R installed locally, it’s worth doing a local check before releasing.
 
-Before publishing anywhere:
-- Ensure `R-CMD-check` is green
-- Ensure `BiocCheck (Bioconductor release)` is green
-- (Optional) run `BiocCheck (devel)` from the Actions tab (recommended before Bioconductor submission)
+From within `cellucid-r/`:
 
-### Step D — Download the tarball artifact
+1) Run unit tests:
+
+```r
+install.packages("devtools")
+devtools::test()
+```
+
+2) Run a full check:
+
+```r
+devtools::check()
+```
+
+If you don’t have R locally, skip this and rely on CI (GitHub Actions).
+
+### Step 3 — Open a release PR and merge it
+
+Make a PR containing:
+- version bump(s)
+- `NEWS.md` updates
+- any code changes
+
+Wait for CI to be green:
+- `R-CMD-check` (required)
+- `BiocCheck (Bioconductor release)` (required if you care about Bioconductor)
+- (Recommended before Bioconductor submission) run `BiocCheck` manually with `run_devel=true`
+
+Then merge to `main`.
+
+### Step 4 — Create a GitHub Release (this triggers the tarball build)
+
+In GitHub:
+1. Go to Releases → “Draft a new release”
+2. Tag: create `vX.Y.Z` (must match `cellucid-r/DESCRIPTION` version `X.Y.Z`)
+3. Target: `main`
+4. Title: `cellucid X.Y.Z`
+5. Release notes: paste the matching section from `cellucid-r/NEWS.md`
+6. Click “Publish release”
+
+This triggers the `Build Release Tarball` workflow (defined in `cellucid-r/.github/workflows/release.yaml`).
+
+Alternative (no Release yet): you can build a tarball via the Actions UI:
+- Actions → `Build Release Tarball` → “Run workflow”
+  - keep `run_as_cran=true` (recommended if CRAN is a target)
+
+### Step 5 — Download the tarball artifact
 
 From the successful `Build Release Tarball` workflow run:
 - Download the artifact named `r-source-tarball`
-  - It contains `cellucid_<version>.tar.gz`
+  - it contains `cellucid_<version>.tar.gz`
 
-If you created a GitHub Release, the same tarball is also attached to the release.
+If you created a GitHub Release, the same tarball is also attached to that Release.
 
-That `.tar.gz` is what you submit to CRAN and reference for Bioconductor.
+### Step 6 — (Optional) sanity-check the tarball
 
-## Publishing targets
+If you have R installed locally, you can verify the exact tarball:
+
+```sh
+R CMD check --as-cran cellucid_<version>.tar.gz
+```
+
+If you don’t have R locally, you can still at least confirm the tarball unzips cleanly.
+
+---
+
+## Publishing targets (step-by-step)
 
 ### 1) GitHub (source of truth)
 
 You’re effectively “published” as soon as:
-- The repo is public, and
-- You create a GitHub Release
+- the repo is public, and
+- you create a GitHub Release.
 
-Recommended:
-- Keep release notes in GitHub Releases and in `NEWS.md`.
+Install from GitHub (users still load as `cellucid`):
 
-### 2) r-universe (easy binary builds)
+```r
+remotes::install_github("theislab/cellucid-r")
+library(cellucid)
+```
 
-`r-universe` builds your package automatically from GitHub and hosts binaries for
-Windows/macOS/Linux.
+### 2) Website (pkgdown → GitHub Pages)
+
+The `pkgdown` workflow builds the site into `docs/site/` and deploys that folder to the `gh-pages` branch.
+
+Once GitHub Pages is enabled (see one-time setup), the site will update on:
+- pushes to `main`, and
+- GitHub Releases.
+
+### 3) r-universe (easy binaries)
+
+`r-universe` builds your package automatically from GitHub and hosts binaries for Windows/macOS/Linux.
 
 One-time setup:
-1. Create a GitHub repo named `universe` under your org/user, e.g.:
-   - `theislab/universe`
+1. Create a GitHub repo named `universe` under your org/user, e.g. `theislab/universe`.
 2. Add a `packages.json` file to that repo:
    ```json
    [
@@ -158,71 +253,155 @@ One-time setup:
    ```
 3. Register at: https://r-universe.dev/add
 
-Result:
-- Users can install via:
-  ```r
-  install.packages("cellucid", repos = "https://theislab.r-universe.dev")
-  ```
+Users can then install via:
+```r
+install.packages("cellucid", repos = "https://theislab.r-universe.dev")
+```
 
-### 3) CRAN
+### 4) CRAN (manual submission)
 
-CRAN submission is manual, but GitHub Actions can do the hard parts:
-- Build the `.tar.gz`
-- Run `R CMD check --as-cran`
+CRAN submission is manual, but CI can do the hard parts:
+- build the `.tar.gz`
+- run `R CMD check --as-cran`
 
-Note:
-- CRAN does not recognize Bioconductor-only `DESCRIPTION` fields like `biocViews`, which can produce a NOTE.
-- If you want a 0-NOTE CRAN submission, consider a CRAN-specific branch/release that drops Bioconductor-only fields.
+What to expect (first time):
+- you upload a `.tar.gz` via a web form
+- you reply to a confirmation email
+- CRAN may email you review requests
+- if you need changes, you must submit a new version (never re-submit the same version)
 
-Checklist:
-1. Create a GitHub Release (or run the workflow manually):
-   - Actions → `Build Release Tarball`
+CRAN checklist:
+1. Create a GitHub Release (or run the `Build Release Tarball` workflow manually).
 2. Confirm the workflow log shows `R CMD check --as-cran` passed with:
    - 0 ERROR
    - 0 WARNING
-   - ideally 0 NOTE (some NOTEs can be acceptable, but CRAN will ask)
+   - ideally 0 NOTE
 3. Download `cellucid_<version>.tar.gz` from the workflow artifact.
 4. Submit at: https://cran.r-project.org/submit.html
-   - Upload the `.tar.gz`
-   - Reply to the confirmation email
+   - upload the `.tar.gz`
+   - reply to the confirmation email
 
-If CRAN emails you about check failures:
-- Fix the issue on `main`
-- Cut a new patch release
-- Re-submit the new tarball
+CRAN note specific to this repo:
+- CRAN does not recognize Bioconductor-only `DESCRIPTION` fields like `biocViews`, which can produce a NOTE.
+- If you want a 0-NOTE CRAN submission, consider making a CRAN-specific branch/release that drops Bioconductor-only fields.
 
-### 4) Bioconductor (primary target)
+### 5) Bioconductor (manual submission; primary target for bio tooling)
 
 Bioconductor submission is also manual, but CI makes it much easier.
 
-Checklist:
+Bioconductor checklist:
 1. Ensure `R-CMD-check` is green.
 2. Run `BiocCheck`:
-   - Actions → `BiocCheck`
-   - Run workflow, set `run_devel=true` (recommended before submission)
+   - Actions → `BiocCheck` → “Run workflow”
+   - set `run_devel=true` (recommended before submitting)
 3. Read the contributor guide:
    - https://contributions.bioconductor.org/
 4. Open a new issue at:
    - https://github.com/Bioconductor/Contributions/issues/new
-5. Provide:
-   - Repo URL
-   - Brief package summary
-   - Confirmation that `BiocCheck` passes (link the Actions run)
-    - Any reviewer notes you already addressed (helps a lot)
+5. In your issue, provide:
+   - package name: `cellucid`
+   - repo URL: `https://github.com/theislab/cellucid-r`
+   - brief package summary (2–5 sentences)
+   - confirmation that `BiocCheck` passes (link the Actions run)
+   - any reviewer notes you already addressed
 
-### 5) conda-forge (after CRAN)
+Versioning note (important):
+- New Bioconductor submissions commonly start at `0.99.0`. If you’re currently at `0.0.x`,
+  plan a version bump for submission.
 
-The easiest conda-forge path is after you’re on CRAN:
-1. Fork: https://github.com/conda-forge/staged-recipes
-2. Add a recipe under `recipes/r-cellucid/` that builds from the CRAN tarball.
-3. Submit a PR.
+### 6) conda (publish as `cellucid-r`)
 
-After merge, conda-forge creates a feedstock repo for updates.
+Goal:
+- conda users install `cellucid-r`
+- R users load `cellucid`
 
-## Quick reference: what each workflow is for
+```sh
+# If you publish `cellucid-r` on conda-forge:
+mamba install -c conda-forge cellucid-r
 
-- `R-CMD-check`: cross-platform correctness gate; keep it green always.
-- `BiocCheck`: Bioconductor policy gate; run devel before submission.
-- `Build Release Tarball`: produces the `.tar.gz` you submit to CRAN/Bioconductor.
-- `pkgdown`: publishes the documentation website.
-- `test-coverage`: optional coverage reporting.
+# If you publish `cellucid-r` on your own channel:
+mamba install -c <your-channel> cellucid-r
+
+R -q -e 'library(cellucid); packageVersion("cellucid")'
+```
+
+#### Option A: conda-forge (widest reach) + alias package
+
+conda-forge conventions for CRAN R packages use `r-<pkgname>`, so the “canonical” build would be:
+- `r-cellucid` (contains the actual R package)
+
+To keep your desired conda install name (`cellucid-r`), publish an additional tiny “metapackage”:
+- `cellucid-r` (depends on `r-cellucid`)
+
+Important:
+- This option still publishes `r-cellucid` to conda-forge (that’s where the actual R code lives).
+  `cellucid-r` is just a beginner-friendly alias you document.
+- If you truly need **only** `cellucid-r` to exist in conda (no `r-cellucid` at all), use Option B.
+
+Step-by-step:
+1. Get `cellucid` onto CRAN first (recommended), so conda-forge can build from the CRAN tarball.
+2. Fork https://github.com/conda-forge/staged-recipes
+3. Add the main recipe under `recipes/r-cellucid/` (builds the real R package).
+4. Add an alias recipe under `recipes/cellucid-r/` that depends on `r-cellucid`.
+5. Submit a PR and follow conda-forge reviewer feedback.
+
+Minimal `meta.yaml` idea for the alias recipe:
+```yaml
+package:
+  name: cellucid-r
+  version: 0.99.0  # CELLUCID_VERSION
+
+build:
+  number: 0
+  noarch: generic
+
+requirements:
+  run:
+    - r-cellucid ==0.99.0  # CELLUCID_VERSION
+```
+
+After merge, conda-forge creates feedstock repo(s) for updates.
+
+#### Option B (strict naming): publish `cellucid-r` on your own conda channel
+
+If you want **only** `cellucid-r` to exist in conda (no `r-cellucid` at all), publish to your own
+channel (e.g., Anaconda.org) where you control naming.
+
+High-level steps:
+1. Create an account on Anaconda.org and an upload token.
+2. Create a conda recipe that installs the R package `cellucid`, but sets:
+   - `package.name: cellucid-r`
+3. Build and upload the package.
+
+Trade-offs:
+- Pros: exactly one conda package name (`cellucid-r`)
+- Cons: users must add your channel; less discoverable than conda-forge
+
+---
+
+## Troubleshooting (common)
+
+### Where to click in GitHub to find logs + artifacts
+
+- Actions tab: list of workflow runs
+- Click a workflow run: shows jobs + logs
+- Artifacts are listed at the bottom of the workflow run page
+
+### “CRAN/Bioc asked me to change something”
+
+- Make the requested fix on a PR.
+- Merge to `main`.
+- Bump the version.
+- Cut a new GitHub Release.
+- Re-submit with the new tarball / link updated CI.
+
+---
+
+## Quick reference: workflows
+
+| Workflow | File | Purpose |
+|---|---|---|
+| `R-CMD-check` | `cellucid-r/.github/workflows/R-CMD-check.yaml` | cross-platform correctness gate |
+| `BiocCheck` | `cellucid-r/.github/workflows/bioccheck.yaml` | Bioconductor policy gate |
+| `Build Release Tarball` | `cellucid-r/.github/workflows/release.yaml` | builds `cellucid_<version>.tar.gz` and runs `--as-cran` |
+| `pkgdown` | `cellucid-r/.github/workflows/pkgdown.yaml` | builds + deploys documentation website |

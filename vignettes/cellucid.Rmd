@@ -5,9 +5,9 @@ output:
   BiocStyle::html_document:
     toc: true
 vignette: >
-  %\\VignetteIndexEntry{Exporting data for Cellucid}
-  %\\VignetteEngine{knitr::rmarkdown}
-  %\\VignetteEncoding{UTF-8}
+  %\VignetteIndexEntry{Exporting data for Cellucid}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
 ```{r, echo=FALSE, message=FALSE}

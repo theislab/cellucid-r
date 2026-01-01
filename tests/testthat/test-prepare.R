@@ -265,7 +265,6 @@ test_that("duplicate gene identifiers are rejected", {
 
   expr <- matrix(0, nrow = 3, ncol = 2)
   var <- data.frame(symbol = c("G1", "G1"))
-  rownames(var) <- var$symbol
 
   out <- file.path(tempdir(), "cellucid_test_dup_gene_ids")
   unlink(out, recursive = TRUE, force = TRUE)
@@ -276,6 +275,7 @@ test_that("duplicate gene identifiers are rejected", {
       obs = obs,
       var = var,
       gene_expression = expr,
+      var_gene_id_column = "symbol",
       X_umap_2d = umap2,
       out_dir = out,
       centroid_min_points = 1,

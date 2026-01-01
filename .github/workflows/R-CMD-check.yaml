@@ -4,7 +4,7 @@ name: R-CMD-check
 # It runs `R CMD check` across multiple OSes and R versions using r-lib/actions.
 # If this workflow is green, you are generally in good shape for:
 # - GitHub releases
-# - CRAN submission (see docs/publishing.md for the final `--as-cran` steps)
+# - CRAN submission (see publishing.md for the final `--as-cran` steps)
 # - Bioconductor submission (also run the BiocCheck workflow)
 
 on:
