@@ -3,9 +3,9 @@
 # This workflow is designed for beginners:
 # - Create a GitHub Release (or run manually)
 # - Download the `.tar.gz` artifact from the workflow run
-# - Upload that exact tarball to CRAN, or attach it in your Bioconductor submission
+# - Upload that exact tarball to CRAN
 #
-# This does *not* auto-submit to CRAN/Bioconductor (those still require a human),
+# This does *not* auto-submit to CRAN (that still requires a human),
 # but it automates the parts that are easy to get wrong: reproducible building
 # and pre-flight checks.
 
@@ -42,6 +42,15 @@ jobs:
           use-public-rspm: true
 
       - uses: r-lib/actions/setup-tinytex@v2
+
+      - name: Ensure pdflatex is available
+        run: |
+          if ! command -v pdflatex >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended
+          fi
+          pdflatex --version
+        shell: bash
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:

@@ -1,4 +1,4 @@
-% Generated manually for Bioconductor submission.
+% Generated manually for CRAN submission.
 \name{cellucid_prepare}
 \alias{cellucid_prepare}
 \alias{prepare}
