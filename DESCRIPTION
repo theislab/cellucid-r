@@ -3,7 +3,11 @@ Type: Package
 Title: Export Single-Cell Data to the Cellucid Viewer Format
 Version: 0.99.0
 Authors@R: c(
-    person("Kemal", "Inecik", email = "k.inecik@gmail.com", role = c("aut", "cre"))
+    person(
+      "Kemal", "Inecik",
+      email = "k.inecik@gmail.com",
+      role = c("aut", "cre")
+    )
   )
 Description: Exports single-cell embeddings, metadata, gene expression, and
     graph connectivity to the binary/JSON interchange format consumed by the
@@ -24,5 +28,6 @@ Suggests:
 VignetteBuilder: knitr
 biocViews: SingleCell, Visualization, DataRepresentation
 Config/testthat/edition: 3
-URL: https://github.com/theislab/cellucid-r
+URL: https://github.com/theislab/cellucid-r,
+    https://theislab.github.io/cellucid-r/
 BugReports: https://github.com/theislab/cellucid-r/issues

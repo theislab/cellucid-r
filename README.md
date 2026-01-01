@@ -1,23 +1,42 @@
-# cellucid
+<p>
+  <img src="https://raw.githubusercontent.com/theislab/cellucid-python/main/cellucid-logo.svg" alt="Cellucid logo" width="360">
+</p>
 
-Minimal R package for exporting single-cell data to the [Cellucid](https://github.com/theislab/cellucid) visualization format.
+[![CRAN status](https://www.r-pkg.org/badges/version/cellucid)](https://CRAN.R-project.org/package=cellucid)
+[![R-CMD-check](https://github.com/theislab/cellucid-r/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/theislab/cellucid-r/actions/workflows/R-CMD-check.yaml)
+[![BiocCheck](https://github.com/theislab/cellucid-r/actions/workflows/bioccheck.yaml/badge.svg)](https://github.com/theislab/cellucid-r/actions/workflows/bioccheck.yaml)
+[![pkgdown](https://github.com/theislab/cellucid-r/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/theislab/cellucid-r/actions/workflows/pkgdown.yaml)
+[![test-coverage](https://github.com/theislab/cellucid-r/actions/workflows/test-coverage.yaml/badge.svg)](https://github.com/theislab/cellucid-r/actions/workflows/test-coverage.yaml)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-## Aims
+# Cellucid
 
-- **Minimal dependencies**: Only `jsonlite` as a hard dependency
+R package for exporting single-cell data to the [Cellucid](https://github.com/theislab/cellucid) visualization format.
+
+## Features
+
+- **Minimal dependencies**: only `jsonlite` is required
 - **Simple API**: `cellucid_prepare()` (also exported as `prepare()`) mirroring `cellucid-python`
-- **Bioconductor submission**: Complete package skeleton (vignette, tests, biocViews, NEWS)
-- **Raw R data structures**: No Seurat/SingleCellExperiment dependencies - accepts standard matrices and data.frames
+- **Raw R data structures**: accepts standard matrices and `data.frame`s (no Seurat/SingleCellExperiment dependency)
+- **Optional exports**: gene expression (`var/`), connectivity graphs (`connectivity/`), vector fields (`vectors/`)
+- **Bioconductor-ready skeleton**: vignette, tests, `biocViews`, `NEWS.md`, CI workflows
 
 ## Installation
 
-This package is designed for Bioconductor, but can be installed from GitHub during development:
+Install from GitHub (recommended for now):
 
 ```r
+install.packages("remotes")
 remotes::install_github("theislab/cellucid-r")
 ```
 
-## Usage
+Optional but recommended (sparse matrices + connectivity export):
+
+```r
+install.packages("Matrix")
+```
+
+## Quickstart
 
 ```r
 library(cellucid)
@@ -40,7 +59,7 @@ umap2 <- matrix(c(0, 0,
 expr <- matrix(c(0, 1,
                  2, 3,
                  4, 5),
-               nrow = 3, ncol = 2, byrow = TRUE)
+               nrow = 3, ncol = 2, byrow = TRUE) # cells × genes
 
 var <- data.frame(symbol = c("G1", "G2"))
 rownames(var) <- var$symbol
@@ -60,39 +79,27 @@ cellucid_prepare(
 )
 ```
 
-### Using with Seurat
+## Seurat / SingleCellExperiment
 
-`cellucid` intentionally does **not** depend on Seurat. This example shows how to
-extract the required inputs from an existing Seurat object.
+`cellucid` intentionally does **not** depend on Seurat or SingleCellExperiment. These examples show how to extract the required inputs.
 
-Important: Seurat expression matrices are typically **genes × cells**, but
-`cellucid_prepare()` expects **cells × genes**. Transpose before passing.
+Important: expression matrices are typically **genes × cells**, but `cellucid_prepare()` expects **cells × genes**. Transpose before passing.
+
+### Seurat
 
 ```r
 if (requireNamespace("Seurat", quietly = TRUE) &&
     requireNamespace("Matrix", quietly = TRUE)) {
 
-  # Replace with your object
   seu <- your_seurat_object
 
-  # Embedding (cells × 2)
   umap2 <- Seurat::Embeddings(seu, "umap")[, 1:2, drop = FALSE]
-
-  # Latent space (cells × dims) used for categorical outlier quantiles.
-  # PCA is a reasonable default; fall back to UMAP if needed.
-  latent <- tryCatch(
-    Seurat::Embeddings(seu, "pca"),
-    error = function(e) umap2
-  )
-
-  # Cell metadata (cells × fields)
+  latent <- tryCatch(Seurat::Embeddings(seu, "pca"), error = function(e) umap2)
   obs <- seu@meta.data
 
-  # Gene expression: Seurat stores features × cells -> transpose to cells × features
   expr_genes_by_cells <- Seurat::GetAssayData(seu, slot = "data")
   expr_cells_by_genes <- Matrix::t(expr_genes_by_cells)
 
-  # Feature metadata must have one row per gene
   var <- data.frame(symbol = rownames(expr_genes_by_cells))
   rownames(var) <- var$symbol
 
@@ -108,28 +115,17 @@ if (requireNamespace("Seurat", quietly = TRUE) &&
 }
 ```
 
-### Using with SingleCellExperiment
-
-SingleCellExperiment expression assays are also typically **genes × cells**, so
-transpose before passing to `cellucid_prepare()`.
+### SingleCellExperiment
 
 ```r
 if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
     requireNamespace("SummarizedExperiment", quietly = TRUE) &&
     requireNamespace("Matrix", quietly = TRUE)) {
 
-  # Replace with your object
   sce <- your_sce_object
 
-  # Embedding (cells × 2)
   umap2 <- SingleCellExperiment::reducedDim(sce, "UMAP")
-
-  # Latent space (cells × dims)
-  latent <- tryCatch(
-    SingleCellExperiment::reducedDim(sce, "PCA"),
-    error = function(e) umap2
-  )
-
+  latent <- tryCatch(SingleCellExperiment::reducedDim(sce, "PCA"), error = function(e) umap2)
   obs <- as.data.frame(SummarizedExperiment::colData(sce))
 
   expr_genes_by_cells <- SummarizedExperiment::assay(sce, "logcounts")
@@ -156,18 +152,27 @@ The export directory contains:
 
 - Embeddings: `points_1d.bin`, `points_2d.bin`, `points_3d.bin` (float32; optionally `.gz`)
 - Cell metadata: `obs_manifest.json` and `obs/` binaries
-- Gene expression: `var_manifest.json` and `var/` binaries (one file per gene)
+- Gene expression (optional): `var_manifest.json` and `var/` binaries (one file per gene)
 - Connectivity (optional): `connectivity_manifest.json` and `connectivity/` binaries
+- Vector fields (optional): `vectors/` binaries + metadata in `dataset_identity.json`
 - Dataset metadata: `dataset_identity.json`
+
+## Documentation
+
+- Function docs: `?cellucid_prepare`
+- Website: https://theislab.github.io/cellucid-r/
+- Vignette: `browseVignettes("cellucid")` (source: `vignettes/cellucid.Rmd`)
+- Publishing checklist: `docs/publishing.md`
+
+## Citation
+
+- In R: `citation("cellucid")`
+- GitHub: `CITATION.cff`
 
 ## Related
 
 - [cellucid](https://github.com/theislab/cellucid) - WebGL viewer
-- [cellucid-python](https://github.com/theislab/cellucid-python) - Python package
-
-## Publishing
-
-See `docs/publishing.md`.
+- [cellucid-python](https://github.com/theislab/cellucid-python) - Python package + docs
 
 ## Contributing
 

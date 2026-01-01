@@ -1,0 +1,24 @@
+# R / RStudio
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# Package build artifacts
+*.tar.gz
+*.Rcheck/
+
+# Vignette build artifacts
+inst/doc/
+vignettes/*.html
+vignettes/*.pdf
+
+# pkgdown (local builds; CI deploys separately)
+docs/site/
+
+# Common exports folder name from examples
+exports/
+
+# macOS
+.DS_Store

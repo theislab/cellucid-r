@@ -4,6 +4,9 @@ Contributions are welcome — code, docs, bug reports, and reproducible examples
 
 This file focuses on `cellucid-r` (the R package that exports data to the Cellucid viewer format), and also helps route issues/PRs to the correct repo in the Cellucid ecosystem.
 
+By participating, you agree to follow the project’s Code of Conduct:
+- `CODE_OF_CONDUCT.md`
+
 ---
 
 ## Which repo should I contribute to?
@@ -148,7 +151,11 @@ Guidelines:
 
 ### Regenerate `.Rd` files
 
-Most man pages should be generated from roxygen comments in `cellucid-r/R/`.
+The package ships its help page(s) under `cellucid-r/man/`.
+
+If you change the public API (especially `cellucid_prepare()`), keep the help page in sync:
+- update `cellucid-r/man/cellucid_prepare.Rd`, or
+- regenerate it with `roxygen2` and commit the result.
 
 ```r
 devtools::document()
@@ -165,7 +172,7 @@ devtools::build_vignettes()
 If you’re working on the website output (GitHub Pages):
 
 ```r
-pkgdown::build_site()
+pkgdown::build_site(dest_dir = "docs/site")
 ```
 
 ---
@@ -249,4 +256,3 @@ Common causes:
 Fix:
 - use `file.path()` in R code
 - avoid assuming writable directories; use `tempdir()` in tests/vignettes
-

@@ -64,6 +64,7 @@ For CRAN/Bioconductor submissions, you typically download the artifact from:
 ### 3) Enable GitHub Pages (for pkgdown)
 
 This repo uses `pkgdown` + the `gh-pages` branch.
+The `pkgdown` workflow builds into `docs/site/` and deploys that folder to `gh-pages`.
 
 In your GitHub repo:
 - **Settings → Pages**
@@ -90,9 +91,11 @@ Use this flow for every release, even “small” ones.
 
 1. Update `DESCRIPTION`:
    - Bump `Version:`
-2. Update `NEWS.md`:
+2. Update `CITATION.cff` (if present):
+   - Keep `version:` in sync with `DESCRIPTION`
+3. Update `NEWS.md`:
    - Add a bullet list of user-visible changes
-3. Ensure documentation is up to date:
+4. Ensure documentation is up to date:
    - `README.md`
    - vignette(s) in `vignettes/`
 
@@ -166,6 +169,10 @@ Result:
 CRAN submission is manual, but GitHub Actions can do the hard parts:
 - Build the `.tar.gz`
 - Run `R CMD check --as-cran`
+
+Note:
+- CRAN does not recognize Bioconductor-only `DESCRIPTION` fields like `biocViews`, which can produce a NOTE.
+- If you want a 0-NOTE CRAN submission, consider a CRAN-specific branch/release that drops Bioconductor-only fields.
 
 Checklist:
 1. Create a GitHub Release (or run the workflow manually):

@@ -132,6 +132,11 @@ Note on gene expression orientation: \code{gene_expression} must be shaped
 containers store expression as \code{(n_genes, n_cells)}; transpose before
 passing to \code{cellucid_prepare()}. See the vignette for Seurat and
 SingleCellExperiment extraction examples.
+
+Note on filename safety: \code{cellucid_prepare()} writes per-field and per-gene
+files using filesystem-safe identifiers derived from obs keys and gene IDs. To
+avoid silent overwrites, gene IDs and obs keys must be unique after
+sanitization; duplicates or sanitization collisions are rejected.
 }
 \examples{
 latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)

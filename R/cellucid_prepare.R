@@ -4,6 +4,10 @@
 #' Python package and writes a directory of binary (`.bin`, `.f32`, `.u8`, `.u16`)
 #' and JSON manifest files consumed by the Cellucid WebGL viewer.
 #'
+#' Gene identifiers and `obs` keys are sanitized for filenames; they must be
+#' unique after sanitization, otherwise export fails to prevent silent
+#' overwrites.
+#'
 #' @param latent_space Numeric matrix-like of shape `(n_cells, n_dims)`.
 #'   Required for per-cell outlier quantile calculations for categorical fields.
 #' @param obs A `data.frame` of cell metadata with `n_cells` rows.
@@ -277,6 +281,7 @@ cellucid_prepare <- function(
     }
 
     all_gene_ids <- .extract_gene_ids(var, var_gene_id_column)
+    .validate_gene_ids(all_gene_ids)
     gene_id_to_idx <- setNames(seq_along(all_gene_ids), all_gene_ids)
 
     if (is.null(gene_identifiers)) {
@@ -301,11 +306,12 @@ cellucid_prepare <- function(
       .dir_create(var_binary_dir)
 
       var_manifest_fields <- vector("list", length(genes_to_export))
+      safe_gene_ids <- .assert_unique_filename_components(genes_to_export, what = "Gene identifiers")
 
       for (idx in seq_along(genes_to_export)) {
         gene_id <- genes_to_export[[idx]]
         gene_idx <- unname(gene_id_to_idx[[gene_id]])
-        safe_gene_id <- .safe_filename_component(gene_id)
+        safe_gene_id <- safe_gene_ids[[idx]]
 
         values <- .get_gene_column(gene_expression, gene_idx, n_cells = n_cells)
 
@@ -434,8 +440,8 @@ cellucid_prepare <- function(
     dataset_name <- basename(out_dir)
   }
 
-  n_genes <- if (!is.null(gene_expression) && !is.null(var)) {
-    as.integer(ncol(.as_matrix_like(gene_expression, name = "gene_expression")))
+  n_genes <- if (!is.null(gene_expression)) {
+    as.integer(length(genes_to_export))
   } else {
     0L
   }
@@ -560,6 +566,34 @@ prepare <- cellucid_prepare
     safe <- "field"
   }
   safe
+}
+
+.assert_unique_filename_components <- function(keys, what) {
+  keys <- as.character(keys)
+  safe <- vapply(keys, .safe_filename_component, character(1))
+
+  dup_safe <- unique(safe[duplicated(safe)])
+  if (length(dup_safe) == 0L) {
+    return(invisible(safe))
+  }
+
+  collision_lines <- character(0)
+  for (safe_key in dup_safe) {
+    originals <- unique(keys[safe == safe_key])
+    preview <- paste(sprintf("'%s'", utils::head(originals, 5)), collapse = ", ")
+    if (length(originals) > 5L) {
+      preview <- paste0(preview, ", ...")
+    }
+    collision_lines <- c(collision_lines, sprintf("  - '%s' <- %s", safe_key, preview))
+  }
+
+  stop(
+    what,
+    " contains names that collide after filename sanitization.\n",
+    "Please rename to avoid collisions. Collisions:\n",
+    paste(collision_lines, collapse = "\n"),
+    call. = FALSE
+  )
 }
 
 .as_dense_matrix <- function(x, name) {
@@ -869,14 +903,16 @@ prepare <- cellucid_prepare
     obs_categorical_dtype,
     compression
 ) {
+  safe_keys <- .assert_unique_filename_components(obs_keys, what = "obs_keys")
   continuous_fields <- list()
   categorical_fields <- list()
   continuous_dtype_info <- list()
   categorical_dtype_info <- list()
 
-  for (key in obs_keys) {
+  for (idx in seq_along(obs_keys)) {
+    key <- obs_keys[[idx]]
     s <- obs[[key]]
-    safe_key <- .safe_filename_component(key)
+    safe_key <- safe_keys[[idx]]
 
     kind <- if (is.factor(s)) {
       "category"
@@ -1182,6 +1218,28 @@ prepare <- cellucid_prepare
   as.character(var[[var_gene_id_column]])
 }
 
+.validate_gene_ids <- function(gene_ids) {
+  gene_ids <- as.character(gene_ids)
+
+  if (anyNA(gene_ids)) {
+    stop("Gene identifiers contain NA. Provide a non-missing ID for every gene.", call. = FALSE)
+  }
+  if (any(gene_ids == "")) {
+    stop("Gene identifiers contain empty strings. Provide a non-empty ID for every gene.", call. = FALSE)
+  }
+
+  dup <- unique(gene_ids[duplicated(gene_ids)])
+  if (length(dup) > 0L) {
+    preview <- paste(sprintf("'%s'", utils::head(dup, 5)), collapse = ", ")
+    if (length(dup) > 5L) {
+      preview <- paste0(preview, ", ...")
+    }
+    stop("Gene identifiers must be unique. Duplicates: ", preview, call. = FALSE)
+  }
+
+  invisible(gene_ids)
+}
+
 .get_gene_column <- function(gene_expression, gene_idx, n_cells) {
   if (inherits(gene_expression, "dgCMatrix")) {
     p <- gene_expression@p
@@ -1342,6 +1400,18 @@ prepare <- cellucid_prepare
 .export_vector_fields <- function(vector_fields, embeddings, normalization_info, out_dir, compression, force) {
   if (!is.list(vector_fields) || is.null(names(vector_fields))) {
     stop("vector_fields must be a named list of arrays.")
+  }
+  nms <- names(vector_fields)
+  if (anyNA(nms) || any(nms == "")) {
+    stop("vector_fields must be a named list with non-empty names.")
+  }
+  if (anyDuplicated(nms)) {
+    dup <- unique(nms[duplicated(nms)])
+    preview <- paste(sprintf("'%s'", utils::head(dup, 5)), collapse = ", ")
+    if (length(dup) > 5L) {
+      preview <- paste0(preview, ", ...")
+    }
+    stop("vector_fields names must be unique. Duplicates: ", preview, call. = FALSE)
   }
 
   vectors_dir <- file.path(out_dir, "vectors")

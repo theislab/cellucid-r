@@ -257,3 +257,115 @@ test_that("X_umap_4d is rejected", {
     "4D visualization is not yet implemented"
   )
 })
+
+test_that("duplicate gene identifiers are rejected", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+
+  expr <- matrix(0, nrow = 3, ncol = 2)
+  var <- data.frame(symbol = c("G1", "G1"))
+  rownames(var) <- var$symbol
+
+  out <- file.path(tempdir(), "cellucid_test_dup_gene_ids")
+  unlink(out, recursive = TRUE, force = TRUE)
+
+  expect_error(
+    cellucid_prepare(
+      latent_space = latent,
+      obs = obs,
+      var = var,
+      gene_expression = expr,
+      X_umap_2d = umap2,
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE
+    ),
+    "Gene identifiers must be unique"
+  )
+})
+
+test_that("gene ids that collide after sanitization are rejected", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+
+  expr <- matrix(0, nrow = 3, ncol = 2)
+  var <- data.frame(symbol = c("A/B", "A B"))
+  rownames(var) <- var$symbol
+
+  out <- file.path(tempdir(), "cellucid_test_gene_id_collision")
+  unlink(out, recursive = TRUE, force = TRUE)
+
+  expect_error(
+    cellucid_prepare(
+      latent_space = latent,
+      obs = obs,
+      var = var,
+      gene_expression = expr,
+      X_umap_2d = umap2,
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE
+    ),
+    "collide after filename sanitization"
+  )
+})
+
+test_that("gene_identifiers subsets var export and dataset identity counts exported genes", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+
+  expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
+  var <- data.frame(symbol = c("G1", "G2"))
+  rownames(var) <- var$symbol
+
+  out <- file.path(tempdir(), "cellucid_test_gene_subset")
+  unlink(out, recursive = TRUE, force = TRUE)
+  dir.create(out, recursive = TRUE, showWarnings = FALSE)
+
+  cellucid_prepare(
+    latent_space = latent,
+    obs = obs,
+    var = var,
+    gene_expression = expr,
+    gene_identifiers = c("G2"),
+    X_umap_2d = umap2,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE
+  )
+
+  var_dir <- file.path(out, "var")
+  expect_false(file.exists(file.path(var_dir, "G1.values.f32")))
+  expect_true(file.exists(file.path(var_dir, "G2.values.f32")))
+
+  ident <- jsonlite::read_json(file.path(out, "dataset_identity.json"), simplifyVector = TRUE)
+  expect_equal(ident$stats$n_genes, 1L)
+})
+
+test_that("obs keys that collide after sanitization are rejected", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(
+    "a/b" = factor(c("A", "A", "B")),
+    "a b" = factor(c("A", "A", "B")),
+    check.names = FALSE
+  )
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+
+  out <- file.path(tempdir(), "cellucid_test_obs_key_collision")
+  unlink(out, recursive = TRUE, force = TRUE)
+
+  expect_error(
+    cellucid_prepare(
+      latent_space = latent,
+      obs = obs,
+      X_umap_2d = umap2,
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE
+    ),
+    "obs_keys contains names that collide after filename sanitization"
+  )
+})

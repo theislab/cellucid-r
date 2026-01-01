@@ -7,8 +7,8 @@ name: pkgdown
 #   - Source: "Deploy from a branch"
 #   - Branch: "gh-pages" / "(root)"
 #
-# This workflow deploys the generated site from the `docs/` directory to the
-# `gh-pages` branch (without committing `docs/` to your default branch).
+# This workflow deploys the generated site from the `docs/site/` directory to the
+# `gh-pages` branch (without committing the generated site output to your default branch).
 
 on:
   push:
@@ -42,14 +42,14 @@ jobs:
           needs: website
 
       - name: Build site
-        run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+        run: pkgdown::build_site_github_pages(dest_dir = "docs/site", new_process = FALSE, install = FALSE)
         shell: Rscript {0}
 
-      # Publishes `docs/` to the `gh-pages` branch.
+      # Publishes `docs/site/` to the `gh-pages` branch.
       - name: Deploy to GitHub pages
         if: github.event_name != 'pull_request'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           clean: false
           branch: gh-pages
-          folder: docs
+          folder: docs/site

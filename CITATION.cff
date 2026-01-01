@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it."
+type: software
+title: "cellucid (R): Export Single-Cell Data to the Cellucid Viewer Format"
+version: 0.99.0
+authors:
+  - family-names: Inecik
+    given-names: Kemal
+    email: k.inecik@gmail.com
+repository-code: "https://github.com/theislab/cellucid-r"
+url: "https://theislab.github.io/cellucid-r/"
+license: "BSD-3-Clause"
