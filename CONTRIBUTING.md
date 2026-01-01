@@ -7,6 +7,9 @@ This file focuses on `cellucid-r` (the R package that exports data to the Celluc
 By participating, you agree to follow the project’s Code of Conduct:
 - `CODE_OF_CONDUCT.md`
 
+If you’re reporting a security issue, please follow:
+- `SECURITY.md`
+
 ---
 
 ## Which repo should I contribute to?
