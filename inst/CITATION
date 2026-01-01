@@ -1,6 +1,24 @@
 citHeader("To cite cellucid in publications use:")
 
-package_version <- utils::packageDescription("cellucid")$Version
+package_version <- tryCatch(
+  utils::packageDescription("cellucid")$Version,
+  error = function(e) NA_character_
+)
+
+if (is.na(package_version) || !nzchar(package_version)) {
+  desc_paths <- c("DESCRIPTION", file.path("..", "DESCRIPTION"))
+  desc_path <- desc_paths[file.exists(desc_paths)][1]
+  if (!is.na(desc_path) && nzchar(desc_path)) {
+    package_version <- tryCatch(
+      read.dcf(desc_path, fields = "Version")[1, 1],
+      error = function(e) NA_character_
+    )
+  }
+}
+
+if (is.na(package_version) || !nzchar(package_version)) {
+  package_version <- "unknown"
+}
 
 bibentry(
   bibtype = "Manual",

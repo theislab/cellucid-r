@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
 Title: Export Single-Cell Data to the Cellucid Viewer Format
-Version: 0.99.0
+Version: 0.9.0
 X-Cellucid-Version-Marker: CELLUCID_VERSION
 Authors@R: c(
     person(
@@ -21,13 +21,11 @@ Depends:
 Imports:
     jsonlite
 Suggests:
-    BiocStyle,
     knitr,
     Matrix,
     rmarkdown,
     testthat (>= 3.1.0)
 VignetteBuilder: knitr
-biocViews: SingleCell, Visualization, DataRepresentation
 Config/testthat/edition: 3
 URL: https://github.com/theislab/cellucid-r,
     https://theislab.github.io/cellucid-r/

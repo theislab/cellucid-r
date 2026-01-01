@@ -17,7 +17,7 @@ Cellucid is split by responsibility:
 |---|---|---|
 | `cellucid` | Web app (UI + state + WebGL rendering) | are fixing UI bugs, rendering/performance, figure export, sessions, or community annotation frontend |
 | `cellucid-python` | Python package + CLI (`prepare`, `serve`, `show_anndata`, hooks) + Sphinx docs | are fixing Python/CLI bugs, data prep/export, server endpoints, Jupyter hooks, or docs on ReadTheDocs |
-| `cellucid-r` (this repo) | R package for exporting data to the Cellucid viewer format | are changing the R exporter (`cellucid_prepare()`), adding R-side tests/docs, or preparing for Bioconductor |
+| `cellucid-r` (this repo) | R package for exporting data to the Cellucid viewer format | are changing the R exporter (`cellucid_prepare()`), adding R-side tests/docs, or preparing for CRAN |
 | `cellucid-annotation` | GitHub repo template for community annotation | are changing the repo schema/validation/workflows |
 
 If you’re not sure where a bug belongs, open an issue in the repo you’re currently using and include:
@@ -48,7 +48,7 @@ If the bug is “the viewer looks wrong”, also include:
 
 Docs live in:
 - `cellucid-r/man/` (generated `.Rd` files)
-- `cellucid-r/vignettes/` (BiocStyle vignette)
+- `cellucid-r/vignettes/` (package vignette)
 - `cellucid-r/README.md`
 
 If you edit `.Rd` files directly, be aware they are usually generated from roxygen comments in `cellucid-r/R/`.
@@ -60,7 +60,7 @@ Fast workflow:
 1) Set up your R dev environment (see “Development setup”)
 2) Make a small, focused change
 3) Add/adjust tests (`testthat`)
-4) Run `devtools::check()` (and `BiocCheck::BiocCheck()` if relevant)
+4) Run `devtools::check()`
 5) Submit a PR with a clear “what/why/how to verify”
 
 ---
@@ -91,19 +91,15 @@ In R:
 install.packages(c("devtools", "roxygen2", "testthat"))
 ```
 
-For vignette builds and Bioconductor-style docs:
+For vignette builds:
 
 ```r
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
-}
-BiocManager::install(c("BiocStyle", "knitr", "rmarkdown"))
+install.packages(c("knitr", "rmarkdown"))
 ```
 
 Optional (useful during release prep):
 
 ```r
-BiocManager::install("BiocCheck")
 install.packages(c("pkgdown", "covr"))
 ```
 
@@ -133,12 +129,6 @@ Run a full check (recommended before PRs):
 
 ```r
 devtools::check()
-```
-
-For Bioconductor submission readiness:
-
-```r
-BiocCheck::BiocCheck(".")
 ```
 
 Guidelines:
@@ -183,7 +173,7 @@ This package is intentionally:
 
 - **minimal-dependency** (only `jsonlite` is a hard dependency)
 - **format-first** (exports must match what the web app expects)
-- **Bioconductor-friendly** (checks, vignette style, and package structure matter)
+- **CRAN-ready** (checks, documentation, and package structure matter)
 
 If you propose adding a new dependency:
 - prefer `Suggests` over `Imports` unless strictly required
@@ -240,7 +230,7 @@ Fix:
 ### `R CMD check` fails on vignettes
 
 Common causes:
-- missing suggested packages (`BiocStyle`, `knitr`, `rmarkdown`)
+- missing suggested packages (`knitr`, `rmarkdown`)
 - missing Pandoc
 
 Fix:

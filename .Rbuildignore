@@ -7,6 +7,7 @@
 ^CODE_OF_CONDUCT\.md$
 ^CONTRIBUTING\.md$
 ^LICENSE\.md$
-^PUBLISHING\.md$
+^publishing\.md$
 ^README\.md$
+^cran-comments\.md$
 ^cellucid-logo\.svg$

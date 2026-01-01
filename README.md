@@ -54,13 +54,11 @@ cellucid_prepare(
 
 ## Links
 
-- Web app: https://cellucid.com
-- R package docs (installation + recipes): https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html
-- Seurat recipe: https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/01_seurat_recipe.html
-- SingleCellExperiment recipe: https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/02_singlecellexperiment_recipe.html
-- Source: https://github.com/theislab/cellucid-r
-- Viewer: https://github.com/theislab/cellucid
-- Citation: `citation("cellucid")` (or `CITATION.cff`)
+- [Web app](https://cellucid.com)
+- [Documentation](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html)
+- Recipes: [Seurat](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/01_seurat_recipe.html) · [SingleCellExperiment](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/02_singlecellexperiment_recipe.html)
+- Source: [cellucid-r](https://github.com/theislab/cellucid-r) · [cellucid](https://github.com/theislab/cellucid)
+- Citation: `citation("cellucid")`
 
 ## License
 
