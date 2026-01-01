@@ -60,6 +60,14 @@ cellucid_prepare(
 - Source: [cellucid-r](https://github.com/theislab/cellucid-r) · [cellucid](https://github.com/theislab/cellucid)
 - Citation: `citation("cellucid")`
 
+## Community
+
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Code of Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- Security: [SECURITY.md](SECURITY.md)
+- Support: [SUPPORT.md](SUPPORT.md)
+- GitHub citation metadata: [CITATION.cff](CITATION.cff)
+
 ## License
 
 BSD-3-Clause
