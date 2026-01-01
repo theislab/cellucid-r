@@ -282,7 +282,7 @@ cellucid_prepare <- function(
 
     all_gene_ids <- .extract_gene_ids(var, var_gene_id_column)
     .validate_gene_ids(all_gene_ids)
-    gene_id_to_idx <- setNames(seq_along(all_gene_ids), all_gene_ids)
+    gene_id_to_idx <- stats::setNames(seq_along(all_gene_ids), all_gene_ids)
 
     if (is.null(gene_identifiers)) {
       genes_to_export <- all_gene_ids
@@ -999,7 +999,7 @@ prepare <- cellucid_prepare
     }
 
     if (is.null(centroid_outlier_quantile)) {
-      centroids_by_dim <- setNames(
+      centroids_by_dim <- stats::setNames(
         lapply(names(embeddings), function(...) list()),
         names(embeddings)
       )

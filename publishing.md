@@ -193,6 +193,10 @@ Alternative (no Release yet): you can build a tarball via the Actions UI:
 - Actions → `Build Release Tarball` → “Run workflow”
   - keep `run_as_cran=true` (recommended if CRAN is a target)
 
+Troubleshooting:
+- If CI fails with `pdflatex is not available`, the workflow needs a LaTeX install to build the PDF manual.
+  This repo uses `r-lib/actions/setup-tinytex@v2` in `cellucid-r/.github/workflows/release.yaml`.
+
 ### Step 5 — Download the tarball artifact
 
 From the successful `Build Release Tarball` workflow run:
