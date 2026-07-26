@@ -241,7 +241,7 @@ install.packages("cellucid", repos = "https://theislab.r-universe.dev")
 
 ## Publishing to conda
 
-Goal: `mamba install -c conda-forge cellucid-r`
+Goal: `mamba install -c conda-forge r-cellucid`
 
 ### Recommended: Get on CRAN first
 
@@ -253,10 +253,8 @@ conda-forge prefers to build R packages from CRAN tarballs. Once on CRAN:
 
 conda-forge reviewers will help with the recipe format.
 
-### Naming Note
-
-- conda-forge convention: `r-cellucid` (r- prefix for R packages)
-- If you want `cellucid-r`, create an alias metapackage that depends on `r-cellucid`
+The conda-forge package name is `r-cellucid`, following conda-forge's
+required `r-` prefix for R packages.
 
 ---
 
@@ -271,7 +269,7 @@ conda-forge reviewers will help with the recipe format.
 
 ### CI fails with "pdflatex not available"
 
-The release workflow already handles this — it installs TinyTeX and has a fallback to install system LaTeX packages.
+The release workflow installs TinyTeX and the declared LaTeX packages before building the vignette.
 
 ### CRAN rejected my package
 
@@ -301,7 +299,7 @@ Edit `CITATION.cff` directly and push. For changes that need a new version, foll
 | GitHub repo | `cellucid-r` |
 | What users type in R | `library(cellucid)` |
 | CRAN | `cellucid` |
-| conda | `r-cellucid` or `cellucid-r` (alias) |
+| conda-forge | `r-cellucid` |
 
 R package names cannot contain `-`, so the package itself must stay `cellucid`.
 

@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: r-lib/actions/setup-pandoc@v2
 
@@ -40,6 +40,9 @@ jobs:
         with:
           extra-packages: any::pkgdown, local::.
           needs: website
+
+      - name: Validate site contract
+        run: Rscript .github/scripts/validate-pkgdown.R
 
       - name: Build site
         run: pkgdown::build_site_github_pages(dest_dir = "docs/site", new_process = FALSE, install = FALSE)

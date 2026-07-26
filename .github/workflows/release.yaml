@@ -32,7 +32,7 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: r-lib/actions/setup-pandoc@v2
 
@@ -60,8 +60,11 @@ jobs:
       - name: Build source tarball
         id: build
         run: |
+          PACKAGE="$(Rscript -e 'cat(read.dcf("DESCRIPTION")[1, "Package"])')"
+          VERSION="$(Rscript -e 'cat(read.dcf("DESCRIPTION")[1, "Version"])')"
+          TARBALL="${PACKAGE}_${VERSION}.tar.gz"
           R CMD build .
-          TARBALL="$(ls -1t *.tar.gz | head -n 1)"
+          test -f "./${TARBALL}"
           echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
           echo "Built: ${TARBALL}"
         shell: bash
@@ -79,7 +82,7 @@ jobs:
         shell: bash
 
       - name: Upload tarball artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: r-source-tarball
           path: ${{ steps.build.outputs.tarball }}
