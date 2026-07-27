@@ -125,7 +125,11 @@ test_that("README cross-references the current Cellucid ecosystem", {
     "https://github.com/theislab/cellucid-annotation"
   )
   expect_true(all(vapply(required_urls, grepl, logical(1), x = readme, fixed = TRUE)))
-  expect_match(readme, "currently distributed from its GitHub repository", fixed = TRUE)
+  expect_match(
+    readme,
+    "choose CRAN or GitHub based on current",
+    fixed = TRUE
+  )
   expect_false(grepl("CRAN.R-project.org/package=cellucid", readme, fixed = TRUE))
 
   build_ignore_path <- file.path(repository_root, ".Rbuildignore")
@@ -193,6 +197,8 @@ test_that("release metadata and artifacts have one exact 0.9.1 identity", {
   if (file.exists(news_path)) {
     news <- readLines(news_path, warn = FALSE, encoding = "UTF-8")
     expect_identical(news[[1L]], "# cellucid 0.9.1 <!-- CELLUCID_VERSION -->")
+    expect_false(any(grepl("unreleased", tolower(news), fixed = TRUE)))
+    expect_true(any(news == "Version 0.9.1 is the CRAN submission release."))
   }
 
   citation_path <- file.path(repository_root, "CITATION.cff")
@@ -224,6 +230,83 @@ test_that("release metadata and artifacts have one exact 0.9.1 identity", {
       regexpr("R CMD check --as-cran", release, fixed = TRUE)[[1L]],
       regexpr("Attach tarball to GitHub Release", release, fixed = TRUE)[[1L]]
     )
+  }
+})
+
+test_that("pkgdown has an exact current installation and navigation contract", {
+  repository_root <- normalizePath(
+    file.path(testthat::test_path(), "..", ".."),
+    mustWork = TRUE
+  )
+  read_text <- function(path) {
+    paste(
+      readLines(path, warn = FALSE, encoding = "UTF-8"),
+      collapse = "\n"
+    )
+  }
+
+  installation_candidates <- c(
+    file.path(repository_root, "vignettes", "installation.Rmd"),
+    system.file("doc", "installation.Rmd", package = "cellucid")
+  )
+  installation_path <- installation_candidates[
+    nzchar(installation_candidates) & file.exists(installation_candidates)
+  ][1L]
+  expect_length(installation_path, 1L)
+  installation <- read_text(installation_path)
+  expect_match(
+    installation,
+    "**The active Cellucid for R source and documentation version is 0.9.1.**",
+    fixed = TRUE
+  )
+  expect_match(
+    installation,
+    'install.packages("cellucid")',
+    fixed = TRUE
+  )
+  expect_match(
+    installation,
+    'remotes::install_github("theislab/cellucid-r")',
+    fixed = TRUE
+  )
+  expect_match(
+    installation,
+    'packageVersion("cellucid")',
+    fixed = TRUE
+  )
+  expect_match(
+    installation,
+    "is authoritative for registry availability",
+    fixed = TRUE
+  )
+
+  readme_path <- file.path(repository_root, "README.md")
+  if (file.exists(readme_path)) {
+    readme <- read_text(readme_path)
+    expect_match(readme, "**Active package version — 0.9.1**", fixed = TRUE)
+    expect_match(
+      readme,
+      "articles/installation.html",
+      fixed = TRUE
+    )
+  }
+
+  pkgdown_path <- file.path(repository_root, "_pkgdown.yml")
+  if (file.exists(pkgdown_path)) {
+    pkgdown <- read_text(pkgdown_path)
+    expect_match(
+      pkgdown,
+      "left: [home, installation, reference, articles, news]",
+      fixed = TRUE
+    )
+    expect_match(
+      pkgdown,
+      'in_header: >-\n      <link rel="icon" type="image/svg+xml"',
+      fixed = TRUE
+    )
+    expect_match(pkgdown, "right: [search, webapp]", fixed = TRUE)
+    expect_match(pkgdown, "href: https://www.cellucid.com", fixed = TRUE)
+    expect_false(grepl("development", pkgdown, ignore.case = TRUE))
   }
 })
 

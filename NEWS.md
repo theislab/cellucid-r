@@ -1,5 +1,7 @@
 # cellucid 0.9.1 <!-- CELLUCID_VERSION -->
 
+Version 0.9.1 is the CRAN submission release.
+
 - Exposes `cellucid_prepare()` as the single public preparation entry point.
 - Publishes complete prepared generations transactionally and rejects mixed or
   stale output directories.

@@ -1,0 +1,111 @@
+---
+title: "Installing Cellucid for R"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{Installing Cellucid for R}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Current version and availability
+
+**The active Cellucid for R source and documentation version is 0.9.1.** It is
+the CRAN submission release. The
+[CRAN package index](https://cran.r-project.org/web/packages/available_packages_by_name.html)
+is authoritative for registry availability. Use the CRAN command below when
+the index lists `cellucid` 0.9.1; otherwise use the GitHub command.
+
+## Requirements
+
+- R 4.3.0 or newer
+- An internet connection while installing the package
+- The `remotes` package only when installation from GitHub is needed
+
+Cellucid is implemented in R and does not compile native code. The optional
+`Matrix` package is recommended when exporting sparse expression matrices or
+connectivity graphs.
+
+Check your R version with:
+
+```{r, eval=FALSE}
+R.version.string
+```
+
+## Install version 0.9.1 from CRAN
+
+When the CRAN package index lists `cellucid` 0.9.1, install it with:
+
+```{r, eval=FALSE}
+install.packages("cellucid")
+```
+
+If the index does not list version 0.9.1 yet, install the active source from
+the official GitHub repository:
+
+```{r, eval=FALSE}
+install.packages("remotes")
+remotes::install_github("theislab/cellucid-r")
+```
+
+Install the recommended sparse-matrix support when your data uses sparse
+expression or connectivity matrices:
+
+```{r, eval=FALSE}
+install.packages("Matrix")
+```
+
+Restart R after upgrading an installation that was already loaded in the
+current session.
+
+## Update an existing installation
+
+Install again from the source currently available to you. Use CRAN when its
+package index lists version 0.9.1:
+
+```{r, eval=FALSE}
+install.packages("cellucid")
+```
+
+Otherwise update directly from the official source repository:
+
+```{r, eval=FALSE}
+remotes::install_github("theislab/cellucid-r")
+```
+
+Restart R after the update so the current session does not retain the package
+version that was loaded earlier.
+
+## Verify the installation
+
+Load Cellucid and confirm that R reports the active version:
+
+```{r, eval=FALSE}
+library(cellucid)
+packageVersion("cellucid")
+#> [1] '0.9.1'
+```
+
+You can then open the preparation function reference:
+
+```{r, eval=FALSE}
+?cellucid_prepare
+```
+
+Continue with [Exporting data for Cellucid](cellucid.html) for a complete
+example, or use the
+[R package guide](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html)
+for Seurat and SingleCellExperiment recipes.
+
+## Next step
+
+Once the package is installed, prepare an export with `cellucid_prepare()` and
+open the resulting directory in the
+[Cellucid web app](https://www.cellucid.com). The
+[function reference](../reference/cellucid_prepare.html) documents every input
+and validation rule.

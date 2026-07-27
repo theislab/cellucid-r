@@ -13,6 +13,13 @@
 `cellucid` (repo: `cellucid-r`) writes your embeddings, metadata, gene expression, connectivities, and vector fields
 to the on-disk format consumed by the Cellucid web app.
 
+> **Active package version — 0.9.1**
+>
+> Version 0.9.1 is the active Cellucid for R source and documentation version,
+> and it is the CRAN submission release. The CRAN package index is authoritative
+> for registry availability; the Installation guide below gives both exact
+> installation paths.
+
 ## Highlights
 
 - **Exporter-only**: generate a shareable “export folder” and open it in the web app
@@ -38,7 +45,9 @@ square matrix, shape alone cannot reveal a genes × cells input.
 
 ## Installation
 
-Cellucid for R is currently distributed from its GitHub repository:
+Use the dedicated Installation guide to choose CRAN or GitHub based on current
+registry availability. To install the active source directly from the official
+GitHub repository:
 
 ```r
 install.packages("remotes")
@@ -50,6 +59,9 @@ Optional but recommended (sparse matrices + connectivity export):
 ```r
 install.packages("Matrix")
 ```
+
+See the dedicated [Installation guide](articles/installation.html)
+for requirements, verification, upgrades, and the CRAN availability status.
 
 ## Quickstart
 
