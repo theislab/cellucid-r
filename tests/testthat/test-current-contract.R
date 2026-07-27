@@ -97,7 +97,7 @@ test_that("shipped R repository surfaces contain only current contract language"
   }
 })
 
-test_that("development runs package checks without enabling deployment", {
+test_that("main is the only workflow branch", {
   repository_root <- normalizePath(
     file.path(testthat::test_path(), "..", ".."),
     mustWork = TRUE
@@ -125,11 +125,11 @@ test_that("development runs package checks without enabling deployment", {
   if (all(workflow_presence)) {
     expect_identical(
       workflow_branches(workflow_paths[[1L]]),
-      rep("branches: [development, main, master]", 2L)
+      rep("branches: [main]", 2L)
     )
     expect_identical(
       workflow_branches(workflow_paths[[2L]]),
-      "branches: [main, master]"
+      "branches: [main]"
     )
   }
 })

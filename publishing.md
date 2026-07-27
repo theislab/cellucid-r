@@ -48,8 +48,7 @@ Go to: **Settings → Actions → General**
 
 Go to: **Settings → Pages**
 
-- Source: "Deploy from a branch"
-- Branch: `gh-pages` / `(root)`
+- Source: **GitHub Actions**
 
 Your documentation will appear at: `https://theislab.github.io/cellucid-r/`
 
