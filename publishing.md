@@ -94,13 +94,15 @@ Update these files with the new version number:
 6. Click **"Publish release"**
 
 This automatically triggers the "Build Release Tarball" workflow.
+The workflow requires the tag to equal `v` plus the `DESCRIPTION` version and
+requires the tagged commit to belong to `main`.
 
 ### Step 4: Download the tarball
 
 1. Go to **Actions** → find the **"Build Release Tarball"** run
 2. Scroll down to **"Artifacts"**
 3. Download **`r-source-tarball`**
-4. Unzip it — you'll get `cellucid_X.Y.Z.tar.gz`
+4. Unzip it — you'll get `cellucid_X.Y.Z.tar.gz` and its `.sha256` checksum
 
 The tarball is also attached directly to your GitHub Release.
 

@@ -33,6 +33,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: r-lib/actions/setup-pandoc@v2
 
@@ -40,6 +42,17 @@ jobs:
         with:
           r-version: "release"
           use-public-rspm: true
+
+      - name: Verify release tag and main-branch provenance
+        if: github.event_name == 'release'
+        run: |
+          VERSION="$(Rscript -e 'cat(read.dcf("DESCRIPTION")[1, "Version"])')"
+          EXPECTED_TAG="v${VERSION}"
+          test "${GITHUB_REF_TYPE}" = "tag"
+          test "${GITHUB_REF_NAME}" = "${EXPECTED_TAG}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+        shell: bash
 
       - uses: r-lib/actions/setup-tinytex@v2
 
@@ -65,7 +78,9 @@ jobs:
           TARBALL="${PACKAGE}_${VERSION}.tar.gz"
           R CMD build .
           test -f "./${TARBALL}"
+          sha256sum "${TARBALL}" > "${TARBALL}.sha256"
           echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
+          echo "checksum=${TARBALL}.sha256" >> "${GITHUB_OUTPUT}"
           echo "Built: ${TARBALL}"
         shell: bash
 
@@ -85,10 +100,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: r-source-tarball
-          path: ${{ steps.build.outputs.tarball }}
+          path: |
+            ${{ steps.build.outputs.tarball }}
+            ${{ steps.build.outputs.checksum }}
 
       - name: Attach tarball to GitHub Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.build.outputs.tarball }}
+          files: |
+            ${{ steps.build.outputs.tarball }}
+            ${{ steps.build.outputs.checksum }}

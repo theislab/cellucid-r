@@ -8,9 +8,9 @@ name: R-CMD-check
 
 on:
   push:
-    branches: [main, master]
+    branches: [development, main, master]
   pull_request:
-    branches: [main, master]
+    branches: [development, main, master]
   workflow_dispatch:
 
 jobs:

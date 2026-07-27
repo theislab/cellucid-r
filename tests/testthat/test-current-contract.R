@@ -97,6 +97,94 @@ test_that("shipped R repository surfaces contain only current contract language"
   }
 })
 
+test_that("development runs package checks without enabling deployment", {
+  repository_root <- normalizePath(
+    file.path(testthat::test_path(), "..", ".."),
+    mustWork = TRUE
+  )
+  workflow_directory <- file.path(repository_root, ".github", "workflows")
+  workflow_paths <- file.path(
+    workflow_directory,
+    c("R-CMD-check.yaml", "pkgdown.yaml")
+  )
+  workflow_presence <- file.exists(workflow_paths)
+  expect_true(
+    all(workflow_presence) ||
+      (!any(workflow_presence) && !dir.exists(workflow_directory))
+  )
+
+  workflow_branches <- function(path) {
+    lines <- readLines(
+      path,
+      warn = FALSE,
+      encoding = "UTF-8"
+    )
+    trimws(lines[grepl("^[[:space:]]*branches:", lines)])
+  }
+
+  if (all(workflow_presence)) {
+    expect_identical(
+      workflow_branches(workflow_paths[[1L]]),
+      rep("branches: [development, main, master]", 2L)
+    )
+    expect_identical(
+      workflow_branches(workflow_paths[[2L]]),
+      "branches: [main, master]"
+    )
+  }
+})
+
+test_that("release metadata and artifacts have one exact 0.9.1 identity", {
+  repository_root <- normalizePath(
+    file.path(testthat::test_path(), "..", ".."),
+    mustWork = FALSE
+  )
+  description_path <- file.path(repository_root, "DESCRIPTION")
+  version <- if (file.exists(description_path)) {
+    unname(read.dcf(description_path)[1L, "Version"])
+  } else {
+    as.character(utils::packageVersion("cellucid"))
+  }
+  expect_identical(version, "0.9.1")
+
+  news_path <- file.path(repository_root, "NEWS.md")
+  if (file.exists(news_path)) {
+    news <- readLines(news_path, warn = FALSE, encoding = "UTF-8")
+    expect_identical(news[[1L]], "# cellucid 0.9.1 <!-- CELLUCID_VERSION -->")
+  }
+
+  citation_path <- file.path(repository_root, "CITATION.cff")
+  if (file.exists(citation_path)) {
+    citation <- readLines(citation_path, warn = FALSE, encoding = "UTF-8")
+    expect_true(any(citation == "version: 0.9.1  # CELLUCID_VERSION"))
+  }
+
+  release_path <- file.path(
+    repository_root,
+    ".github",
+    "workflows",
+    "release.yaml"
+  )
+  if (file.exists(release_path)) {
+    release <- paste(
+      readLines(release_path, warn = FALSE, encoding = "UTF-8"),
+      collapse = "\n"
+    )
+    expect_match(release, 'EXPECTED_TAG="v\\$\\{VERSION\\}"')
+    expect_match(release, 'test "\\$\\{GITHUB_REF_TYPE\\}" = "tag"')
+    expect_match(release, 'test "\\$\\{GITHUB_REF_NAME\\}" = "\\$\\{EXPECTED_TAG\\}"')
+    expect_match(
+      release,
+      'git merge-base --is-ancestor "\\$\\{GITHUB_SHA\\}" origin/main'
+    )
+    expect_match(release, 'sha256sum "\\$\\{TARBALL\\}"')
+    expect_lt(
+      regexpr("R CMD check --as-cran", release, fixed = TRUE)[[1L]],
+      regexpr("Attach tarball to GitHub Release", release, fixed = TRUE)[[1L]]
+    )
+  }
+})
+
 test_that("categorical code width is one required exact caller choice", {
   expect_true(
     identical(
