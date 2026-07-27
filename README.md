@@ -2,7 +2,6 @@
   <img src="https://raw.githubusercontent.com/theislab/cellucid-python/main/cellucid-logo.svg" alt="Cellucid logo" width="360">
 </p>
 
-[![CRAN status](https://www.r-pkg.org/badges/version/cellucid)](https://CRAN.R-project.org/package=cellucid)
 [![R-CMD-check](https://github.com/theislab/cellucid-r/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/theislab/cellucid-r/actions/workflows/R-CMD-check.yaml)
 [![Documentation Status](https://readthedocs.org/projects/cellucid/badge/?version=latest)](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
@@ -39,7 +38,7 @@ square matrix, shape alone cannot reveal a genes × cells input.
 
 ## Installation
 
-Install from GitHub:
+Cellucid for R is currently distributed from its GitHub repository:
 
 ```r
 install.packages("remotes")
@@ -71,12 +70,20 @@ cellucid_prepare(
 )
 ```
 
-## Links
+## Documentation and ecosystem
 
-- [Web app](https://cellucid.com)
-- [Documentation](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html)
-- Recipes: [Seurat](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/01_seurat_recipe.html) · [SingleCellExperiment](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/02_singlecellexperiment_recipe.html)
-- Source: [cellucid-r](https://github.com/theislab/cellucid-r) · [cellucid](https://github.com/theislab/cellucid)
+- [R package guide](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html)
+  with recipes for
+  [Seurat](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/01_seurat_recipe.html)
+  and
+  [SingleCellExperiment](https://cellucid.readthedocs.io/en/latest/user_guide/r_package/e_integrations_recipes/02_singlecellexperiment_recipe.html)
+- [Complete Cellucid documentation](https://cellucid.readthedocs.io/en/latest/)
+- [Live web application](https://www.cellucid.com) and
+  [web viewer source](https://github.com/theislab/cellucid)
+- [Python package](https://github.com/theislab/cellucid-python)
+- [Official public demo datasets](https://github.com/theislab/cellucid-datasets)
+- [Three custom dataset repository examples](https://github.com/theislab/cellucid-demo-custom-datasets)
+- [Community annotation repository](https://github.com/theislab/cellucid-annotation)
 - Citation: `citation("cellucid")`
 
 ## Community

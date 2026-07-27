@@ -97,6 +97,48 @@ test_that("shipped R repository surfaces contain only current contract language"
   }
 })
 
+test_that("README cross-references the current Cellucid ecosystem", {
+  repository_root <- normalizePath(
+    file.path(testthat::test_path(), "..", ".."),
+    mustWork = TRUE
+  )
+  readme_candidates <- c(
+    file.path(repository_root, "README.md"),
+    file.path(repository_root, "00_pkg_src", "cellucid", "README.md")
+  )
+  readme_path <- readme_candidates[file.exists(readme_candidates)]
+  expect_length(readme_path, 1L)
+  readme <- paste(
+    readLines(
+      readme_path,
+      warn = FALSE,
+      encoding = "UTF-8"
+    ),
+    collapse = "\n"
+  )
+  required_urls <- c(
+    "https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html",
+    "https://github.com/theislab/cellucid",
+    "https://github.com/theislab/cellucid-python",
+    "https://github.com/theislab/cellucid-datasets",
+    "https://github.com/theislab/cellucid-demo-custom-datasets",
+    "https://github.com/theislab/cellucid-annotation"
+  )
+  expect_true(all(vapply(required_urls, grepl, logical(1), x = readme, fixed = TRUE)))
+  expect_match(readme, "currently distributed from its GitHub repository", fixed = TRUE)
+  expect_false(grepl("CRAN.R-project.org/package=cellucid", readme, fixed = TRUE))
+
+  build_ignore_path <- file.path(repository_root, ".Rbuildignore")
+  if (file.exists(build_ignore_path)) {
+    build_ignore <- readLines(
+      build_ignore_path,
+      warn = FALSE,
+      encoding = "UTF-8"
+    )
+    expect_false(any(build_ignore == "^README\\.md$"))
+  }
+})
+
 test_that("main is the only workflow branch", {
   repository_root <- normalizePath(
     file.path(testthat::test_path(), "..", ".."),
