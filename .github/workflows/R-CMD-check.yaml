@@ -1,6 +1,6 @@
 name: R-CMD-check
 
-# This is the main CI gate for development and releases.
+# This is the main CI gate for package changes and releases.
 # It runs `R CMD check` across multiple OSes and R versions using r-lib/actions.
 # If this workflow is green, you are generally in good shape for:
 # - GitHub releases
@@ -8,9 +8,9 @@ name: R-CMD-check
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
       R_KEEP_PKG_SOURCE: yes
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: r-lib/actions/setup-pandoc@v2
 

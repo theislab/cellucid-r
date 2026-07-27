@@ -48,8 +48,7 @@ Go to: **Settings → Actions → General**
 
 Go to: **Settings → Pages**
 
-- Source: "Deploy from a branch"
-- Branch: `gh-pages` / `(root)`
+- Source: **GitHub Actions**
 
 Your documentation will appear at: `https://theislab.github.io/cellucid-r/`
 
@@ -94,13 +93,15 @@ Update these files with the new version number:
 6. Click **"Publish release"**
 
 This automatically triggers the "Build Release Tarball" workflow.
+The workflow requires the tag to equal `v` plus the `DESCRIPTION` version and
+requires the tagged commit to belong to `main`.
 
 ### Step 4: Download the tarball
 
 1. Go to **Actions** → find the **"Build Release Tarball"** run
 2. Scroll down to **"Artifacts"**
 3. Download **`r-source-tarball`**
-4. Unzip it — you'll get `cellucid_X.Y.Z.tar.gz`
+4. Unzip it — you'll get `cellucid_X.Y.Z.tar.gz` and its `.sha256` checksum
 
 The tarball is also attached directly to your GitHub Release.
 
@@ -241,7 +242,7 @@ install.packages("cellucid", repos = "https://theislab.r-universe.dev")
 
 ## Publishing to conda
 
-Goal: `mamba install -c conda-forge cellucid-r`
+Goal: `mamba install -c conda-forge r-cellucid`
 
 ### Recommended: Get on CRAN first
 
@@ -253,10 +254,8 @@ conda-forge prefers to build R packages from CRAN tarballs. Once on CRAN:
 
 conda-forge reviewers will help with the recipe format.
 
-### Naming Note
-
-- conda-forge convention: `r-cellucid` (r- prefix for R packages)
-- If you want `cellucid-r`, create an alias metapackage that depends on `r-cellucid`
+The conda-forge package name is `r-cellucid`, following conda-forge's
+required `r-` prefix for R packages.
 
 ---
 
@@ -271,7 +270,7 @@ conda-forge reviewers will help with the recipe format.
 
 ### CI fails with "pdflatex not available"
 
-The release workflow already handles this — it installs TinyTeX and has a fallback to install system LaTeX packages.
+The release workflow installs TinyTeX and the declared LaTeX packages before building the vignette.
 
 ### CRAN rejected my package
 
@@ -301,7 +300,7 @@ Edit `CITATION.cff` directly and push. For changes that need a new version, foll
 | GitHub repo | `cellucid-r` |
 | What users type in R | `library(cellucid)` |
 | CRAN | `cellucid` |
-| conda | `r-cellucid` or `cellucid-r` (alias) |
+| conda-forge | `r-cellucid` |
 
 R package names cannot contain `-`, so the package itself must stay `cellucid`.
 

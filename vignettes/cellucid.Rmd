@@ -19,8 +19,7 @@ The `cellucid` package exports single-cell data (embeddings, metadata, gene
 expression, and connectivity) to the binary/JSON format consumed by the
 Cellucid WebGL viewer.
 
-The main entry point is `cellucid_prepare()` (also exported as `prepare()` to
-mirror the Python API).
+The sole export entry point is `cellucid_prepare()`.
 
 ## Minimal example
 
@@ -54,6 +53,8 @@ out_dir <- file.path(tempdir(), "cellucid_vignette_export")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 cellucid_prepare(
+  dataset_id = "vignette-export",
+  dataset_name = "Vignette export",
   latent_space = latent,
   obs = obs,
   var = var,
@@ -61,7 +62,8 @@ cellucid_prepare(
   X_umap_2d = umap2,
   out_dir = out_dir,
   centroid_min_points = 1,
-  force = TRUE
+  force = TRUE,
+  obs_categorical_dtype = "uint16"
 )
 
 list.files(out_dir, recursive = TRUE)
@@ -71,6 +73,8 @@ list.files(out_dir, recursive = TRUE)
 
 Seurat objects typically store expression as **genes × cells**, but
 `cellucid_prepare()` expects **cells × genes**, so transpose before passing.
+The exporter validates dimensions but never guesses orientation; a square
+matrix can have the wrong semantic orientation while still matching both axes.
 
 ```{r, eval=FALSE}
 if (requireNamespace("Seurat", quietly = TRUE) &&
@@ -79,10 +83,7 @@ if (requireNamespace("Seurat", quietly = TRUE) &&
   seu <- your_seurat_object
 
   umap2 <- Seurat::Embeddings(seu, "umap")[, 1:2, drop = FALSE]
-  latent <- tryCatch(
-    Seurat::Embeddings(seu, "pca"),
-    error = function(e) umap2
-  )
+  latent <- Seurat::Embeddings(seu, "pca")
 
   obs <- seu@meta.data
 
@@ -93,13 +94,16 @@ if (requireNamespace("Seurat", quietly = TRUE) &&
   rownames(var) <- var$symbol
 
   cellucid_prepare(
+    dataset_id = "seurat-export",
+    dataset_name = "Seurat export",
     latent_space = latent,
     obs = obs,
     var = var,
     gene_expression = expr_cells_by_genes,
     X_umap_2d = umap2,
     out_dir = "exports/seurat_export",
-    force = TRUE
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
   )
 }
 ```
@@ -108,6 +112,7 @@ if (requireNamespace("Seurat", quietly = TRUE) &&
 
 SingleCellExperiment assays are also typically **genes × cells**, so transpose
 before passing.
+Orientation remains caller-owned rather than inferred from shape or `var`.
 
 ```{r, eval=FALSE}
 if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
@@ -117,10 +122,7 @@ if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
   sce <- your_sce_object
 
   umap2 <- SingleCellExperiment::reducedDim(sce, "UMAP")
-  latent <- tryCatch(
-    SingleCellExperiment::reducedDim(sce, "PCA"),
-    error = function(e) umap2
-  )
+  latent <- SingleCellExperiment::reducedDim(sce, "PCA")
 
   obs <- as.data.frame(SummarizedExperiment::colData(sce))
 
@@ -131,13 +133,16 @@ if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
   rownames(var) <- rownames(sce)
 
   cellucid_prepare(
+    dataset_id = "sce-export",
+    dataset_name = "SingleCellExperiment export",
     latent_space = latent,
     obs = obs,
     var = var,
     gene_expression = expr_cells_by_genes,
     X_umap_2d = umap2,
     out_dir = "exports/sce_export",
-    force = TRUE
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
   )
 }
 ```
@@ -149,5 +154,17 @@ The export directory contains:
 - Embeddings: `points_1d.bin`, `points_2d.bin`, `points_3d.bin` (float32)
 - Cell metadata: `obs_manifest.json` + `obs/` binaries
 - Gene expression: `var_manifest.json` + `var/` binaries (one file per gene)
-- Connectivity (optional): `connectivity_manifest.json` + `connectivity/` binaries
+- Connectivity (optional): `connectivity_manifest.json` plus aligned
+  `connectivity/edges.src.bin`, `edges.dst.bin`, and
+  `edges.weights.f64.bin` payloads. Weights are exact little-endian float64
+  values; the input must be non-negative, exactly symmetric in topology and
+  weight, and have a zero diagonal. Sparse inputs must omit stored zeros.
 - Dataset metadata: `dataset_identity.json`
+
+Continuous observation fields, gene-expression matrices, and vector fields
+must contain only finite values. For unquantized float32 output, every nonzero
+value after required vector scaling must have magnitude from `2^-149` through
+`(2 - 2^-23) * 2^127`; values that would encode as zero or infinity reject the
+complete candidate. The quantized missing code is reserved for categorical
+outlier quantiles generated as `NaN` when a category contains fewer than
+`centroid_min_points` cells.

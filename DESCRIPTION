@@ -1,8 +1,7 @@
 Package: cellucid
 Type: Package
 Title: Export Single-Cell Data to the Cellucid Viewer Format
-Version: 0.9.0
-X-Cellucid-Version-Marker: CELLUCID_VERSION
+Version: 0.9.1
 Authors@R: c(
     person(
       "Kemal", "Inecik",
@@ -19,7 +18,8 @@ Encoding: UTF-8
 Depends:
     R (>= 4.3.0)
 Imports:
-    jsonlite
+    jsonlite,
+    methods
 Suggests:
     knitr,
     Matrix,

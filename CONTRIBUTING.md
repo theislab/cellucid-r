@@ -183,7 +183,7 @@ If you propose adding a new dependency:
 - keep the core exporter usable on minimal installations
 
 If you change the export format or schema:
-- coordinate with `cellucid-python` and the web app (`cellucid`) so the ecosystem stays compatible
+- coordinate with `cellucid-python` and the web app (`cellucid`) so every repository implements the same exact current contract
 - add tests that validate the new behavior
 
 ---
