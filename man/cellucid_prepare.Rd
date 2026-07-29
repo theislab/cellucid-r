@@ -46,8 +46,17 @@ cellucid_prepare(
 \item{centroid_outlier_quantile}{Quantile of distances to keep as inliers when computing centroids for categorical fields. Set to \code{NULL} to disable centroid computation.}
 \item{centroid_min_points}{Minimum number of points in a category required to compute centroids and outlier quantiles.}
 \item{force}{If \code{TRUE}, atomically replace an existing output generation. If \code{FALSE}, require that \code{out_dir} does not already exist.}
-\item{var_quantization}{Integer bits for gene expression quantization (\code{8} or \code{16}), or \code{NULL} for full float32 export.}
-\item{obs_continuous_quantization}{Integer bits for continuous obs field quantization (\code{8} or \code{16}), or \code{NULL} for full float32 export.}
+\item{var_quantization}{Integer bits for gene expression quantization (\code{8} or
+\code{16}), or \code{NULL} for full float32 export. Quantization is derived from the
+exact float32 values materialized by the viewer; a native-double range
+that collapses to one float32 value is rejected. Individual source values
+may round to zero when the float32 range remains non-collapsed.}
+\item{obs_continuous_quantization}{Integer bits for continuous obs field
+quantization (\code{8} or \code{16}), or \code{NULL} for full float32 export.
+Quantization is derived from the exact float32 values materialized by the
+viewer; a native-double range that collapses to one float32 value is
+rejected. Individual source values may round to zero when the float32
+range remains non-collapsed.}
 \item{obs_categorical_dtype}{Required exact categorical code storage: \code{"uint8"} or \code{"uint16"}.}
 \item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use \code{NULL} to disable compression.}
 \item{dataset_name}{Required non-empty dataset name without leading or trailing
@@ -90,7 +99,12 @@ Continuous observation fields, gene expression, and vector fields must contain
 only finite values. Every nonzero value written as float32, after required
 embedding/vector scaling, must have an absolute magnitude from \code{2^-149}
 through \code{(2 - 2^-23) * 2^127}; values that would become zero or infinity
-in the file are rejected before publication. Categorical outlier quantiles are
+in the file are rejected before publication. Quantized continuous values and
+their manifest bounds are derived only after round-tripping through the
+viewer's float32 domain. Source variation that collapses to one float32 value
+is rejected rather than advertised as quantized variation that the viewer
+cannot display. An individual nonzero source value may round to zero when the
+resulting float32 range remains non-collapsed. Categorical outlier quantiles are
 generated internally; cells in categories smaller than
 \code{centroid_min_points} carry \code{NaN}, encoded with the reserved integer
 marker only when those generated quantiles are quantized.

@@ -1,6 +1,6 @@
 citHeader("To cite cellucid in publications use:")
 
-package_version <- as.character(utils::packageVersion("cellucid"))
+package_version <- meta$Version
 
 bibentry(
   bibtype = "Manual",

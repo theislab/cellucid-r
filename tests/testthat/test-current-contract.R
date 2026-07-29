@@ -207,6 +207,34 @@ test_that("release metadata and artifacts have one exact 0.9.1 identity", {
     expect_true(any(citation == "version: 0.9.1  # CELLUCID_VERSION"))
   }
 
+  package_citation_path <- file.path(
+    repository_root,
+    "inst",
+    "CITATION"
+  )
+  if (file.exists(package_citation_path)) {
+    package_citation <- paste(
+      readLines(
+        package_citation_path,
+        warn = FALSE,
+        encoding = "UTF-8"
+      ),
+      collapse = "\n"
+    )
+    expect_match(package_citation, "meta$Version", fixed = TRUE)
+    expect_false(
+      grepl(
+        'packageVersion("cellucid")',
+        package_citation,
+        fixed = TRUE
+      )
+    )
+    citation_environment <- new.env(parent = globalenv())
+    citation_environment$meta <- list(Version = version)
+    sys.source(package_citation_path, envir = citation_environment)
+    expect_identical(citation_environment$package_version, version)
+  }
+
   release_path <- file.path(
     repository_root,
     ".github",

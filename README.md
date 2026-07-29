@@ -35,7 +35,12 @@ Continuous observation fields, gene-expression matrices, and vector fields
 must contain only finite values. For unquantized float32 output, every nonzero
 value after required vector scaling must have magnitude from `2^-149` through
 `(2 - 2^-23) * 2^127`; values that would encode as zero or infinity reject the
-complete candidate. The reserved quantized missing marker is used only for
+complete candidate. Quantized continuous fields and their manifest bounds use
+the viewer's exact float32 values; a native-double range that collapses to one
+float32 value rejects the complete candidate. Individual nonzero source values
+may round to zero when the resulting float32 range remains non-collapsed. The
+reserved quantized missing
+marker is used only for
 categorical outlier quantiles that Cellucid generates as `NaN` when a category
 has fewer than `centroid_min_points` cells.
 

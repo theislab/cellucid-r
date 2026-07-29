@@ -599,6 +599,140 @@ test_that("invalid centroid and quantization domains are rejected", {
   )
 })
 
+test_that("quantization owns the viewer-visible float32 value domain", {
+  roundtrip_float32 <- function(values) {
+    readBin(
+      writeBin(
+        as.double(values),
+        raw(),
+        size = 4L,
+        endian = "little"
+      ),
+      what = double(),
+      n = length(values),
+      size = 4L,
+      endian = "little"
+    )
+  }
+
+  expect_error(
+    cellucid:::.quantize_continuous(
+      c(1, 1 + 1e-8, 1 + 2e-8),
+      bits = 8L,
+      field_name = "collapsed"
+    ),
+    "variation collapses to one value.*float32 domain"
+  )
+  expect_error(
+    cellucid:::.quantize_continuous(
+      c(0, 2^128),
+      bits = 8L,
+      field_name = "overflow"
+    ),
+    "remain finite.*float32 domain"
+  )
+
+  visible_values <- roundtrip_float32(
+    c(1, 1 + 1e-7, 1 + 2e-7)
+  )
+  q <- cellucid:::.quantize_continuous(
+    visible_values,
+    bits = 8L,
+    field_name = "visible"
+  )
+  expect_identical(q$quantized, c(0L, 127L, 254L))
+  expect_identical(q$min_val, visible_values[[1L]])
+  expect_identical(q$max_val, visible_values[[3L]])
+  decoded <- q$min_val +
+    q$quantized / 254 * (q$max_val - q$min_val)
+  expect_identical(roundtrip_float32(decoded), visible_values)
+
+  underflow_source <- c(2^-150, 2^-149, 2^-148)
+  underflow_visible <- roundtrip_float32(underflow_source)
+  expect_identical(underflow_visible, c(0, 2^-149, 2^-148))
+  underflow_q <- cellucid:::.quantize_continuous(
+    underflow_source,
+    bits = 8L,
+    field_name = "subnormal"
+  )
+  expect_identical(underflow_q$quantized, c(0L, 127L, 254L))
+  expect_identical(underflow_q$min_val, 0)
+  expect_identical(underflow_q$max_val, 2^-148)
+  underflow_decoded <- underflow_q$min_val +
+    underflow_q$quantized / 254 *
+      (underflow_q$max_val - underflow_q$min_val)
+  expect_identical(
+    roundtrip_float32(underflow_decoded),
+    underflow_visible
+  )
+
+  observed_chunk_lengths <- integer()
+  original_roundtrip <- cellucid:::.roundtrip_finite_float32_chunk
+  chunked <- testthat::with_mocked_bindings(
+    cellucid:::.quantize_continuous(
+      visible_values,
+      bits = 8L,
+      field_name = "chunked",
+      .chunk_size = 2L
+    ),
+    .roundtrip_finite_float32_chunk = function(values, field_name) {
+      observed_chunk_lengths <<- c(
+        observed_chunk_lengths,
+        length(values)
+      )
+      original_roundtrip(values, field_name)
+    },
+    .package = "cellucid"
+  )
+  expect_identical(chunked, q)
+  expect_identical(observed_chunk_lengths, c(2L, 1L, 2L, 1L))
+})
+
+test_that("public quantized fields reject float32-collapsed variation atomically", {
+  values <- c(1, 1 + 1e-8, 1 + 2e-8)
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  embedding <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  base_args <- list(
+    dataset_id = "float32-quantization",
+    dataset_name = "Float32 quantization",
+    latent_space = latent,
+    X_umap_2d = embedding,
+    centroid_min_points = 1L,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  cases <- list(
+    observation = list(
+      obs = data.frame(score = values),
+      obs_continuous_quantization = 8L
+    ),
+    gene = list(
+      obs = data.frame(group = factor(c("A", "B", "C"))),
+      var = data.frame(row.names = "GENE"),
+      gene_expression = matrix(values, ncol = 1L),
+      var_quantization = 8L
+    )
+  )
+
+  for (case_name in names(cases)) {
+    out <- tempfile(paste0("cellucid_r_float32_quantized_", case_name, "_"))
+    expect_error(
+      do.call(
+        cellucid_prepare,
+        c(base_args, cases[[case_name]], list(out_dir = out))
+      ),
+      "variation collapses to one value.*float32 domain",
+      info = case_name
+    )
+    expect_false(dir.exists(out), info = case_name)
+    stage_prefix <- paste0(".", basename(out), ".stage-")
+    expect_false(
+      any(startsWith(list.files(dirname(out), all.files = TRUE), stage_prefix)),
+      info = case_name
+    )
+  }
+})
+
 test_that("only generated outlier NaN uses the exact reserved marker", {
   q <- cellucid:::.quantize_nullable_outlier_quantiles(
     c(2, NaN, 4),
@@ -1003,7 +1137,7 @@ test_that("multiple vector fields require one explicit exact default", {
   )
 })
 
-test_that("obs manifest preserves min/max precision in JSON", {
+test_that("obs manifest preserves viewer float32 min/max precision in JSON", {
   latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
   obs <- data.frame(score = c(1 / 3, 2 / 3, 1 / 2))
   umap1 <- matrix(c(0, 1, 2), ncol = 1)
@@ -1031,8 +1165,20 @@ test_that("obs manifest preserves min/max precision in JSON", {
 
   entry <- fields[[1]]
   expect_equal(entry[[1]], "score")
-  expect_equal(entry[[2]], 1 / 3, tolerance = 1e-15)
-  expect_equal(entry[[3]], 2 / 3, tolerance = 1e-15)
+  viewer_bounds <- readBin(
+    writeBin(
+      c(1 / 3, 2 / 3),
+      raw(),
+      size = 4L,
+      endian = "little"
+    ),
+    what = double(),
+    n = 2L,
+    size = 4L,
+    endian = "little"
+  )
+  expect_identical(entry[[2]], viewer_bounds[[1L]])
+  expect_identical(entry[[3]], viewer_bounds[[2L]])
 })
 
 test_that("gene expression rejects missing values for every codec", {

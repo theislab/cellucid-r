@@ -11,6 +11,8 @@ Version 0.9.1 is the CRAN submission release.
   portable edge-index widths without reinterpreting the source graph.
 - Rejects non-finite or non-representable float32 values, duplicate scientific
   identifiers, and non-portable artifact names before publication.
+- Derives quantized continuous payloads and bounds from the viewer's exact
+  float32 value domain and rejects ranges whose variation would disappear.
 - Adds current multi-platform package checks and a Bootstrap 5 documentation
   site contract.
 
