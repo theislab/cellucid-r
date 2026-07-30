@@ -435,7 +435,14 @@ test_that("abrupt native lock-owner death releases the persistent sidecar", {
     lock_path
   )[[1]]
 
-  expect_true(tools::pskill(owner_pid, tools::SIGKILL))
+  # Windows only implements process termination for SIGTERM. Both branches
+  # bypass cluster cleanup so this still exercises abrupt owner death.
+  owner_signal <- if (.Platform$OS.type == "windows") {
+    tools::SIGTERM
+  } else {
+    tools::SIGKILL
+  }
+  expect_true(tools::pskill(owner_pid, owner_signal))
   suppressWarnings(try(parallel::stopCluster(cluster), silent = TRUE))
   cluster_is_live <- FALSE
 
@@ -845,7 +852,6 @@ test_that("unsafe export lock paths are rejected without mutation", {
   expect_false(file.exists(directory_target))
   expect_true(dir.exists(directory_lock))
 
-  skip_on_os("windows")
   symlink_target <- tempfile("cellucid_r_symlink_lock_")
   symlink_lock <- file.path(
     dirname(symlink_target),
@@ -853,9 +859,25 @@ test_that("unsafe export lock paths are rejected without mutation", {
   )
   victim <- tempfile("cellucid_r_lock_victim_")
   writeLines("must remain unchanged", victim)
-  expect_true(file.symlink(victim, symlink_lock))
+  skip_if_not(
+    file.symlink(victim, symlink_lock),
+    "symbolic links unavailable"
+  )
+  expect_identical(cellucid:::.export_path_info(symlink_lock)$kind, 3L)
+  if (.Platform$OS.type != "windows") {
+    expect_true(nzchar(Sys.readlink(symlink_lock)))
+  }
   expect_error(prepare_target(symlink_target), "symbolic link")
   expect_false(file.exists(symlink_target))
+  expect_identical(cellucid:::.export_path_info(symlink_lock)$kind, 3L)
+  expect_identical(readLines(victim), "must remain unchanged")
+  cleanup_status <- NULL
+  expect_warning(
+    cleanup_status <- .remove_test_reparse(symlink_lock),
+    regexp = NA
+  )
+  expect_identical(cleanup_status, 0L)
+  expect_identical(cellucid:::.export_path_info(symlink_lock)$kind, 0L)
   expect_identical(readLines(victim), "must remain unchanged")
 })
 

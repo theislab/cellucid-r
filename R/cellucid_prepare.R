@@ -1107,19 +1107,32 @@ cellucid_prepare <- function(
 }
 
 .validate_export_generation_lock_path <- function(lock_path) {
-  link_target <- suppressWarnings(Sys.readlink(lock_path))
-  if (
-    length(link_target) == 1L &&
-      !is.na(link_target) &&
-      nzchar(link_target)
-  ) {
+  path_info <- .export_path_info(lock_path)
+  if (path_info$kind == 3L) {
     stop(
-      "Export lock path must not be a symbolic link: ",
+      "Export lock path must not be a symbolic link or reparse point: ",
       lock_path,
       call. = FALSE
     )
   }
-  if (file.exists(lock_path) && !file_test("-f", lock_path)) {
+  if (.Platform$OS.type != "windows") {
+    link_target <- suppressWarnings(Sys.readlink(lock_path))
+    if (
+      length(link_target) == 1L &&
+        !is.na(link_target) &&
+        nzchar(link_target)
+    ) {
+      stop(
+        "Export lock path must not be a symbolic link: ",
+        lock_path,
+        call. = FALSE
+      )
+    }
+  }
+  if (
+    path_info$kind != 0L &&
+      (path_info$kind != 1L || !utils::file_test("-f", lock_path))
+  ) {
     stop(
       "Export lock path must identify a regular file: ",
       lock_path,

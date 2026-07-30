@@ -94,6 +94,58 @@
   )))
 }
 
+.expect_transaction_reparse_node <- function(path) {
+  expect_identical(cellucid:::.export_path_info(path)$kind, 3L)
+  if (.Platform$OS.type != "windows") {
+    link_target <- Sys.readlink(path)
+    expect_identical(length(link_target), 1L)
+    expect_false(is.na(link_target))
+    expect_true(nzchar(link_target))
+  }
+  invisible(path)
+}
+
+.expect_transaction_cleanup <- function(
+    parent,
+    file_reparse_nodes = character(),
+    directory_reparse_nodes = character(),
+    after_reparse_cleanup = function() invisible(NULL)
+) {
+  stopifnot(is.function(after_reparse_cleanup))
+  reparse_nodes <- unique(c(
+    file_reparse_nodes,
+    directory_reparse_nodes
+  ))
+  for (path in reparse_nodes) {
+    if (cellucid:::.export_path_info(path)$kind == 0L) {
+      next
+    }
+    .expect_transaction_reparse_node(path)
+    status <- NULL
+    expect_warning(
+      status <- .remove_test_reparse(
+        path,
+        directory = path %in% directory_reparse_nodes
+      ),
+      regexp = NA
+    )
+    expect_identical(status, 0L)
+    expect_identical(cellucid:::.export_path_info(path)$kind, 0L)
+  }
+  after_reparse_cleanup()
+
+  if (cellucid:::.export_path_info(parent)$kind != 0L) {
+    status <- NULL
+    expect_warning(
+      status <- unlink(parent, recursive = TRUE, force = TRUE),
+      regexp = NA
+    )
+    expect_identical(status, 0L)
+    expect_identical(cellucid:::.export_path_info(parent)$kind, 0L)
+  }
+  invisible(parent)
+}
+
 test_that("transaction descriptor bytes and reserved paths match Python exactly", {
   parent <- .transaction_test_parent("canonical_bytes")
   on.exit(unlink(parent, recursive = TRUE, force = TRUE), add = TRUE)
@@ -425,9 +477,16 @@ test_that("unsafe journal and temporary control nodes fail without mutation", {
     )),
     source
   )
-  skip_if_not(
-    file.symlink(source, paths$journal),
-    "symbolic links unavailable"
+  link_created <- isTRUE(file.symlink(source, paths$journal))
+  if (!link_created) {
+    .expect_transaction_cleanup(parent)
+  }
+  skip_if_not(link_created, "symbolic links unavailable")
+  expected_journal_source <- charToRaw(
+    cellucid:::.serialize_export_transaction(
+      transaction_id,
+      TRUE
+    )
   )
   expect_error(
     cellucid:::.recover_export_transaction(target),
@@ -435,13 +494,19 @@ test_that("unsafe journal and temporary control nodes fail without mutation", {
   )
   expect_identical(
     readBin(source, what = "raw", n = 512L),
-    charToRaw(cellucid:::.serialize_export_transaction(
-      transaction_id,
-      TRUE
-    ))
+    expected_journal_source
   )
-  expect_true(Sys.readlink(paths$journal) != "")
-  unlink(parent, recursive = TRUE, force = TRUE)
+  .expect_transaction_reparse_node(paths$journal)
+  .expect_transaction_cleanup(
+    parent,
+    file_reparse_nodes = paths$journal,
+    after_reparse_cleanup = function() {
+      expect_identical(
+        readBin(source, what = "raw", n = 512L),
+        expected_journal_source
+      )
+    }
+  )
 
   parent <- .transaction_test_parent("temporary_directory")
   target <- file.path(parent, "generation")
@@ -467,6 +532,7 @@ test_that("unsafe target, stage, and backup nodes fail closed", {
   for (case in cases) {
     parent <- .transaction_test_parent(case)
     target <- file.path(parent, "generation")
+    reparse_nodes <- character()
     paths <- .transaction_write_journal(
       target,
       transaction_id,
@@ -476,10 +542,12 @@ test_that("unsafe target, stage, and backup nodes fail closed", {
     .transaction_create_directory(outside, "outside")
 
     if (case == "target-symlink") {
-      skip_if_not(
-        file.symlink(outside, target),
-        "symbolic links unavailable"
-      )
+      link_created <- .create_test_directory_reparse(outside, target)
+      if (!link_created) {
+        .expect_transaction_cleanup(parent)
+      }
+      skip_if_not(link_created, "symbolic links unavailable")
+      reparse_nodes <- c(reparse_nodes, target)
     } else {
       .transaction_create_directory(target, "prior")
     }
@@ -487,10 +555,15 @@ test_that("unsafe target, stage, and backup nodes fail closed", {
       writeLines("unsafe stage", paths$stage)
     }
     if (case == "backup-symlink") {
-      skip_if_not(
-        file.symlink(outside, paths$backup),
-        "symbolic links unavailable"
+      link_created <- .create_test_directory_reparse(
+        outside,
+        paths$backup
       )
+      if (!link_created) {
+        .expect_transaction_cleanup(parent)
+      }
+      skip_if_not(link_created, "symbolic links unavailable")
+      reparse_nodes <- c(reparse_nodes, paths$backup)
     }
     outside_before <- .transaction_snapshot(outside)
     journal_before <- readBin(
@@ -509,27 +582,49 @@ test_that("unsafe target, stage, and backup nodes fail closed", {
       readBin(paths$journal, what = "raw", n = 512L),
       journal_before
     )
-    unlink(parent, recursive = TRUE, force = TRUE)
+    for (path in reparse_nodes) {
+      .expect_transaction_reparse_node(path)
+    }
+    .expect_transaction_cleanup(
+      parent,
+      directory_reparse_nodes = reparse_nodes,
+      after_reparse_cleanup = function() {
+        expect_identical(
+          .transaction_snapshot(outside),
+          outside_before
+        )
+      }
+    )
   }
 })
 
 test_that("the public writer never follows the final output symlink", {
   parent <- .transaction_test_parent("public_target_symlink")
-  on.exit(unlink(parent, recursive = TRUE, force = TRUE), add = TRUE)
   outside <- file.path(parent, "outside")
   .transaction_create_directory(outside, "outside")
   target <- file.path(parent, "generation")
-  skip_if_not(
-    file.symlink(outside, target),
-    "symbolic links unavailable"
-  )
+  link_created <- .create_test_directory_reparse(outside, target)
+  if (!link_created) {
+    .expect_transaction_cleanup(parent)
+  }
+  skip_if_not(link_created, "directory reparse points unavailable")
   before <- .transaction_snapshot(outside)
+  on.exit(
+    .expect_transaction_cleanup(
+      parent,
+      directory_reparse_nodes = target,
+      after_reparse_cleanup = function() {
+        expect_identical(.transaction_snapshot(outside), before)
+      }
+    ),
+    add = TRUE
+  )
 
   expect_error(
     .transaction_prepare(target, "replacement", TRUE),
     "ordinary non-symbolic directory"
   )
-  expect_true(Sys.readlink(target) != "")
+  .expect_transaction_reparse_node(target)
   expect_identical(.transaction_snapshot(outside), before)
   .expect_transaction_controls_cleared(target)
 })

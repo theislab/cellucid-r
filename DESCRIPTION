@@ -19,7 +19,8 @@ Depends:
     R (>= 4.3.0)
 Imports:
     jsonlite,
-    methods
+    methods,
+    utils
 Suggests:
     knitr,
     Matrix,
