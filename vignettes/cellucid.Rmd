@@ -69,6 +69,11 @@ cellucid_prepare(
 list.files(out_dir, recursive = TRUE)
 ```
 
+Set `created_at` to an exact `YYYY-MM-DDTHH:MM:SSZ` UTC value when the identity
+metadata itself must be reproducible; the default is the current UTC time.
+Dataset provenance may contain `source_name` alone, or add `source_url`,
+`source_citation`, or both. A URL or citation always requires `source_name`.
+
 ## Using Seurat
 
 Seurat objects typically store expression as **genes × cells**, but

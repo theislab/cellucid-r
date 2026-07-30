@@ -1,1 +1,2 @@
 export(cellucid_prepare)
+useDynLib(cellucid, .registration = TRUE, .fixes = "C_")

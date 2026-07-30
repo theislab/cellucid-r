@@ -188,11 +188,675 @@ test_that("force TRUE publishes one complete replacement generation", {
   )
   expect_identical(identity$id, "second-generation")
   expect_false(file.exists(file.path(out, "stale-generation-file")))
-  stage_prefix <- paste0(".", basename(out), ".stage-")
-  previous_prefix <- paste0(".", basename(out), ".previous-")
+  transaction_prefix <- paste0(".", basename(out), ".cellucid-")
   siblings <- list.files(dirname(out), all.files = TRUE)
-  expect_false(any(startsWith(siblings, stage_prefix)))
-  expect_false(any(startsWith(siblings, previous_prefix)))
+  expect_false(any(startsWith(siblings, transaction_prefix)))
+})
+
+test_that("a live independent exporter excludes replacement until process exit", {
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap1 <- matrix(c(0, 1), ncol = 1)
+  out <- tempfile("cellucid_r_live_export_lock_")
+
+  cellucid_prepare(
+    dataset_id = "first-generation",
+    dataset_name = "First generation",
+    latent_space = latent,
+    obs = obs,
+    X_umap_1d = umap1,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  sentinel <- file.path(out, "first-generation-sentinel")
+  writeLines("owned by the first generation", sentinel)
+  lock_path <- file.path(
+    dirname(out),
+    paste0(".", basename(out), ".cellucid.lock")
+  )
+
+  cluster <- parallel::makeCluster(1L)
+  on.exit({
+    if (!is.null(cluster)) {
+      parallel::stopCluster(cluster)
+    }
+  }, add = TRUE)
+  held <- parallel::clusterCall(
+    cluster,
+    function(path) {
+      library(cellucid)
+      lock <- cellucid:::.native_export_lock_acquire(path)
+      stopifnot(!is.null(lock))
+      assign(".cellucid_test_export_lock", lock, envir = .GlobalEnv)
+      TRUE
+    },
+    lock_path
+  )
+  expect_identical(held, list(TRUE))
+
+  expect_error(
+    cellucid_prepare(
+      dataset_id = "second-generation",
+      dataset_name = "Second generation",
+      latent_space = latent,
+      obs = obs,
+      X_umap_1d = umap1,
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE,
+      obs_categorical_dtype = "uint16"
+    ),
+    "generation.*already active"
+  )
+  expect_true(file.exists(sentinel))
+
+  parallel::stopCluster(cluster)
+  cluster <- NULL
+  cellucid_prepare(
+    dataset_id = "second-generation",
+    dataset_name = "Second generation",
+    latent_space = latent,
+    obs = obs,
+    X_umap_1d = umap1,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  identity <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(identity$id, "second-generation")
+  expect_false(file.exists(sentinel))
+  expect_true(file.exists(lock_path))
+  expect_identical(unname(file.info(lock_path)$size), 0)
+  siblings <- list.files(dirname(out), all.files = TRUE)
+  expect_false(any(startsWith(
+    siblings,
+    paste0(".", basename(out), ".cellucid-")
+  )))
+})
+
+test_that("rejected native lock attempts do not leak descriptors or handles", {
+  parent <- tempfile("cellucid_r_native_lock_resources_")
+  dir.create(parent)
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+  cluster <- parallel::makeCluster(1L)
+  on.exit({
+    if (!is.null(cluster)) {
+      parallel::stopCluster(cluster)
+    }
+  }, add = TRUE)
+  held <- parallel::clusterCall(
+    cluster,
+    function(path) {
+      library(cellucid)
+      lock <- cellucid:::.native_export_lock_acquire(path)
+      stopifnot(!is.null(lock))
+      assign(".cellucid_test_export_lock", lock, envir = .GlobalEnv)
+      TRUE
+    },
+    lock_path
+  )
+  expect_identical(held, list(TRUE))
+  expect_null(cellucid:::.native_export_lock_acquire(lock_path))
+
+  resource_count <- function() {
+    if (.Platform$OS.type == "windows") {
+      return(as.numeric(cellucid:::.native_process_handle_count()))
+    }
+    descriptor_root <- if (dir.exists("/proc/self/fd")) {
+      "/proc/self/fd"
+    } else if (dir.exists("/dev/fd")) {
+      "/dev/fd"
+    } else {
+      return(NA_real_)
+    }
+    as.numeric(length(list.files(descriptor_root)))
+  }
+
+  before <- resource_count()
+  skip_if(is.na(before), "native process resource count is unavailable")
+  for (attempt in seq_len(1000L)) {
+    stopifnot(is.null(cellucid:::.native_export_lock_acquire(lock_path)))
+  }
+  gc()
+  after <- resource_count()
+  expect_identical(after, before)
+})
+
+test_that("garbage collection finalizes an abandoned native lock handle", {
+  parent <- tempfile("cellucid_r_native_lock_gc_")
+  dir.create(parent)
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+  lock <- cellucid:::.native_export_lock_acquire(lock_path)
+  expect_false(is.null(lock))
+
+  cluster <- parallel::makeCluster(1L)
+  on.exit(parallel::stopCluster(cluster), add = TRUE)
+  worker_can_lock <- function() {
+    parallel::clusterCall(
+      cluster,
+      function(path) {
+        library(cellucid)
+        worker_lock <- cellucid:::.native_export_lock_acquire(path)
+        if (is.null(worker_lock)) {
+          return(FALSE)
+        }
+        stopifnot(identical(
+          cellucid:::.native_export_lock_release(worker_lock),
+          c(0L, 0L, 1L)
+        ))
+        TRUE
+      },
+      lock_path
+    )[[1]]
+  }
+
+  expect_false(worker_can_lock())
+  rm(lock)
+  invisible(gc())
+  expect_true(worker_can_lock())
+})
+
+test_that("escaped native handles remain inert after namespace unload and gc", {
+  script_path <- tempfile("cellucid_r_unload_lock_", fileext = ".R")
+  library_expression <- paste(deparse(.libPaths()), collapse = " ")
+  writeLines(
+    c(
+      paste0(".libPaths(", library_expression, ")"),
+      "library(cellucid)",
+      "lock_path <- tempfile('cellucid-r-unload-lock-')",
+      "handle <- cellucid:::.native_export_lock_acquire(lock_path)",
+      "stopifnot(!is.null(handle))",
+      "unloadNamespace('cellucid')",
+      "rm(handle)",
+      "invisible(gc())",
+      "library(cellucid)",
+      "replacement <- cellucid:::.native_export_lock_acquire(lock_path)",
+      "stopifnot(!is.null(replacement))",
+      paste0(
+        "stopifnot(identical(",
+        "cellucid:::.native_export_lock_release(replacement), ",
+        "c(0L, 0L, 1L)))"
+      ),
+      "unloadNamespace('cellucid')",
+      "invisible(gc())",
+      "cat('unload-gc-reload-ok\\n')"
+    ),
+    script_path
+  )
+  rscript <- file.path(
+    R.home("bin"),
+    if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript"
+  )
+  output <- suppressWarnings(system2(
+    rscript,
+    c("--vanilla", shQuote(script_path)),
+    stdout = TRUE,
+    stderr = TRUE,
+    timeout = 30
+  ))
+  status <- attr(output, "status", exact = TRUE)
+  if (is.null(status)) {
+    status <- 0L
+  }
+
+  expect_identical(as.integer(status), 0L, info = paste(output, collapse = "\n"))
+  expect_true(
+    any(grepl("unload-gc-reload-ok", output, fixed = TRUE)),
+    info = paste(output, collapse = "\n")
+  )
+})
+
+test_that("abrupt native lock-owner death releases the persistent sidecar", {
+  parent <- tempfile("cellucid_r_native_lock_death_")
+  dir.create(parent)
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+  cluster <- parallel::makeCluster(1L)
+  cluster_is_live <- TRUE
+  on.exit({
+    if (cluster_is_live) {
+      suppressWarnings(try(parallel::stopCluster(cluster), silent = TRUE))
+    }
+  }, add = TRUE)
+  owner_pid <- parallel::clusterCall(
+    cluster,
+    function(path) {
+      library(cellucid)
+      lock <- cellucid:::.native_export_lock_acquire(path)
+      stopifnot(!is.null(lock))
+      assign(".cellucid_test_export_lock", lock, envir = .GlobalEnv)
+      Sys.getpid()
+    },
+    lock_path
+  )[[1]]
+
+  expect_true(tools::pskill(owner_pid, tools::SIGKILL))
+  suppressWarnings(try(parallel::stopCluster(cluster), silent = TRUE))
+  cluster_is_live <- FALSE
+
+  recovered_lock <- NULL
+  for (attempt in seq_len(500L)) {
+    recovered_lock <- cellucid:::.native_export_lock_acquire(lock_path)
+    if (!is.null(recovered_lock)) {
+      break
+    }
+    Sys.sleep(0.01)
+  }
+  expect_false(is.null(recovered_lock))
+  expect_identical(
+    cellucid:::.native_export_lock_release(recovered_lock),
+    c(0L, 0L, 1L)
+  )
+  expect_true(file.exists(lock_path))
+})
+
+test_that("same-process export locks reject recursion without dropping ownership", {
+  parent <- tempfile("cellucid_r_process_lock_parent_")
+  dir.create(parent)
+  target <- file.path(parent, "target")
+  other_target <- file.path(parent, "other-target")
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+
+  first_lock <- cellucid:::.acquire_export_generation_lock(target)
+  first_lock_is_owned <- TRUE
+  on.exit({
+    if (first_lock_is_owned) {
+      cellucid:::.release_export_generation_lock(first_lock)
+    }
+  }, add = TRUE)
+
+  cluster <- parallel::makeCluster(1L)
+  on.exit({
+    if (!is.null(cluster)) {
+      parallel::stopCluster(cluster)
+    }
+  }, add = TRUE)
+  worker_can_lock <- function(cluster, path) {
+    parallel::clusterCall(
+      cluster,
+      function(lock_path) {
+        library(cellucid)
+        lock <- cellucid:::.native_export_lock_acquire(lock_path)
+        if (is.null(lock)) {
+          return(FALSE)
+        }
+        identical(
+          cellucid:::.native_export_lock_release(lock),
+          c(0L, 0L, 1L)
+        )
+      },
+      path
+    )[[1]]
+  }
+
+  expect_false(worker_can_lock(cluster, lock_path))
+  expect_error(
+    cellucid:::.acquire_export_generation_lock(target),
+    "generation.*already active"
+  )
+  expect_false(worker_can_lock(cluster, lock_path))
+
+  other_lock <- cellucid:::.acquire_export_generation_lock(other_target)
+  expect_true(cellucid:::.release_export_generation_lock(other_lock))
+  expect_true(cellucid:::.release_export_generation_lock(first_lock))
+  first_lock_is_owned <- FALSE
+  expect_true(worker_can_lock(cluster, lock_path))
+})
+
+test_that("case aliases and Unicode targets retain exact lock ownership", {
+  parent <- tempfile("cellucid_r_case_lock_parent_")
+  dir.create(parent)
+  canonical_target <- file.path(parent, "CaseSensitiveTarget")
+  alias_target <- file.path(parent, "casesensitivetarget")
+  canonical_lock_path <- file.path(
+    parent,
+    ".CaseSensitiveTarget.cellucid.lock"
+  )
+  alias_lock_path <- file.path(
+    parent,
+    ".casesensitivetarget.cellucid.lock"
+  )
+  lock <- cellucid:::.acquire_export_generation_lock(canonical_target)
+  lock_is_owned <- TRUE
+  on.exit({
+    if (lock_is_owned) {
+      cellucid:::.release_export_generation_lock(lock)
+    }
+  }, add = TRUE)
+
+  if (file.exists(alias_lock_path)) {
+    expect_error(
+      cellucid:::.acquire_export_generation_lock(alias_target),
+      "generation.*already active"
+    )
+    cluster <- parallel::makeCluster(1L)
+    on.exit(parallel::stopCluster(cluster), add = TRUE)
+    alias_contended <- parallel::clusterCall(
+      cluster,
+      function(path) {
+        library(cellucid)
+        is.null(cellucid:::.native_export_lock_acquire(path))
+      },
+      alias_lock_path
+    )[[1]]
+    expect_true(alias_contended)
+  }
+
+  expect_true(cellucid:::.release_export_generation_lock(lock))
+  lock_is_owned <- FALSE
+  expect_true(file.exists(canonical_lock_path))
+
+  unicode_target <- file.path(parent, "células-细胞")
+  unicode_lock <- cellucid:::.acquire_export_generation_lock(unicode_target)
+  expect_true(cellucid:::.release_export_generation_lock(unicode_lock))
+  unicode_lock_path <- file.path(parent, ".células-细胞.cellucid.lock")
+  expect_true(file.exists(unicode_lock_path))
+  expect_identical(unname(file.info(unicode_lock_path)$size), 0)
+})
+
+test_that("native lock handles reject foreign pointers and real contention", {
+  parent <- tempfile("cellucid_r_native_lock_alias_")
+  dir.create(parent)
+  target <- file.path(parent, "target")
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+  lock <- cellucid:::.acquire_export_generation_lock(target)
+  lock_is_owned <- TRUE
+  on.exit({
+    if (lock_is_owned) {
+      cellucid:::.release_export_generation_lock(lock)
+    }
+  }, add = TRUE)
+
+  expect_error(
+    cellucid:::.native_export_lock_release(new("externalptr")),
+    "not owned by Cellucid"
+  )
+
+  cluster <- parallel::makeCluster(1L)
+  on.exit(parallel::stopCluster(cluster), add = TRUE)
+  alias_contended <- parallel::clusterCall(
+    cluster,
+    function(path) {
+      library(cellucid)
+      is.null(cellucid:::.native_export_lock_acquire(path))
+    },
+    lock_path
+  )[[1]]
+  expect_true(alias_contended)
+
+  expect_true(cellucid:::.release_export_generation_lock(lock))
+  lock_is_owned <- FALSE
+})
+
+test_that("hard-linked lock aliases are rejected without mutating ownership", {
+  skip_on_os("windows")
+  parent <- tempfile("cellucid_r_native_hardlink_alias_")
+  dir.create(parent)
+  target <- file.path(parent, "target")
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+  alias_lock_path <- file.path(parent, ".target-alias.cellucid.lock")
+  lock <- cellucid:::.acquire_export_generation_lock(target)
+  lock_is_owned <- TRUE
+  on.exit({
+    if (lock_is_owned) {
+      cellucid:::.release_export_generation_lock(lock)
+    }
+    unlink(alias_lock_path)
+  }, add = TRUE)
+
+  expect_true(file.link(lock_path, alias_lock_path))
+  expect_error(
+    cellucid:::.native_export_lock_acquire(alias_lock_path),
+    "non-linked regular file"
+  )
+  expect_true(file.exists(lock_path))
+  expect_true(file.exists(alias_lock_path))
+  expect_identical(unlink(alias_lock_path), 0L)
+  expect_false(file.exists(alias_lock_path))
+  expect_true(cellucid:::.release_export_generation_lock(lock))
+  lock_is_owned <- FALSE
+})
+
+test_that("forked children discard inherited process-local lock claims", {
+  skip_on_os("windows")
+  parent <- tempfile("cellucid_r_fork_lock_parent_")
+  dir.create(parent)
+  target <- file.path(parent, "target")
+  first_lock <- cellucid:::.acquire_export_generation_lock(target)
+  on.exit(
+    cellucid:::.release_export_generation_lock(first_lock),
+    add = TRUE
+  )
+
+  child <- parallel::mcparallel({
+    result <- tryCatch(
+      cellucid:::.acquire_export_generation_lock(target),
+      error = conditionMessage
+    )
+    list(
+      result = result,
+      process_id = Sys.getpid(),
+      registry_pid = cellucid:::.export_generation_lock_registry$pid,
+      claims = ls(
+        envir = cellucid:::.export_generation_lock_registry$paths,
+        all.names = TRUE
+      )
+    )
+  })
+  child_result <- parallel::mccollect(child)[[1]]
+
+  expect_match(child_result$result, "generation.*already active")
+  expect_identical(child_result$registry_pid, child_result$process_id)
+  expect_identical(child_result$claims, character())
+})
+
+test_that("a forked child obtains a real lock after the parent releases", {
+  skip_on_os("windows")
+  parent <- tempfile("cellucid_r_fork_transfer_parent_")
+  dir.create(parent)
+  target <- file.path(parent, "target")
+  lock_path <- file.path(parent, ".target.cellucid.lock")
+  start_path <- file.path(parent, "start-child")
+  ready_path <- file.path(parent, "child-ready")
+  release_path <- file.path(parent, "release-child")
+  wait_for_file <- function(path) {
+    for (attempt in seq_len(500L)) {
+      if (file.exists(path)) {
+        return(TRUE)
+      }
+      Sys.sleep(0.01)
+    }
+    FALSE
+  }
+
+  parent_lock <- cellucid:::.acquire_export_generation_lock(target)
+  parent_lock_is_owned <- TRUE
+  on.exit({
+    if (parent_lock_is_owned) {
+      cellucid:::.release_export_generation_lock(parent_lock)
+    }
+  }, add = TRUE)
+
+  child <- parallel::mcparallel({
+    if (!wait_for_file(start_path)) {
+      stop("Parent never released the child start gate.")
+    }
+    child_lock <- cellucid:::.acquire_export_generation_lock(target)
+    on.exit(
+      cellucid:::.release_export_generation_lock(child_lock),
+      add = TRUE
+    )
+    file.create(ready_path)
+    if (!wait_for_file(release_path)) {
+      stop("Parent never released the child lock gate.")
+    }
+    "real-lock-held"
+  })
+  child_is_active <- TRUE
+  on.exit({
+    if (child_is_active) {
+      file.create(start_path)
+      file.create(release_path)
+      parallel::mccollect(child, wait = FALSE)
+    }
+  }, add = TRUE)
+
+  expect_true(cellucid:::.release_export_generation_lock(parent_lock))
+  parent_lock_is_owned <- FALSE
+  file.create(start_path)
+  expect_true(wait_for_file(ready_path))
+
+  cluster <- parallel::makeCluster(1L)
+  on.exit(parallel::stopCluster(cluster), add = TRUE)
+  worker_can_lock <- parallel::clusterCall(
+    cluster,
+    function(path) {
+      library(cellucid)
+      lock <- cellucid:::.native_export_lock_acquire(path)
+      if (is.null(lock)) {
+        return(FALSE)
+      }
+      identical(
+        cellucid:::.native_export_lock_release(lock),
+        c(0L, 0L, 1L)
+      )
+    },
+    lock_path
+  )[[1]]
+  expect_false(worker_can_lock)
+
+  file.create(release_path)
+  child_result <- parallel::mccollect(child)[[1]]
+  child_is_active <- FALSE
+  expect_identical(child_result, "real-lock-held")
+})
+
+test_that("stage cleanup failure cannot strand export lock ownership", {
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap1 <- matrix(c(0, 1), ncol = 1)
+  out <- tempfile("cellucid_r_cleanup_failure_")
+  cleanup_was_attempted <- FALSE
+
+  testthat::with_mocked_bindings(
+    captured_error <- tryCatch(
+      cellucid_prepare(
+        dataset_id = "cleanup-failure",
+        dataset_name = "Cleanup failure",
+        latent_space = latent,
+        obs = obs,
+        X_umap_1d = umap1,
+        out_dir = out,
+        centroid_min_points = 1,
+        force = TRUE,
+        obs_categorical_dtype = "uint16"
+      ),
+      error = identity
+    ),
+    .normalize_embedding = function(...) {
+      stop("synthetic generation failure")
+    },
+    .remove_export_tree = function(...) {
+      cleanup_was_attempted <<- TRUE
+      stop("synthetic stage cleanup failure")
+    },
+    .package = "cellucid"
+  )
+
+  expect_true(cleanup_was_attempted)
+  expect_s3_class(captured_error, "error")
+  expect_match(
+    conditionMessage(captured_error),
+    "synthetic stage cleanup failure"
+  )
+  retry_lock <- cellucid:::.acquire_export_generation_lock(out)
+  expect_true(cellucid:::.release_export_generation_lock(retry_lock))
+  stage_prefix <- paste0(".", basename(out), ".cellucid-stage-")
+  stages <- list.files(
+    dirname(out),
+    pattern = paste0("^", stage_prefix),
+    full.names = TRUE,
+    all.files = TRUE
+  )
+  expect_length(stages, 1L)
+  cellucid:::.recover_export_transaction(out)
+  expect_false(file.exists(stages))
+  controls <- cellucid:::.export_transaction_control_paths(out)
+  expect_false(file.exists(controls$journal))
+  expect_false(file.exists(controls$journal_temp))
+})
+
+test_that("legacy lock contents survive successful publication", {
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap1 <- matrix(c(0, 1), ncol = 1)
+  out <- tempfile("cellucid_r_legacy_lock_")
+  lock_path <- file.path(
+    dirname(out),
+    paste0(".", basename(out), ".cellucid.lock")
+  )
+  writeLines("legacy-owner-pid=424242", lock_path)
+
+  cellucid_prepare(
+    dataset_id = "legacy-lock-generation",
+    dataset_name = "Legacy lock generation",
+    latent_space = latent,
+    obs = obs,
+    X_umap_1d = umap1,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+
+  expect_identical(readLines(lock_path), "legacy-owner-pid=424242")
+})
+
+test_that("unsafe export lock paths are rejected without mutation", {
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap1 <- matrix(c(0, 1), ncol = 1)
+  prepare_target <- function(out) {
+    cellucid_prepare(
+      dataset_id = "unsafe-lock-generation",
+      dataset_name = "Unsafe lock generation",
+      latent_space = latent,
+      obs = obs,
+      X_umap_1d = umap1,
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE,
+      obs_categorical_dtype = "uint16"
+    )
+  }
+
+  directory_target <- tempfile("cellucid_r_directory_lock_")
+  directory_lock <- file.path(
+    dirname(directory_target),
+    paste0(".", basename(directory_target), ".cellucid.lock")
+  )
+  dir.create(directory_lock)
+  expect_error(prepare_target(directory_target), "regular file")
+  expect_false(file.exists(directory_target))
+  expect_true(dir.exists(directory_lock))
+
+  skip_on_os("windows")
+  symlink_target <- tempfile("cellucid_r_symlink_lock_")
+  symlink_lock <- file.path(
+    dirname(symlink_target),
+    paste0(".", basename(symlink_target), ".cellucid.lock")
+  )
+  victim <- tempfile("cellucid_r_lock_victim_")
+  writeLines("must remain unchanged", victim)
+  expect_true(file.symlink(victim, symlink_lock))
+  expect_error(prepare_target(symlink_target), "symbolic link")
+  expect_false(file.exists(symlink_target))
+  expect_identical(readLines(victim), "must remain unchanged")
 })
 
 test_that("manifest field keys must already be portable filenames", {
@@ -342,6 +1006,91 @@ test_that("public writer options reject partial matches and non-boolean force va
   }
 })
 
+test_that("created_at is exact, reproducible, and validated before mutation", {
+  expect_null(formals(cellucid_prepare)$created_at)
+  invalid <- list(
+    123,
+    TRUE,
+    NA_character_,
+    factor("2026-07-26T12:34:56Z"),
+    c("2026-07-26T12:34:56Z", "2026-07-26T12:34:57Z"),
+    "",
+    "2026-7-26T12:34:56Z",
+    "2026-07-26 12:34:56Z",
+    "2026-07-26T12:34:56+00:00",
+    "2026-07-26T12:34:56.000Z",
+    "0000-01-01T00:00:00Z",
+    "2026-02-29T12:34:56Z",
+    "2026-13-01T12:34:56Z",
+    "2026-01-00T12:34:56Z",
+    "2026-07-26T24:00:00Z",
+    "2026-07-26T12:60:00Z",
+    "2026-07-26T12:34:60Z"
+  )
+  for (value in invalid) {
+    parent <- tempfile("cellucid_r_invalid_created_at_")
+    expect_error(
+      cellucid_prepare(
+        dataset_id = "invalid-created-at",
+        dataset_name = "Invalid created at",
+        out_dir = file.path(parent, "generation"),
+        obs_categorical_dtype = "uint16",
+        created_at = value
+      ),
+      "created_at"
+    )
+    expect_false(dir.exists(parent))
+  }
+
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap1 <- matrix(c(0, 1), ncol = 1)
+  fixed <- "2024-02-29T23:59:59Z"
+  out <- tempfile("cellucid_r_exact_created_at_")
+  cellucid_prepare(
+    dataset_id = "exact-created-at",
+    dataset_name = "Exact created at",
+    latent_space = latent,
+    obs = obs,
+    X_umap_1d = umap1,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16",
+    created_at = fixed
+  )
+  identity <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(identity$created_at, fixed)
+
+  default_out <- tempfile("cellucid_r_default_created_at_")
+  cellucid_prepare(
+    dataset_id = "default-created-at",
+    dataset_name = "Default created at",
+    latent_space = latent,
+    obs = obs,
+    X_umap_1d = umap1,
+    out_dir = default_out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  default_identity <- jsonlite::read_json(
+    file.path(default_out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  expect_match(
+    default_identity$created_at,
+    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+  )
+  expect_identical(
+    cellucid:::.resolve_created_at(default_identity$created_at),
+    default_identity$created_at
+  )
+})
+
 test_that("dataset and source identity require exact caller-owned strings", {
   latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
   obs <- data.frame(group = factor(c("A", "B")))
@@ -358,6 +1107,15 @@ test_that("dataset and source identity require exact caller-owned strings", {
     list(dataset_id = "dataset", dataset_name = "   "),
     list(dataset_id = "dataset", dataset_name = " Dataset"),
     list(dataset_id = "dataset", dataset_name = "Dataset ")
+  )
+  invalid_identity <- c(
+    invalid_identity,
+    lapply(c(seq_len(31L), 127L), function(code) {
+      list(
+        dataset_id = "dataset",
+        dataset_name = paste0("Data", intToUtf8(code), "set")
+      )
+    })
   )
   for (identity in invalid_identity) {
     out <- tempfile("cellucid_r_invalid_identity_")
@@ -377,17 +1135,50 @@ test_that("dataset and source identity require exact caller-owned strings", {
     expect_false(dir.exists(out))
   }
 
-  partial_sources <- list(
-    list(source_name = "Source"),
-    list(source_url = "https://example.test/data"),
-    list(source_citation = "Citation"),
+  invalid_sources <- list(
     list(
-      source_name = "Source",
-      source_url = "https://example.test/data"
+      arguments = list(source_url = "https://example.test/data"),
+      message = "source_name"
+    ),
+    list(
+      arguments = list(source_citation = "Citation"),
+      message = "source_name"
+    ),
+    list(
+      arguments = list(
+        source_url = "https://example.test/data",
+        source_citation = "Citation"
+      ),
+      message = "source_name"
+    ),
+    list(
+      arguments = list(source_name = 1),
+      message = "source_name"
+    ),
+    list(
+      arguments = list(source_name = ""),
+      message = "source_name"
+    ),
+    list(
+      arguments = list(source_name = "Source", source_url = 1),
+      message = "source_url"
+    ),
+    list(
+      arguments = list(source_name = "Source", source_url = ""),
+      message = "source_url"
+    ),
+    list(
+      arguments = list(source_name = "Source", source_citation = 1),
+      message = "source_citation"
+    ),
+    list(
+      arguments = list(source_name = "Source", source_citation = ""),
+      message = "source_citation"
     )
   )
-  for (source in partial_sources) {
-    out <- tempfile("cellucid_r_partial_source_")
+  for (case in invalid_sources) {
+    parent <- tempfile("cellucid_r_invalid_source_")
+    out <- file.path(parent, "generation")
     expect_error(
       do.call(
         cellucid_prepare,
@@ -402,12 +1193,75 @@ test_that("dataset and source identity require exact caller-owned strings", {
             obs_categorical_dtype = "uint16",
             force = TRUE
           ),
-          source
+          case$arguments
         )
       ),
-      "source_name, source_url, and source_citation"
+      case$message
     )
-    expect_false(dir.exists(out))
+    expect_false(dir.exists(parent))
+  }
+
+  valid_sources <- list(
+    list(
+      arguments = list(source_name = "Source"),
+      expected = list(name = "Source")
+    ),
+    list(
+      arguments = list(
+        source_name = "Source",
+        source_url = "https://example.test/data"
+      ),
+      expected = list(
+        name = "Source",
+        url = "https://example.test/data"
+      )
+    ),
+    list(
+      arguments = list(
+        source_name = "Source",
+        source_citation = "Citation"
+      ),
+      expected = list(
+        name = "Source",
+        citation = "Citation"
+      )
+    ),
+    list(
+      arguments = list(
+        source_name = "Source",
+        source_url = "https://example.test/data",
+        source_citation = "Citation"
+      ),
+      expected = list(
+        name = "Source",
+        url = "https://example.test/data",
+        citation = "Citation"
+      )
+    )
+  )
+  for (case in valid_sources) {
+    out <- tempfile("cellucid_r_valid_source_")
+    do.call(
+      cellucid_prepare,
+      c(
+        list(
+          dataset_id = "test-dataset",
+          dataset_name = "Test dataset",
+          latent_space = latent,
+          obs = obs,
+          X_umap_2d = umap2,
+          out_dir = out,
+          obs_categorical_dtype = "uint16",
+          force = TRUE
+        ),
+        case$arguments
+      )
+    )
+    identity <- jsonlite::read_json(
+      file.path(out, "dataset_identity.json"),
+      simplifyVector = FALSE
+    )
+    expect_identical(identity$source, case$expected)
   }
 })
 
@@ -725,7 +1579,7 @@ test_that("public quantized fields reject float32-collapsed variation atomically
       info = case_name
     )
     expect_false(dir.exists(out), info = case_name)
-    stage_prefix <- paste0(".", basename(out), ".stage-")
+    stage_prefix <- paste0(".", basename(out), ".cellucid-stage-")
     expect_false(
       any(startsWith(list.files(dirname(out), all.files = TRUE), stage_prefix)),
       info = case_name

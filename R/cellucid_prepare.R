@@ -57,7 +57,11 @@
 #' @param centroid_min_points Minimum number of points in a category required to
 #'   compute centroids and outlier quantiles.
 #' @param force If `TRUE`, atomically replace an existing output generation. If
-#'   `FALSE`, require that `out_dir` does not already exist.
+#'   `FALSE`, require that `out_dir` does not already exist. Independent Python
+#'   or R exporters targeting the same directory are always rejected
+#'   immediately while another live process owns the generation. The hidden
+#'   sibling coordination file is intentionally persistent and is not part of
+#'   the published dataset.
 #' @param var_quantization Integer bits for gene expression quantization (`8` or
 #'   `16`), or `NULL` for full float32 export. Quantization is derived from the
 #'   exact float32 values materialized by the viewer; a native-double range
@@ -74,15 +78,16 @@
 #' @param compression Optional gzip compression level (`1`-`9`). Use `NULL` to
 #'   disable compression.
 #' @param dataset_name Required non-empty dataset name without leading or
-#'   trailing whitespace for `dataset_identity.json`.
+#'   trailing whitespace or ASCII control characters for
+#'   `dataset_identity.json`.
 #' @param dataset_description Dataset description. Defaults to an empty string.
 #' @param dataset_id Required portable dataset identifier.
-#' @param source_name Optional data source name for metadata. If supplied,
-#'   `source_url` and `source_citation` are also required.
-#' @param source_url Optional data source URL for metadata. If supplied,
-#'   `source_name` and `source_citation` are also required.
-#' @param source_citation Optional citation text for metadata. If supplied,
-#'   `source_name` and `source_url` are also required.
+#' @param source_name Optional non-empty data source name for metadata. Required
+#'   whenever `source_url` or `source_citation` is supplied.
+#' @param source_url Optional non-empty data source URL. May be supplied
+#'   independently when `source_name` is present.
+#' @param source_citation Optional non-empty citation text. May be supplied
+#'   independently when `source_name` is present.
 #' @param X_umap_1d Optional 1D embedding matrix of shape `(n_cells, 1)`.
 #' @param X_umap_2d Optional 2D embedding matrix of shape `(n_cells, 2)`.
 #' @param X_umap_3d Optional 3D embedding matrix of shape `(n_cells, 3)`.
@@ -91,6 +96,9 @@
 #'   `n_cells` rows.
 #' @param vector_field_default Exact vector-field identifier to select by
 #'   default. Required when `vector_fields` contains more than one field.
+#' @param created_at Optional exact UTC-seconds timestamp in
+#'   `YYYY-MM-DDTHH:MM:SSZ` format. Defaults to the current UTC time. Supply an
+#'   exact value for reproducible `dataset_identity.json` metadata.
 #'
 #' @return Invisibly returns `NULL`. Called for its side effects (file export).
 #' @export
@@ -121,7 +129,8 @@ cellucid_prepare <- function(
     X_umap_2d = NULL,
     X_umap_3d = NULL,
     vector_fields = NULL,
-    vector_field_default = NULL
+    vector_field_default = NULL,
+    created_at = NULL
 ) {
   manifest_format_version <- "compact_v1"
   obs_binary_dirname <- "obs"
@@ -134,11 +143,12 @@ cellucid_prepare <- function(
     obs_categorical_dtype
   )
   dataset_id <- .validate_dataset_id(dataset_id)
-  dataset_name <- .validate_required_string(dataset_name, "dataset_name")
+  dataset_name <- .validate_dataset_name(dataset_name)
   dataset_description <- .validate_string(
     dataset_description,
     "dataset_description"
   )
+  created_at <- .resolve_created_at(created_at)
   source_info <- .validate_source_identity(
     source_name,
     source_url,
@@ -166,13 +176,38 @@ cellucid_prepare <- function(
   )
 
   final_out_dir <- .validate_output_path(out_dir)
-  out_dir <- .begin_staged_output(final_out_dir, force)
-  staged_output_is_owned <- TRUE
+  .dir_create(dirname(final_out_dir))
+  out_dir <- NULL
+  transaction_cleanup_armed <- FALSE
+  export_lock <- .acquire_export_generation_lock(final_out_dir)
+  on.exit(
+    .release_export_generation_lock(export_lock),
+    add = TRUE
+  )
   on.exit({
-    if (staged_output_is_owned && dir.exists(out_dir)) {
-      unlink(out_dir, recursive = TRUE, force = TRUE)
+    if (transaction_cleanup_armed) {
+      recovery_error <- tryCatch(
+        {
+          .recover_export_transaction(final_out_dir)
+          NULL
+        },
+        error = identity
+      )
+      if (inherits(recovery_error, "error")) {
+        stop(
+          "Failed to recover rejected export transaction for ",
+          final_out_dir,
+          ": ",
+          conditionMessage(recovery_error),
+          call. = FALSE
+        )
+      }
     }
-  }, add = TRUE)
+  }, add = TRUE, after = FALSE)
+  .recover_export_transaction(final_out_dir)
+  transaction_cleanup_armed <- TRUE
+  transaction <- .begin_export_transaction(final_out_dir, force)
+  out_dir <- transaction$stage
   .dir_create(out_dir)
 
   obs_binary_dir <- file.path(out_dir, obs_binary_dirname)
@@ -613,7 +648,7 @@ cellucid_prepare <- function(
     id = dataset_id,
     name = dataset_name,
     description = dataset_description,
-    created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+    created_at = created_at,
     cellucid_data_version = cellucid_version,
     stats = list(
       n_cells = as.integer(n_cells),
@@ -637,8 +672,13 @@ cellucid_prepare <- function(
   }
 
   .write_json(identity_path, identity_payload, pretty = 2)
-  .publish_staged_output(out_dir, final_out_dir, force)
-  staged_output_is_owned <- FALSE
+  .publish_export_generation(
+    out_dir,
+    final_out_dir,
+    transaction_id = transaction$transaction_id,
+    had_target = transaction$had_target
+  )
+  transaction_cleanup_armed <- FALSE
 
   invisible(NULL)
 }
@@ -679,32 +719,132 @@ cellucid_prepare <- function(
   value
 }
 
+.validate_dataset_name <- function(value) {
+  value <- .validate_required_string(value, "dataset_name")
+  if (grepl("[\\x00-\\x1f\\x7f]", value, perl = TRUE, useBytes = TRUE)) {
+    stop(
+      paste0(
+        "dataset_name must be one non-empty string without leading or ",
+        "trailing whitespace or ASCII control characters."
+      ),
+      call. = FALSE
+    )
+  }
+  value
+}
+
 .validate_dataset_id <- function(value) {
   .safe_filename_component(value, what = "dataset_id")
 }
 
-.validate_source_identity <- function(name, url, citation) {
-  values <- list(
-    source_name = name,
-    source_url = url,
-    source_citation = citation
-  )
-  present <- !vapply(values, is.null, logical(1))
-  if (!any(present)) {
-    return(NULL)
+.resolve_created_at <- function(value) {
+  if (is.null(value)) {
+    return(format(
+      Sys.time(),
+      "%Y-%m-%dT%H:%M:%SZ",
+      tz = "UTC",
+      usetz = FALSE
+    ))
   }
-  if (!all(present)) {
+  if (
+    !is.character(value) ||
+      length(value) != 1L ||
+      is.na(value) ||
+      is.object(value)
+  ) {
     stop(
-      "source_name, source_url, and source_citation must either all be ",
-      "supplied or all be NULL.",
+      "created_at must be NULL or exactly one string in ",
+      "'YYYY-MM-DDTHH:MM:SSZ' UTC format.",
       call. = FALSE
     )
   }
-  list(
-    name = .validate_required_string(name, "source_name"),
-    url = .validate_required_string(url, "source_url"),
-    citation = .validate_required_string(citation, "source_citation")
+  if (!grepl(
+    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+    value,
+    perl = TRUE,
+    useBytes = TRUE
+  )) {
+    stop(
+      "created_at must use exact 'YYYY-MM-DDTHH:MM:SSZ' UTC format.",
+      call. = FALSE
+    )
+  }
+
+  year <- as.integer(substr(value, 1L, 4L))
+  month <- as.integer(substr(value, 6L, 7L))
+  day <- as.integer(substr(value, 9L, 10L))
+  hour <- as.integer(substr(value, 12L, 13L))
+  minute <- as.integer(substr(value, 15L, 16L))
+  second <- as.integer(substr(value, 18L, 19L))
+  leap_year <- year %% 400L == 0L ||
+    (year %% 4L == 0L && year %% 100L != 0L)
+  days_in_month <- c(
+    31L,
+    if (leap_year) 29L else 28L,
+    31L,
+    30L,
+    31L,
+    30L,
+    31L,
+    31L,
+    30L,
+    31L,
+    30L,
+    31L
   )
+  if (
+    year < 1L ||
+      month < 1L ||
+      month > 12L ||
+      day < 1L ||
+      day > days_in_month[[month]] ||
+      hour < 0L ||
+      hour > 23L ||
+      minute < 0L ||
+      minute > 59L ||
+      second < 0L ||
+      second > 59L
+  ) {
+    stop(
+      "created_at must be a valid UTC calendar timestamp in ",
+      "'YYYY-MM-DDTHH:MM:SSZ' format.",
+      call. = FALSE
+    )
+  }
+  value
+}
+
+.validate_source_identity <- function(name, url, citation) {
+  if (!is.null(name)) {
+    name <- .validate_required_string(name, "source_name")
+  }
+  if (!is.null(url)) {
+    url <- .validate_required_string(url, "source_url")
+  }
+  if (!is.null(citation)) {
+    citation <- .validate_required_string(
+      citation,
+      "source_citation"
+    )
+  }
+  if (is.null(name) && is.null(url) && is.null(citation)) {
+    return(NULL)
+  }
+  if (is.null(name)) {
+    stop(
+      "source_name is required whenever source_url or source_citation ",
+      "is supplied.",
+      call. = FALSE
+    )
+  }
+  source <- list(name = name)
+  if (!is.null(url)) {
+    source$url <- url
+  }
+  if (!is.null(citation)) {
+    source$citation <- citation
+  }
+  source
 }
 
 .validate_obs_categorical_dtype <- function(value) {
@@ -810,89 +950,820 @@ cellucid_prepare <- function(
 
 .validate_output_path <- function(path) {
   path <- .validate_required_string(path, "out_dir")
-  normalized <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  expanded <- path.expand(path)
+  resolved <- normalizePath(
+    expanded,
+    winslash = "/",
+    mustWork = FALSE
+  )
   protected <- unique(c(
     "/",
     normalizePath(getwd(), winslash = "/", mustWork = TRUE),
     normalizePath(path.expand("~"), winslash = "/", mustWork = TRUE)
   ))
-  if (normalized %in% protected) {
+  if (resolved %in% protected) {
     stop(
       "out_dir must name a dedicated dataset output directory.",
       call. = FALSE
     )
   }
-  normalized
-}
-
-.begin_staged_output <- function(final_path, force) {
-  if (file.exists(final_path) && !force) {
+  leaf <- basename(expanded)
+  if (!nzchar(leaf) || leaf %in% c(".", "..")) {
     stop(
-      "out_dir already exists; set force = TRUE to replace the complete ",
-      "generation.",
+      "out_dir must name a dedicated dataset output directory.",
       call. = FALSE
     )
   }
-  parent <- dirname(final_path)
-  .dir_create(parent)
-  stage <- tempfile(
-    pattern = paste0(".", basename(final_path), ".stage-"),
-    tmpdir = parent
+  parent <- normalizePath(
+    dirname(expanded),
+    winslash = "/",
+    mustWork = FALSE
   )
-  if (!dir.create(stage, recursive = FALSE, showWarnings = FALSE)) {
-    stop("Could not create the staged output directory.", call. = FALSE)
-  }
-  normalizePath(stage, winslash = "/", mustWork = TRUE)
-}
-
-.publish_staged_output <- function(stage, final_path, force) {
-  existing <- file.exists(final_path)
-  if (existing && !force) {
+  final_path <- file.path(parent, leaf)
+  if (final_path %in% protected) {
     stop(
-      "out_dir already exists; set force = TRUE to replace the complete ",
-      "generation.",
+      "out_dir must name a dedicated dataset output directory.",
       call. = FALSE
     )
   }
+  final_path
+}
 
-  backup <- NULL
-  if (existing) {
-    backup <- tempfile(
-      pattern = paste0(".", basename(final_path), ".previous-"),
-      tmpdir = dirname(final_path)
-    )
-    if (!file.rename(final_path, backup)) {
-      stop(
-        "Could not move the existing output generation aside for replacement.",
-        call. = FALSE
-      )
-    }
+.export_generation_lock_registry <- new.env(parent = emptyenv())
+.export_generation_lock_registry$pid <- Sys.getpid()
+.export_generation_lock_registry$paths <- new.env(parent = emptyenv())
+
+.native_export_lock_acquire <- function(lock_path) {
+  .Call(C_cellucid_export_lock_acquire, lock_path)
+}
+
+.native_export_lock_release <- function(lock_handle) {
+  .Call(C_cellucid_export_lock_release, lock_handle)
+}
+
+.native_process_handle_count <- function() {
+  .Call(C_cellucid_process_handle_count)
+}
+
+.native_export_path_info <- function(path) {
+  .Call(C_cellucid_export_path_info, path)
+}
+
+.native_export_transaction_id <- function() {
+  .Call(C_cellucid_export_transaction_id)
+}
+
+.native_export_write_journal <- function(path, contents) {
+  .Call(C_cellucid_export_write_journal, path, contents)
+}
+
+.native_export_sync_directory <- function(path) {
+  .Call(C_cellucid_export_sync_directory, path)
+}
+
+.native_export_lock_cleanup_status <- function(lock_handle) {
+  status <- .native_export_lock_release(lock_handle)
+  if (
+    !is.integer(status) ||
+      length(status) != 3L ||
+      anyNA(status)
+  ) {
+    stop("Native export lock cleanup returned an invalid status.", call. = FALSE)
   }
+  status
+}
 
-  if (!file.rename(stage, final_path)) {
-    if (!is.null(backup)) {
-      restored <- file.rename(backup, final_path)
-      if (!restored) {
-        stop(
-          "Could not publish the staged generation or restore the previous ",
-          "generation.",
-          call. = FALSE
+.assert_native_export_lock_cleanup <- function(status, lock_path) {
+  if (status[[1L]] != 0L || status[[2L]] != 0L) {
+    stop(
+      "Could not completely release the export generation lock ",
+      lock_path,
+      " (unlock error ",
+      status[[1L]],
+      ", close error ",
+      status[[2L]],
+      ").",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
+.refresh_export_generation_lock_registry <- function() {
+  process_id <- Sys.getpid()
+  if (!identical(.export_generation_lock_registry$pid, process_id)) {
+    inherited_registry <- .export_generation_lock_registry$paths
+    inherited_keys <- ls(envir = inherited_registry, all.names = TRUE)
+    .export_generation_lock_registry$pid <- process_id
+    .export_generation_lock_registry$paths <- new.env(parent = emptyenv())
+    cleanup_failures <- character()
+    for (lock_key in inherited_keys) {
+      record <- get(lock_key, envir = inherited_registry, inherits = FALSE)
+      if (!is.null(record$handle)) {
+        status <- tryCatch(
+          .native_export_lock_cleanup_status(record$handle),
+          error = identity
         )
+        if (inherits(status, "error")) {
+          cleanup_failures <- c(
+            cleanup_failures,
+            paste0(record$path, ": ", conditionMessage(status))
+          )
+        } else if (status[[1L]] != 0L || status[[2L]] != 0L) {
+          cleanup_failures <- c(
+            cleanup_failures,
+            paste0(
+              record$path,
+              ": unlock error ",
+              status[[1L]],
+              ", close error ",
+              status[[2L]]
+            )
+          )
+        }
       }
     }
-    stop("Could not publish the staged output generation.", call. = FALSE)
-  }
-
-  if (!is.null(backup)) {
-    unlink(backup, recursive = TRUE, force = TRUE)
-    if (file.exists(backup)) {
+    if (length(cleanup_failures) != 0L) {
       stop(
-        "The new generation is published, but the previous generation could ",
-        "not be removed.",
+        "Could not discard every fork-inherited export lock handle: ",
+        paste(cleanup_failures, collapse = "; "),
         call. = FALSE
       )
     }
   }
+  process_id
+}
+
+.export_generation_lock_path <- function(final_path) {
+  parent <- normalizePath(
+    dirname(final_path),
+    winslash = "/",
+    mustWork = TRUE
+  )
+  file.path(
+    parent,
+    paste0(".", basename(final_path), ".cellucid.lock")
+  )
+}
+
+.validate_export_generation_lock_path <- function(lock_path) {
+  link_target <- suppressWarnings(Sys.readlink(lock_path))
+  if (
+    length(link_target) == 1L &&
+      !is.na(link_target) &&
+      nzchar(link_target)
+  ) {
+    stop(
+      "Export lock path must not be a symbolic link: ",
+      lock_path,
+      call. = FALSE
+    )
+  }
+  if (file.exists(lock_path) && !file_test("-f", lock_path)) {
+    stop(
+      "Export lock path must identify a regular file: ",
+      lock_path,
+      call. = FALSE
+    )
+  }
+  invisible(lock_path)
+}
+
+.canonical_export_generation_lock_key <- function(lock_path) {
+  key <- normalizePath(lock_path, winslash = "/", mustWork = FALSE)
+  if (.Platform$OS.type == "windows") {
+    key <- tolower(key)
+  }
+  key
+}
+
+.acquire_export_generation_lock <- function(final_path) {
+  lock_path <- .export_generation_lock_path(final_path)
+  .validate_export_generation_lock_path(lock_path)
+  lock_key <- .canonical_export_generation_lock_key(lock_path)
+  process_id <- .refresh_export_generation_lock_registry()
+  registry <- .export_generation_lock_registry$paths
+
+  if (exists(lock_key, envir = registry, inherits = FALSE)) {
+    stop(
+      "An export generation is already active for ",
+      final_path,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  assign(
+    lock_key,
+    list(handle = NULL, path = lock_path, pid = process_id),
+    envir = registry
+  )
+  reservation_is_owned <- TRUE
+  on.exit({
+    if (
+      reservation_is_owned &&
+        exists(lock_key, envir = registry, inherits = FALSE)
+    ) {
+      rm(list = lock_key, envir = registry)
+    }
+  }, add = TRUE)
+
+  lock <- .native_export_lock_acquire(lock_path)
+  if (is.null(lock)) {
+    stop(
+      "An export generation is already active for ",
+      final_path,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  export_lock <- list(
+    handle = lock,
+    key = lock_key,
+    path = lock_path,
+    pid = process_id
+  )
+  assign(lock_key, export_lock, envir = registry)
+  reservation_is_owned <- FALSE
+  export_lock
+}
+
+.release_export_generation_lock <- function(export_lock) {
+  process_id <- .refresh_export_generation_lock_registry()
+  if (!identical(export_lock$pid, process_id)) {
+    return(invisible(FALSE))
+  }
+
+  registry <- .export_generation_lock_registry$paths
+  if (!exists(export_lock$key, envir = registry, inherits = FALSE)) {
+    stop(
+      "Export generation lock ownership is not active: ",
+      export_lock$path,
+      call. = FALSE
+    )
+  }
+  active_lock <- get(export_lock$key, envir = registry, inherits = FALSE)
+  if (!identical(active_lock$handle, export_lock$handle)) {
+    stop(
+      "Export generation lock ownership does not match: ",
+      export_lock$path,
+      call. = FALSE
+    )
+  }
+
+  status <- .native_export_lock_cleanup_status(export_lock$handle)
+  if (status[[3L]] == 1L) {
+    rm(list = export_lock$key, envir = registry)
+  }
+  .assert_native_export_lock_cleanup(status, export_lock$path)
+  invisible(TRUE)
+}
+
+.export_transaction_format <- "cellucid-export-transaction"
+.export_transaction_version <- 1L
+.export_transaction_id_pattern <- "^[0-9a-f]{32}$"
+
+.validate_export_transaction_id <- function(transaction_id) {
+  if (
+    !is.character(transaction_id) ||
+      length(transaction_id) != 1L ||
+      is.na(transaction_id) ||
+      is.object(transaction_id) ||
+      !grepl(
+        .export_transaction_id_pattern,
+        transaction_id,
+        perl = TRUE,
+        useBytes = TRUE
+      )
+  ) {
+    stop("Export transaction identity is not canonical.", call. = FALSE)
+  }
+  transaction_id
+}
+
+.export_transaction_paths <- function(final_path, transaction_id) {
+  transaction_id <- .validate_export_transaction_id(transaction_id)
+  parent <- dirname(final_path)
+  stem <- paste0(".", basename(final_path))
+  list(
+    journal = file.path(
+      parent,
+      paste0(stem, ".cellucid-transaction.json")
+    ),
+    journal_temp = file.path(
+      parent,
+      paste0(stem, ".cellucid-transaction.json.tmp")
+    ),
+    stage = file.path(
+      parent,
+      paste0(stem, ".cellucid-stage-", transaction_id)
+    ),
+    backup = file.path(
+      parent,
+      paste0(stem, ".cellucid-backup-", transaction_id)
+    )
+  )
+}
+
+.export_transaction_control_paths <- function(final_path) {
+  paths <- .export_transaction_paths(final_path, strrep("0", 32L))
+  paths[c("journal", "journal_temp")]
+}
+
+.export_path_info <- function(path) {
+  info <- .native_export_path_info(path)
+  if (
+    !is.double(info) ||
+      length(info) != 2L ||
+      anyNA(info) ||
+      info[[1L]] < 0 ||
+      info[[1L]] > 4 ||
+      info[[1L]] != floor(info[[1L]]) ||
+      info[[2L]] < 0 ||
+      info[[2L]] != floor(info[[2L]])
+  ) {
+    stop("Native export path inspection returned invalid state.", call. = FALSE)
+  }
+  list(
+    kind = as.integer(info[[1L]]),
+    links = info[[2L]]
+  )
+}
+
+.require_export_directory_or_absent <- function(path, label) {
+  info <- .export_path_info(path)
+  if (info$kind == 0L) {
+    return(FALSE)
+  }
+  if (info$kind != 2L) {
+    stop(
+      label,
+      " must be an ordinary non-symbolic directory or absent: ",
+      path,
+      call. = FALSE
+    )
+  }
+  TRUE
+}
+
+.require_export_regular_file <- function(path, label) {
+  info <- .export_path_info(path)
+  if (info$kind == 0L) {
+    stop(label, " is missing: ", path, call. = FALSE)
+  }
+  if (info$kind != 1L || info$links != 1) {
+    stop(
+      label,
+      " must be one non-linked, non-symbolic regular file: ",
+      path,
+      call. = FALSE
+    )
+  }
+  invisible(info)
+}
+
+.fsync_export_directory <- function(path) {
+  status <- .native_export_sync_directory(path)
+  if (
+    !is.logical(status) ||
+      length(status) != 1L ||
+      is.na(status)
+  ) {
+    stop(
+      "Native export directory synchronization returned invalid state.",
+      call. = FALSE
+    )
+  }
+  invisible(status)
+}
+
+.rename_export_path <- function(source, destination) {
+  if (!isTRUE(file.rename(source, destination))) {
+    stop(
+      "Could not rename export transaction path ",
+      source,
+      " to ",
+      destination,
+      ".",
+      call. = FALSE
+    )
+  }
+  .fsync_export_directory(dirname(destination))
+  invisible(destination)
+}
+
+.remove_export_tree <- function(path) {
+  if (!.require_export_directory_or_absent(
+    path,
+    "Export transaction directory"
+  )) {
+    return(invisible(path))
+  }
+  status <- unlink(path, recursive = TRUE, force = TRUE)
+  if (status != 0L || .export_path_info(path)$kind != 0L) {
+    stop(
+      "Could not remove export transaction directory: ",
+      path,
+      call. = FALSE
+    )
+  }
+  .fsync_export_directory(dirname(path))
+  invisible(path)
+}
+
+.remove_export_control_file <- function(path) {
+  .require_export_regular_file(
+    path,
+    "Export transaction control file"
+  )
+  status <- unlink(path, recursive = FALSE, force = TRUE)
+  if (status != 0L || .export_path_info(path)$kind != 0L) {
+    stop(
+      "Could not remove export transaction control file: ",
+      path,
+      call. = FALSE
+    )
+  }
+  .fsync_export_directory(dirname(path))
+  invisible(path)
+}
+
+.serialize_export_transaction <- function(transaction_id, had_target) {
+  transaction_id <- .validate_export_transaction_id(transaction_id)
+  if (
+    !is.logical(had_target) ||
+      length(had_target) != 1L ||
+      is.na(had_target) ||
+      is.object(had_target)
+  ) {
+    stop(
+      "Export transaction had_target must be exactly boolean.",
+      call. = FALSE
+    )
+  }
+  paste0(
+    "{\"format\":\"",
+    .export_transaction_format,
+    "\",\"version\":",
+    .export_transaction_version,
+    ",\"transaction_id\":\"",
+    transaction_id,
+    "\",\"had_target\":",
+    if (had_target) "true" else "false",
+    "}\n"
+  )
+}
+
+.read_export_transaction <- function(journal_path) {
+  .require_export_regular_file(
+    journal_path,
+    "Export transaction journal"
+  )
+  journal_bytes <- readBin(
+    journal_path,
+    what = "raw",
+    n = 513L
+  )
+  if (length(journal_bytes) > 512L) {
+    stop(
+      "Export transaction journal is unexpectedly large: ",
+      journal_path,
+      call. = FALSE
+    )
+  }
+  if (
+    length(journal_bytes) == 0L ||
+      any(as.integer(journal_bytes) > 127L)
+  ) {
+    stop(
+      "Export transaction journal is malformed: ",
+      journal_path,
+      call. = FALSE
+    )
+  }
+  journal <- tryCatch(
+    rawToChar(journal_bytes),
+    error = function(error) NULL
+  )
+  if (is.null(journal)) {
+    stop(
+      "Export transaction journal is malformed: ",
+      journal_path,
+      call. = FALSE
+    )
+  }
+
+  prefix <- paste0(
+    "{\"format\":\"",
+    .export_transaction_format,
+    "\",\"version\":",
+    .export_transaction_version,
+    ",\"transaction_id\":\""
+  )
+  for (had_target in c(TRUE, FALSE)) {
+    suffix <- paste0(
+      "\",\"had_target\":",
+      if (had_target) "true" else "false",
+      "}\n"
+    )
+    expected_length <- nchar(prefix, type = "bytes") +
+      32L +
+      nchar(suffix, type = "bytes")
+    if (
+      nchar(journal, type = "bytes") == expected_length &&
+        startsWith(journal, prefix) &&
+        endsWith(journal, suffix)
+    ) {
+      transaction_id <- substr(
+        journal,
+        nchar(prefix, type = "chars") + 1L,
+        nchar(prefix, type = "chars") + 32L
+      )
+      if (
+        grepl(
+          .export_transaction_id_pattern,
+          transaction_id,
+          perl = TRUE,
+          useBytes = TRUE
+        ) &&
+          identical(
+            journal_bytes,
+            charToRaw(.serialize_export_transaction(
+              transaction_id,
+              had_target
+            ))
+          )
+      ) {
+        return(list(
+          transaction_id = transaction_id,
+          had_target = had_target
+        ))
+      }
+    }
+  }
+  stop(
+    "Export transaction journal is not canonical: ",
+    journal_path,
+    call. = FALSE
+  )
+}
+
+.require_active_export_transaction <- function(
+    journal_path,
+    transaction_id,
+    had_target
+) {
+  transaction <- .read_export_transaction(journal_path)
+  if (
+    !identical(transaction$transaction_id, transaction_id) ||
+      !identical(transaction$had_target, had_target)
+  ) {
+    stop(
+      "Export transaction journal does not describe the active transaction.",
+      call. = FALSE
+    )
+  }
+  invisible(transaction)
+}
+
+.discard_export_transaction_temp <- function(journal_temp) {
+  if (.export_path_info(journal_temp)$kind == 0L) {
+    return(invisible(journal_temp))
+  }
+  .remove_export_control_file(journal_temp)
+}
+
+.recover_export_transaction <- function(final_path) {
+  controls <- .export_transaction_control_paths(final_path)
+  .discard_export_transaction_temp(controls$journal_temp)
+  if (.export_path_info(controls$journal)$kind == 0L) {
+    return(invisible(final_path))
+  }
+
+  transaction <- .read_export_transaction(controls$journal)
+  paths <- .export_transaction_paths(
+    final_path,
+    transaction$transaction_id
+  )
+  target_exists <- .require_export_directory_or_absent(
+    final_path,
+    "Export target"
+  )
+  stage_exists <- .require_export_directory_or_absent(
+    paths$stage,
+    "Staged export generation"
+  )
+  backup_exists <- .require_export_directory_or_absent(
+    paths$backup,
+    "Prior export generation"
+  )
+  state <- c(target_exists, stage_exists, backup_exists)
+
+  if (transaction$had_target) {
+    if (identical(state, c(TRUE, FALSE, FALSE))) {
+      NULL
+    } else if (identical(state, c(TRUE, TRUE, FALSE))) {
+      .remove_export_tree(paths$stage)
+    } else if (identical(state, c(FALSE, TRUE, TRUE))) {
+      .rename_export_path(paths$backup, final_path)
+      .remove_export_tree(paths$stage)
+    } else if (identical(state, c(TRUE, FALSE, TRUE))) {
+      .remove_export_tree(paths$backup)
+    } else {
+      stop(
+        "Export transaction cannot be recovered without guessing whether ",
+        "to commit or roll back: target/stage/backup state is ",
+        paste(state, collapse = "/"),
+        ".",
+        call. = FALSE
+      )
+    }
+  } else {
+    if (identical(state, c(FALSE, FALSE, FALSE))) {
+      NULL
+    } else if (identical(state, c(FALSE, TRUE, FALSE))) {
+      .remove_export_tree(paths$stage)
+    } else if (identical(state, c(TRUE, FALSE, FALSE))) {
+      NULL
+    } else {
+      stop(
+        "Initial export transaction cannot be recovered without guessing ",
+        "whether to commit or roll back: target/stage/backup state is ",
+        paste(state, collapse = "/"),
+        ".",
+        call. = FALSE
+      )
+    }
+  }
+
+  .require_active_export_transaction(
+    paths$journal,
+    transaction$transaction_id,
+    transaction$had_target
+  )
+  .remove_export_control_file(paths$journal)
+  invisible(final_path)
+}
+
+.new_export_transaction_id <- function(final_path) {
+  for (attempt in seq_len(128L)) {
+    transaction_id <- .native_export_transaction_id()
+    transaction_id <- .validate_export_transaction_id(transaction_id)
+    paths <- .export_transaction_paths(final_path, transaction_id)
+    if (
+      .export_path_info(paths$stage)$kind == 0L &&
+        .export_path_info(paths$backup)$kind == 0L
+    ) {
+      return(transaction_id)
+    }
+  }
+  stop(
+    "Could not allocate a unique export transaction identity.",
+    call. = FALSE
+  )
+}
+
+.write_export_transaction <- function(
+    final_path,
+    transaction_id,
+    had_target
+) {
+  paths <- .export_transaction_paths(final_path, transaction_id)
+  if (
+    .export_path_info(paths$journal)$kind != 0L ||
+      .export_path_info(paths$journal_temp)$kind != 0L
+  ) {
+    stop(
+      "Export transaction control path is already occupied for ",
+      final_path,
+      ".",
+      call. = FALSE
+    )
+  }
+  journal_bytes <- charToRaw(.serialize_export_transaction(
+    transaction_id,
+    had_target
+  ))
+  status <- .native_export_write_journal(
+    paths$journal_temp,
+    journal_bytes
+  )
+  if (!identical(status, TRUE)) {
+    stop(
+      "Native export transaction journal write returned invalid state.",
+      call. = FALSE
+    )
+  }
+  .rename_export_path(paths$journal_temp, paths$journal)
+  invisible(paths$journal)
+}
+
+.begin_export_transaction <- function(final_path, force) {
+  had_target <- .require_export_directory_or_absent(
+    final_path,
+    "Export target"
+  )
+  if (had_target && !force) {
+    stop(
+      "out_dir already exists; set force = TRUE to replace the complete ",
+      "generation.",
+      call. = FALSE
+    )
+  }
+  transaction_id <- .new_export_transaction_id(final_path)
+  .write_export_transaction(
+    final_path,
+    transaction_id,
+    had_target
+  )
+  paths <- .export_transaction_paths(final_path, transaction_id)
+  if (
+    !dir.create(
+      paths$stage,
+      recursive = FALSE,
+      showWarnings = FALSE
+    )
+  ) {
+    stop("Could not create the staged output directory.", call. = FALSE)
+  }
+  .fsync_export_directory(dirname(final_path))
+  list(
+    transaction_id = transaction_id,
+    had_target = had_target,
+    stage = paths$stage,
+    backup = paths$backup
+  )
+}
+
+.publish_export_generation <- function(
+    stage,
+    final_path,
+    transaction_id,
+    had_target
+) {
+  paths <- .export_transaction_paths(final_path, transaction_id)
+  if (!identical(stage, paths$stage)) {
+    stop(
+      "Staged export path does not belong to the active transaction.",
+      call. = FALSE
+    )
+  }
+  .require_active_export_transaction(
+    paths$journal,
+    transaction_id,
+    had_target
+  )
+  if (.export_path_info(paths$journal_temp)$kind != 0L) {
+    stop(
+      "Export transaction journal temporary path reappeared during publication.",
+      call. = FALSE
+    )
+  }
+  if (!.require_export_directory_or_absent(
+    stage,
+    "Staged export generation"
+  )) {
+    stop("Staged export directory is missing: ", stage, call. = FALSE)
+  }
+
+  if (had_target) {
+    if (!.require_export_directory_or_absent(
+      final_path,
+      "Export target"
+    )) {
+      stop(
+        "Prior export generation is missing: ",
+        final_path,
+        call. = FALSE
+      )
+    }
+    if (.export_path_info(paths$backup)$kind != 0L) {
+      stop(
+        "Export backup path is already occupied: ",
+        paths$backup,
+        call. = FALSE
+      )
+    }
+    .rename_export_path(final_path, paths$backup)
+  } else if (.export_path_info(final_path)$kind != 0L) {
+    stop(
+      "Initial export target appeared during publication: ",
+      final_path,
+      call. = FALSE
+    )
+  }
+
+  .rename_export_path(stage, final_path)
+  if (had_target) {
+    .remove_export_tree(paths$backup)
+  }
+  .require_active_export_transaction(
+    paths$journal,
+    transaction_id,
+    had_target
+  )
+  .remove_export_control_file(paths$journal)
   invisible(final_path)
 }
 

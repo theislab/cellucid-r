@@ -27,9 +27,12 @@ the index lists `cellucid` 0.9.1; otherwise use the GitHub command.
 - An internet connection while installing the package
 - The `remotes` package only when installation from GitHub is needed
 
-Cellucid is implemented in R and does not compile native code. The optional
-`Matrix` package is recommended when exporting sparse expression matrices or
-connectivity graphs.
+Cellucid compiles a small native lock primitive so independent Python and R
+exporters cannot publish to the same target concurrently. Installing from
+source needs Rtools on Windows, the Xcode Command Line Tools on macOS, or a C
+toolchain plus R development headers on Linux. A platform CRAN binary, when
+available, does not require a local compiler. The optional `Matrix` package is
+recommended when exporting sparse expression matrices or connectivity graphs.
 
 Check your R version with:
 

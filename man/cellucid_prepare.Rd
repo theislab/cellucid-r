@@ -30,7 +30,8 @@ cellucid_prepare(
   X_umap_2d = NULL,
   X_umap_3d = NULL,
   vector_fields = NULL,
-  vector_field_default = NULL
+  vector_field_default = NULL,
+  created_at = NULL
 )
 }
 \arguments{
@@ -45,7 +46,12 @@ cellucid_prepare(
 \item{obs_keys}{Optional character vector of column names in \code{obs} to export. If \code{NULL}, all columns are exported. Numeric observation fields must contain only finite values and, for unquantized output, every nonzero value must remain nonzero and finite as float32.}
 \item{centroid_outlier_quantile}{Quantile of distances to keep as inliers when computing centroids for categorical fields. Set to \code{NULL} to disable centroid computation.}
 \item{centroid_min_points}{Minimum number of points in a category required to compute centroids and outlier quantiles.}
-\item{force}{If \code{TRUE}, atomically replace an existing output generation. If \code{FALSE}, require that \code{out_dir} does not already exist.}
+\item{force}{If \code{TRUE}, atomically replace an existing output
+generation. If \code{FALSE}, require that \code{out_dir} does not already
+exist. Independent Python or R exporters targeting the same directory are
+always rejected immediately while another live process owns the generation.
+The hidden sibling coordination file is intentionally persistent and is not
+part of the published dataset.}
 \item{var_quantization}{Integer bits for gene expression quantization (\code{8} or
 \code{16}), or \code{NULL} for full float32 export. Quantization is derived from the
 exact float32 values materialized by the viewer; a native-double range
@@ -60,17 +66,20 @@ range remains non-collapsed.}
 \item{obs_categorical_dtype}{Required exact categorical code storage: \code{"uint8"} or \code{"uint16"}.}
 \item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use \code{NULL} to disable compression.}
 \item{dataset_name}{Required non-empty dataset name without leading or trailing
-whitespace for \code{dataset_identity.json}.}
+whitespace or ASCII control characters for \code{dataset_identity.json}.}
 \item{dataset_description}{Dataset description. Defaults to an empty string.}
 \item{dataset_id}{Required portable dataset identifier.}
-\item{source_name}{Optional data source name. If supplied, \code{source_url} and \code{source_citation} are also required.}
-\item{source_url}{Optional data source URL. If supplied, \code{source_name} and \code{source_citation} are also required.}
-\item{source_citation}{Optional citation text. If supplied, \code{source_name} and \code{source_url} are also required.}
+\item{source_name}{Optional non-empty data source name. Required whenever \code{source_url} or \code{source_citation} is supplied.}
+\item{source_url}{Optional non-empty data source URL. May be supplied independently when \code{source_name} is present.}
+\item{source_citation}{Optional non-empty citation text. May be supplied independently when \code{source_name} is present.}
 \item{X_umap_1d}{Optional 1D embedding matrix of shape \code{(n_cells, 1)}.}
 \item{X_umap_2d}{Optional 2D embedding matrix of shape \code{(n_cells, 2)}.}
 \item{X_umap_3d}{Optional 3D embedding matrix of shape \code{(n_cells, 3)}.}
 \item{vector_fields}{Optional named list of per-cell displacement vectors. Each element must be a numeric vector (1D) or matrix with 1/2/3 columns and \code{n_cells} rows.}
 \item{vector_field_default}{Exact vector-field identifier to select by default. Required when \code{vector_fields} contains more than one field.}
+\item{created_at}{Optional exact UTC-seconds timestamp in
+\code{YYYY-MM-DDTHH:MM:SSZ} format. Defaults to the current UTC time. Supply
+an exact value for reproducible \code{dataset_identity.json} metadata.}
 }
 \value{
 Invisibly returns \code{NULL}. Called for its side effects (file export).

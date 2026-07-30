@@ -74,6 +74,8 @@ Fast workflow:
 
 - R `>= 4.3.0` (matches `DESCRIPTION`)
 - Git
+- A C toolchain for package builds: Rtools on Windows, the Xcode Command Line
+  Tools on macOS, or a compiler plus R development headers on Linux
 
 Recommended:
 - RStudio (optional, but convenient for vignettes)

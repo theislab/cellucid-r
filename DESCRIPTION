@@ -27,6 +27,7 @@ Suggests:
     testthat (>= 3.1.0)
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+NeedsCompilation: yes
 URL: https://github.com/theislab/cellucid-r,
     https://theislab.github.io/cellucid-r/
 BugReports: https://github.com/theislab/cellucid-r/issues

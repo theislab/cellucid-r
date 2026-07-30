@@ -59,6 +59,11 @@ install.packages("remotes")
 remotes::install_github("theislab/cellucid-r")
 ```
 
+Source installation compiles a small native lock primitive and therefore needs
+Rtools on Windows, the Xcode Command Line Tools on macOS, or a C toolchain plus
+R development headers on Linux. A platform CRAN binary, when available, does
+not require a local compiler.
+
 Optional but recommended (sparse matrices + connectivity export):
 
 ```r
@@ -67,6 +72,11 @@ install.packages("Matrix")
 
 See the dedicated [Installation guide](articles/installation.html)
 for requirements, verification, upgrades, and the CRAN availability status.
+
+Each export target has a persistent hidden sibling lock file. Cellucid never
+places it inside the published dataset or removes it after success: keeping the
+same filesystem identity is what lets independent Python and R exporters
+reject concurrent writers safely.
 
 ## Quickstart
 
@@ -86,6 +96,12 @@ cellucid_prepare(
   obs_categorical_dtype = "uint16"
 )
 ```
+
+For reproducible identity metadata, pass an exact UTC-seconds value such as
+`created_at = "2026-07-29T12:34:56Z"`; otherwise the exporter records the
+current UTC time. Optional provenance starts with `source_name`.
+`source_url` and `source_citation` may then be supplied independently, but
+neither is accepted without `source_name`.
 
 ## Documentation and ecosystem
 

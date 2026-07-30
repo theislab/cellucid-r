@@ -5,6 +5,9 @@ Version 0.9.1 is the CRAN submission release.
 - Exposes `cellucid_prepare()` as the single public preparation entry point.
 - Publishes complete prepared generations transactionally and rejects mixed or
   stale output directories.
+- Serializes independent R and Python exporters with one persistent exact-target
+  lock and recovers ownership after process death without leaking native
+  handles.
 - Requires exact embedding, observation, gene, vector, and categorical-storage
   inputs before writing any scientific artifact.
 - Preserves symmetric positive connectivity weights, exact empty graphs, and
