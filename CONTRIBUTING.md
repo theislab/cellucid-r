@@ -50,12 +50,13 @@ If the bug is “the viewer looks wrong”, also include:
 ### I want to contribute docs only
 
 Docs live in:
-- `cellucid-r/man/` (generated `.Rd` files)
+- `cellucid-r/man/` (hand-written `.Rd` files)
 - `cellucid-r/vignettes/` (package vignette)
 - `cellucid-r/README.md`
 
-If you edit `.Rd` files directly, be aware they are usually generated from roxygen comments in `cellucid-r/R/`.
-Prefer editing roxygen in `R/` and re-running `devtools::document()`.
+Edit the `.Rd` files directly. This package runs no documentation generator:
+`man/` and `NAMESPACE` are hand-written and authoritative, and `R/` holds no
+roxygen comments. See “Documentation (help page + vignettes)” below.
 
 ### I want to add/modify R code
 
@@ -93,7 +94,7 @@ cd cellucid-r
 In R:
 
 ```r
-install.packages(c("devtools", "roxygen2", "testthat"))
+install.packages(c("devtools", "testthat"))
 ```
 
 For vignette builds:
@@ -142,19 +143,27 @@ Guidelines:
 
 ---
 
-## Documentation (roxygen + vignettes)
+## Documentation (help page + vignettes)
 
-### Regenerate `.Rd` files
+### Edit `.Rd` files by hand
 
-The package ships its help page(s) under `cellucid-r/man/`.
+The package ships its help page(s) under `cellucid-r/man/`, and they are
+hand-written. Do not run `devtools::document()` or `roxygen2::roxygenise()`
+here — this package has no roxygen source. Two things depend on that:
 
-If you change the public API (especially `cellucid_prepare()`), keep the help page in sync:
-- update `cellucid-r/man/cellucid_prepare.Rd`, or
-- regenerate it with `roxygen2` and commit the result.
+- `NAMESPACE` carries `useDynLib(cellucid, .registration = TRUE, .fixes = "C_")`,
+  which no generator would emit, so a regenerated `NAMESPACE` would break every
+  `.Call()` into the native export lock.
+- `man/cellucid_prepare.Rd` carries the runnable `\examples{}` block and the
+  export-directory and orientation notes that the help page needs.
 
-```r
-devtools::document()
-```
+If you change the public API (especially `cellucid_prepare()`), update
+`cellucid-r/man/cellucid_prepare.Rd` in the same commit.
+`tests/testthat/test-current-contract.R` reads the `\usage` block back out of
+the `.Rd` file and compares it to the real formals, so the help page cannot
+silently fall out of step with the code if an argument name, its position, or
+its default value changes. `R CMD check` runs the same comparison through
+`tools::codoc()`.
 
 ### Build vignettes
 
@@ -223,14 +232,17 @@ This catches many “format is technically written but semantically wrong” iss
 
 ## Troubleshooting (common contributor problems)
 
-### `devtools::document()` changes lots of files unexpectedly
+### `devtools::document()` rewrote `NAMESPACE` or `DESCRIPTION`
 
 Cause:
-- roxygen output depends on roxygen version and formatting.
+- this package has no roxygen source, so running a documentation generator can
+  only remove content. It drops `useDynLib(...)` from `NAMESPACE` and adds a
+  `Config/roxygen2/version` field to `DESCRIPTION`.
 
 Fix:
-- ensure you’re using a recent `roxygen2`
-- keep roxygen comments stable and avoid rewrapping large blocks unnecessarily
+- `git checkout NAMESPACE DESCRIPTION man/` and edit `man/*.Rd` by hand instead.
+- `tests/testthat/test-current-contract.R` fails while any of those generated
+  changes are still present.
 
 ### `R CMD check` fails on vignettes
 

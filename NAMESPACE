@@ -1,2 +1,5 @@
+# Hand-written and authoritative: this package runs no NAMESPACE generator.
+# The useDynLib registration below has no generator input under R/, so a
+# regenerated NAMESPACE would omit it and every .Call() would stop resolving.
 export(cellucid_prepare)
 useDynLib(cellucid, .registration = TRUE, .fixes = "C_")

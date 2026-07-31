@@ -70,7 +70,7 @@ Optional but recommended (sparse matrices + connectivity export):
 install.packages("Matrix")
 ```
 
-See the dedicated [Installation guide](articles/installation.html)
+See the dedicated [Installation guide](https://theislab.github.io/cellucid-r/articles/installation.html)
 for requirements, verification, upgrades, and the CRAN availability status.
 
 Each export target has a persistent hidden sibling lock file. Cellucid never
@@ -121,11 +121,11 @@ neither is accepted without `source_name`.
 
 ## Community
 
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Code of Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- Security: [SECURITY.md](SECURITY.md)
-- Support: [SUPPORT.md](SUPPORT.md)
-- GitHub citation metadata: [CITATION.cff](CITATION.cff)
+- Contributing: [CONTRIBUTING.md](https://github.com/theislab/cellucid-r/blob/main/CONTRIBUTING.md)
+- Code of Conduct: [CODE_OF_CONDUCT.md](https://github.com/theislab/cellucid-r/blob/main/CODE_OF_CONDUCT.md)
+- Security: [SECURITY.md](https://github.com/theislab/cellucid-r/blob/main/SECURITY.md)
+- Support: [SUPPORT.md](https://github.com/theislab/cellucid-r/blob/main/SUPPORT.md)
+- GitHub citation metadata: [CITATION.cff](https://github.com/theislab/cellucid-r/blob/main/CITATION.cff)
 
 ## License
 

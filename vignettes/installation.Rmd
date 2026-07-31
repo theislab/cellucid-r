@@ -110,5 +110,5 @@ for Seurat and SingleCellExperiment recipes.
 Once the package is installed, prepare an export with `cellucid_prepare()` and
 open the resulting directory in the
 [Cellucid web app](https://www.cellucid.com). The
-[function reference](../reference/cellucid_prepare.html) documents every input
+[function reference](https://theislab.github.io/cellucid-r/reference/cellucid_prepare.html) documents every input
 and validation rule.

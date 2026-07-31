@@ -180,31 +180,75 @@ test_that("main is the only workflow branch", {
   }
 })
 
-test_that("release metadata and artifacts have one exact 0.9.1 identity", {
-  repository_root <- normalizePath(
-    file.path(testthat::test_path(), "..", ".."),
-    mustWork = FALSE
-  )
+test_that("DESCRIPTION is the one in-repo source of the 0.9.1 release identity", {
+  repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
-  version <- if (file.exists(description_path)) {
-    unname(read.dcf(description_path)[1L, "Version"])
-  } else {
-    as.character(utils::packageVersion("cellucid"))
-  }
+  version <- cellucid_description_version()
   expect_identical(version, "0.9.1")
+
+  r_dependency <- NULL
+  if (file.exists(description_path)) {
+    description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
+    version_line <- which(startsWith(description, "Version:"))
+    expect_length(version_line, 1L)
+    expect_identical(description[[version_line]], paste0("Version: ", version))
+    # DESCRIPTION is DCF and cannot carry a `#` comment, so the CELLUCID_VERSION
+    # sweep marker that every other version site holds inline is a Config field
+    # pinned to the line immediately after Version:.
+    expect_identical(
+      description[[version_line + 1L]],
+      "Config/cellucid/version-marker: CELLUCID_VERSION"
+    )
+
+    depends <- unname(read.dcf(description_path)[1L, "Depends"])
+    r_dependency <- regmatches(
+      depends,
+      regexpr("[0-9]+\\.[0-9]+\\.[0-9]+", depends)
+    )
+    expect_length(r_dependency, 1L)
+  }
 
   news_path <- file.path(repository_root, "NEWS.md")
   if (file.exists(news_path)) {
     news <- readLines(news_path, warn = FALSE, encoding = "UTF-8")
-    expect_identical(news[[1L]], "# cellucid 0.9.1 <!-- CELLUCID_VERSION -->")
+    expect_identical(
+      news[[1L]],
+      sprintf("# cellucid %s <!-- CELLUCID_VERSION -->", version)
+    )
     expect_false(any(grepl("unreleased", tolower(news), fixed = TRUE)))
-    expect_true(any(news == "Version 0.9.1 is the CRAN submission release."))
+    expect_true(
+      any(news == sprintf("Version %s is the CRAN submission release.", version))
+    )
   }
 
   citation_path <- file.path(repository_root, "CITATION.cff")
   if (file.exists(citation_path)) {
     citation <- readLines(citation_path, warn = FALSE, encoding = "UTF-8")
-    expect_true(any(citation == "version: 0.9.1  # CELLUCID_VERSION"))
+    expect_true(
+      any(citation == sprintf("version: %s  # CELLUCID_VERSION", version))
+    )
+  }
+
+  # README.md and the installation vignette are the two in-repo pages that
+  # quote the version to users. Nothing outside this repository compares them
+  # to DESCRIPTION, so every version string they contain is checked here.
+  readme_path <- file.path(repository_root, "README.md")
+  if (file.exists(readme_path)) {
+    expect_identical(cellucid_semantic_versions(readme_path), version)
+  }
+
+  installation_candidates <- c(
+    file.path(repository_root, "vignettes", "installation.Rmd"),
+    system.file("doc", "installation.Rmd", package = "cellucid")
+  )
+  installation_path <- installation_candidates[
+    nzchar(installation_candidates) & file.exists(installation_candidates)
+  ][1L]
+  if (!is.na(installation_path) && length(r_dependency) == 1L) {
+    expect_setequal(
+      cellucid_semantic_versions(installation_path),
+      c(version, r_dependency)
+    )
   }
 
   package_citation_path <- file.path(
@@ -262,10 +306,8 @@ test_that("release metadata and artifacts have one exact 0.9.1 identity", {
 })
 
 test_that("pkgdown has an exact current installation and navigation contract", {
-  repository_root <- normalizePath(
-    file.path(testthat::test_path(), "..", ".."),
-    mustWork = TRUE
-  )
+  repository_root <- cellucid_repository_root()
+  version <- cellucid_description_version()
   read_text <- function(path) {
     paste(
       readLines(path, warn = FALSE, encoding = "UTF-8"),
@@ -284,7 +326,10 @@ test_that("pkgdown has an exact current installation and navigation contract", {
   installation <- read_text(installation_path)
   expect_match(
     installation,
-    "**The active Cellucid for R source and documentation version is 0.9.1.**",
+    sprintf(
+      "**The active Cellucid for R source and documentation version is %s.**",
+      version
+    ),
     fixed = TRUE
   )
   expect_match(
@@ -311,7 +356,11 @@ test_that("pkgdown has an exact current installation and navigation contract", {
   readme_path <- file.path(repository_root, "README.md")
   if (file.exists(readme_path)) {
     readme <- read_text(readme_path)
-    expect_match(readme, "**Active package version — 0.9.1**", fixed = TRUE)
+    expect_match(
+      readme,
+      sprintf("**Active package version — %s**", version),
+      fixed = TRUE
+    )
     expect_match(
       readme,
       "articles/installation.html",
@@ -335,6 +384,106 @@ test_that("pkgdown has an exact current installation and navigation contract", {
     expect_match(pkgdown, "right: [search, webapp]", fixed = TRUE)
     expect_match(pkgdown, "href: https://www.cellucid.com", fixed = TRUE)
     expect_false(grepl("development", pkgdown, ignore.case = TRUE))
+  }
+})
+
+test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
+  # This is the codoc check R CMD check performs, run against the installed Rd
+  # database: the \usage block is turned back into a function and compared to
+  # the real formals, argument names, order, and default expressions included.
+  # It is what keeps a hand-written help page from drifting away from the
+  # signature, so no generator is needed to hold the two together.
+  #
+  # tools::codoc() itself is not usable here: it loads and unloads the package
+  # it inspects, and cellucid's .onUnload() calls library.dynam.unload(), which
+  # would pull the native export lock out from under the running suite.
+  repository_root <- cellucid_repository_root()
+  man_directory <- file.path(repository_root, "man")
+  rd_database <- if (dir.exists(man_directory)) {
+    # test_local() loads the package from source, where no installed help
+    # database exists yet, so the .Rd files themselves are the ones to read.
+    tools::Rd_db(dir = repository_root)
+  } else {
+    tools::Rd_db("cellucid")
+  }
+  rd <- rd_database[["cellucid_prepare.Rd"]]
+  expect_false(is.null(rd))
+  section_tags <- vapply(rd, function(node) attr(node, "Rd_tag"), character(1))
+
+  usage <- trimws(paste(unlist(rd[section_tags == "\\usage"]), collapse = ""))
+  expect_true(startsWith(usage, "cellucid_prepare("))
+  documented_signature <- eval(parse(
+    text = paste0(sub("^cellucid_prepare", "function", usage), "\nNULL")
+  ))
+  expect_identical(formals(documented_signature), formals(cellucid_prepare))
+
+  arguments <- rd[section_tags == "\\arguments"][[1L]]
+  argument_tags <- vapply(
+    arguments,
+    function(node) attr(node, "Rd_tag"),
+    character(1)
+  )
+  documented_arguments <- vapply(
+    arguments[argument_tags == "\\item"],
+    function(item) trimws(paste(unlist(item[[1L]]), collapse = "")),
+    character(1)
+  )
+  expect_identical(
+    unname(documented_arguments),
+    names(formals(cellucid_prepare))
+  )
+
+  namespace_path <- file.path(repository_root, "NAMESPACE")
+  if (file.exists(namespace_path)) {
+    namespace <- readLines(namespace_path, warn = FALSE, encoding = "UTF-8")
+    # No generator input for this line exists under R/, so a regenerated
+    # NAMESPACE would drop it and every .Call() would stop resolving.
+    expect_true(
+      any(namespace == 'useDynLib(cellucid, .registration = TRUE, .fixes = "C_")')
+    )
+    expect_false(any(grepl("Generated by roxygen2", namespace, fixed = TRUE)))
+  }
+
+  man_directory <- file.path(repository_root, "man")
+  if (dir.exists(man_directory)) {
+    man_paths <- list.files(man_directory, pattern = "\\.Rd$", full.names = TRUE)
+    expect_gt(length(man_paths), 0L)
+    for (man_path in man_paths) {
+      man <- readLines(man_path, warn = FALSE, encoding = "UTF-8")
+      expect_false(any(grepl("Generated by roxygen2", man, fixed = TRUE)))
+      expect_true(any(grepl("Hand-written and authoritative", man, fixed = TRUE)))
+    }
+    prepare_path <- file.path(man_directory, "cellucid_prepare.Rd")
+    if (file.exists(prepare_path)) {
+      prepare <- readLines(prepare_path, warn = FALSE, encoding = "UTF-8")
+      expect_true(any(grepl("\\examples{", prepare, fixed = TRUE)))
+    }
+  }
+
+  # A second copy of the same help text under R/ is what diverged before. The
+  # help page is the only copy, so no roxygen comment may reappear.
+  r_directory <- file.path(repository_root, "R")
+  if (dir.exists(r_directory)) {
+    roxygen_comments <- character()
+    for (source_path in list.files(r_directory, pattern = "\\.R$", full.names = TRUE)) {
+      source_lines <- readLines(source_path, warn = FALSE, encoding = "UTF-8")
+      matches <- grep("^[[:space:]]*#'", source_lines)
+      if (length(matches) > 0L) {
+        roxygen_comments <- c(
+          roxygen_comments,
+          sprintf("R/%s:%d", basename(source_path), matches)
+        )
+      }
+    }
+    expect_identical(roxygen_comments, character())
+  }
+
+  description_path <- file.path(repository_root, "DESCRIPTION")
+  if (file.exists(description_path)) {
+    fields <- colnames(read.dcf(description_path))
+    expect_false("RoxygenNote" %in% fields)
+    expect_false("Roxygen" %in% fields)
+    expect_false(any(startsWith(fields, "Config/roxygen2/")))
   }
 })
 

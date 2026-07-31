@@ -68,6 +68,11 @@ Check that `.github/workflows/` contains:
 
 ### Step 1: Bump the version
 
+`DESCRIPTION` holds the version this repository is released at. Every other
+site below repeats it, and `tests/testthat/test-current-contract.R` reads
+`DESCRIPTION` and fails unless all of them agree, so a partial bump cannot
+reach `main`.
+
 Update these files with the new version number:
 
 | File | What to change |
@@ -75,6 +80,31 @@ Update these files with the new version number:
 | `DESCRIPTION` | `Version:` field (e.g., `Version: 0.10.0`) |
 | `CITATION.cff` | `version:` field (e.g., `version: 0.10.0`) |
 | `NEWS.md` | Add a new section header (e.g., `# cellucid 0.10.0`) |
+| `README.md` | The "Active package version" block |
+| `vignettes/installation.Rmd` | Every version mention, including the `packageVersion()` output |
+| `tests/testthat/test-current-contract.R` | The one pinned literal in `expect_identical(version, ...)` |
+
+Every one of those, apart from `DESCRIPTION` itself, is tagged with a
+`CELLUCID_VERSION` marker comment; `grep -rn CELLUCID_VERSION` lists them.
+`DESCRIPTION` is DCF and cannot carry a comment, so its marker is the
+`Config/cellucid/version-marker` field on the line directly after `Version:`.
+
+#### The version sites outside this repository
+
+The R user guide lives in the `cellucid-python` repository, under
+`docs/user_guide/r_package/`, and quotes this package's version on
+`installation.md` and `index.md`. Those pages are validated by
+`cellucid-python/scripts/validate_release.py` against the **Python** package
+version in `cellucid-python/pyproject.toml`, not against `DESCRIPTION`.
+
+The two repositories have separate CI and neither can read the other's tree, so
+no automated check compares `cellucid-r/DESCRIPTION` to the R user guide. The
+lockstep is real but manual:
+
+- Bump `cellucid-python/pyproject.toml` and `cellucid-r/DESCRIPTION` to the same
+  version, or the R user guide will state a version this package never shipped.
+- After bumping here, sweep `cellucid-python/docs/user_guide/r_package/` for the
+  old version and run `python scripts/validate_release.py` in that repository.
 
 ### Step 2: Create a PR and merge
 
@@ -308,9 +338,13 @@ R package names cannot contain `-`, so the package itself must stay `cellucid`.
 
 | File | What changes |
 |------|--------------|
-| `DESCRIPTION` | `Version:` field |
+| `DESCRIPTION` | `Version:` field (the source every other site is checked against) |
 | `CITATION.cff` | `version:` field |
 | `NEWS.md` | New section header added |
+| `README.md` | "Active package version" block |
+| `vignettes/installation.Rmd` | Every version mention |
+| `tests/testthat/test-current-contract.R` | The pinned release literal |
+| `cellucid-python/docs/user_guide/r_package/` | Manual: separate repository, no automated cross-check |
 
 ### GitHub Actions Workflows
 

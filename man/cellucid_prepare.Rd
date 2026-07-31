@@ -1,4 +1,7 @@
-% Generated manually for CRAN submission.
+% Hand-written and authoritative: this package runs no documentation generator.
+% Edit this file directly. tests/testthat/test-current-contract.R rebuilds the
+% \usage block below into a function and compares it to the real formals of
+% cellucid_prepare(), so the two cannot drift apart.
 \name{cellucid_prepare}
 \alias{cellucid_prepare}
 \title{Export single-cell data to the Cellucid viewer format}
@@ -36,11 +39,13 @@ cellucid_prepare(
 }
 \arguments{
 \item{latent_space}{Numeric matrix-like of shape \code{(n_cells, n_dims)}. Required for per-cell outlier quantile calculations for categorical fields.}
-\item{obs}{A \code{data.frame} of cell metadata with \code{n_cells} rows.}
+\item{obs}{A \code{data.frame} of cell metadata with \code{n_cells} rows.
+Every string category label must be text the viewer can show as written; see
+the note on displayed text below.}
 \item{var}{Optional \code{data.frame} of feature metadata with \code{n_genes} rows. Required if \code{gene_expression} is provided.}
 \item{gene_expression}{Optional numeric matrix-like of shape \code{(n_cells, n_genes)}. Every value must be finite and, for unquantized output, representable as a nonzero finite float32 value unless it is exactly zero. Rows are always interpreted as cells; Cellucid never transposes the matrix or infers its semantic orientation from \code{var}.}
-\item{var_gene_id_column}{Column name in \code{var} containing gene identifiers. Use \code{NULL} (default) to use \code{rownames(var)}. Every string, including \code{"index"}, names that exact column.}
-\item{gene_identifiers}{Optional character vector specifying which genes to export. If \code{NULL}, all genes are exported.}
+\item{var_gene_id_column}{Column name in \code{var} containing gene identifiers. Use \code{NULL} (default) to use \code{rownames(var)}. Every string, including \code{"index"}, names that exact column. Every identifier in the selected axis must be a non-empty string and must be distinct, because \code{gene_identifiers} addresses \code{var} rows by identifier and a repeated one names no single row.}
+\item{gene_identifiers}{Optional character vector specifying which genes to export. If \code{NULL}, all genes are exported. Identifiers must be distinct and must all be present in \code{var}. Narrowing the export narrows the filename contract with it: only the exported identifiers must be portable filename components unique under case-insensitive comparison, exactly as \code{obs_keys} narrows which observation keys are held to that rule. A \code{var} row this argument leaves out is written to no path and is not checked against it.}
 \item{connectivities}{Optional adjacency/connectivity matrix of shape \code{(n_cells, n_cells)}. Sparse matrices from the \pkg{Matrix} package are supported. Weights must be finite and non-negative, the matrix must be exactly symmetric in topology and weight, sparse coordinates must be unique and omit stored zero values, and its diagonal must be exactly zero.}
 \item{out_dir}{Output directory path. Defaults to \code{file.path(getwd(), "exports")}.}
 \item{obs_keys}{Optional character vector of column names in \code{obs} to export. If \code{NULL}, all columns are exported. Numeric observation fields must contain only finite values and, for unquantized output, every nonzero value must remain nonzero and finite as float32.}
@@ -67,15 +72,24 @@ range remains non-collapsed.}
 \item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use \code{NULL} to disable compression.}
 \item{dataset_name}{Required non-empty dataset name without leading or trailing
 whitespace or ASCII control characters for \code{dataset_identity.json}.}
-\item{dataset_description}{Dataset description. Defaults to an empty string.}
+\item{dataset_description}{Dataset description shown to the reader verbatim.
+Defaults to an empty string, and when non-empty must satisfy the same rule as a
+category label; see the note on displayed text below.}
 \item{dataset_id}{Required portable dataset identifier.}
 \item{source_name}{Optional non-empty data source name. Required whenever \code{source_url} or \code{source_citation} is supplied.}
 \item{source_url}{Optional non-empty data source URL. May be supplied independently when \code{source_name} is present.}
 \item{source_citation}{Optional non-empty citation text. May be supplied independently when \code{source_name} is present.}
-\item{X_umap_1d}{Optional 1D embedding matrix of shape \code{(n_cells, 1)}.}
+\item{X_umap_1d}{Optional 1D embedding matrix of shape \code{(n_cells, 1)}. A
+plain length-\code{n_cells} numeric vector is also accepted as the single column
+it declares.}
 \item{X_umap_2d}{Optional 2D embedding matrix of shape \code{(n_cells, 2)}.}
 \item{X_umap_3d}{Optional 3D embedding matrix of shape \code{(n_cells, 3)}.}
-\item{vector_fields}{Optional named list of per-cell displacement vectors. Each element must be a numeric vector (1D) or matrix with 1/2/3 columns and \code{n_cells} rows.}
+\item{vector_fields}{Optional named list of per-cell displacement vectors. Each
+name must exactly match \code{<field>_umap_<1|2|3>d}; the key declares the
+dimension and it is never inferred from the array. Each element must be a
+numeric matrix with \code{n_cells} rows and exactly the declared number of
+columns; a \code{_1d} key also accepts a plain length-\code{n_cells} numeric
+vector as the single column it declares.}
 \item{vector_field_default}{Exact vector-field identifier to select by default. Required when \code{vector_fields} contains more than one field.}
 \item{created_at}{Optional exact UTC-seconds timestamp in
 \code{YYYY-MM-DDTHH:MM:SSZ} format. Defaults to the current UTC time. Supply
@@ -118,11 +132,32 @@ generated internally; cells in categories smaller than
 \code{centroid_min_points} carry \code{NaN}, encoded with the reserved integer
 marker only when those generated quantiles are quantized.
 
+Note on displayed text: a category label, \code{dataset_name},
+\code{dataset_description}, \code{source_name}, \code{source_url}, and
+\code{source_citation} are drawn verbatim in the viewer's legend, its field
+selector, and every exported figure, so a character with no glyph changes the
+stored value without changing the picture. Each must be free of control
+characters (\code{U+0001}--\code{U+001F}, \code{U+007F}--\code{U+009F}), free of
+the zero-width characters \code{U+200B}, \code{U+2060}, and \code{U+FEFF}, and
+without leading or trailing whitespace of any kind, \code{U+00A0} NO-BREAK
+SPACE included. An empty category label is rejected, as are two labels in one
+field that a whitespace-collapsing renderer draws identically, such as
+\code{"T cell"} and \code{"T  cell"}. Nothing is trimmed: trimming would
+rewrite an annotation the caller never asked to change, and would merge
+\code{"Liver "} into a separate \code{"Liver"} category, moving cells between
+them. The rejection names every offending label in the field at once. The
+\code{cellucid} Python package enforces the identical rule.
+
 Note on filename safety: gene IDs, obs keys, dataset IDs, and vector-field IDs
 must already be 1--180-byte portable ASCII filename components. They begin with
 a letter or digit, contain only letters, digits, \code{.}, \code{_}, or
 \code{-}, do not end with \code{.}, are not Windows device names, and are
-unique under case-insensitive filesystem comparison.
+unique under case-insensitive filesystem comparison. This holds for the
+identifiers that are exported, because the rule is about the file each one is
+written to: \code{obs_keys} and \code{gene_identifiers} narrow the export and
+narrow this rule with it. Gene IDs carry one further rule that is not about
+paths and is therefore not narrowed -- every ID in \code{var} must be a
+non-empty string and must be distinct.
 }
 \examples{
 latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)

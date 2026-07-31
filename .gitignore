@@ -5,6 +5,12 @@
 .Rproj.user/
 *.Rproj
 
+# Compiled native code (rebuilt from src/*.c on every install)
+*.o
+*.so
+*.dll
+*.dylib
+
 # Package build artifacts
 *.tar.gz
 *.Rcheck/

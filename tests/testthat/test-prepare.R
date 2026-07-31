@@ -909,6 +909,68 @@ test_that("manifest field keys must already be portable filenames", {
   )
 })
 
+test_that("filename component rejections name the caller's identifier axis", {
+  callers <- c(
+    "Gene identifiers",
+    "Observation field keys",
+    "obs_keys",
+    "Vector field ids"
+  )
+
+  for (what in callers) {
+    expect_error(
+      cellucid:::.assert_unique_filename_components(c("ok", "bad id!"), what),
+      paste0("^", what, " 'bad id!' is not a portable identifier\\. ")
+    )
+    expect_error(
+      cellucid:::.assert_unique_filename_components(c("ok", "CON"), what),
+      paste0("^", what, " 'CON' is reserved on Windows\\.$")
+    )
+    expect_error(
+      cellucid:::.assert_unique_filename_components(c("ok", ""), what),
+      paste0("^", what, " must contain only non-empty strings\\.$")
+    )
+    expect_error(
+      cellucid:::.assert_unique_filename_components(c("Gene", "gene"), what),
+      paste0("^", what, " contains names that collide on case-insensitive ")
+    )
+  }
+
+  expect_identical(
+    unname(cellucid:::.assert_unique_filename_components(
+      c("alpha", "beta.gamma"),
+      "obs_keys"
+    )),
+    c("alpha", "beta.gamma")
+  )
+})
+
+test_that("a rejected vector field id is reported as a vector field id", {
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  out <- tempfile("cellucid_r_reserved_vector_id_")
+
+  expect_error(
+    cellucid_prepare(
+      dataset_id = "test-dataset",
+      dataset_name = "Test dataset",
+      latent_space = latent,
+      obs = obs,
+      X_umap_2d = umap2,
+      vector_fields = list(
+        CON.velocity_umap_2d = matrix(c(1, 0, 1, 0), ncol = 2, byrow = TRUE)
+      ),
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE,
+      obs_categorical_dtype = "uint16"
+    ),
+    "^Vector field ids 'CON\\.velocity_umap' is reserved on Windows\\.$"
+  )
+  expect_false(dir.exists(out))
+})
+
 test_that("categorical storage uses the exact portable code capacities", {
   compact <- factor(sprintf("category_%03d", seq_len(255L)))
   compact_summary <- cellucid:::.summarize_obs_field(
@@ -1879,6 +1941,46 @@ test_that("vector fields are exported and scaled with embedding normalization", 
   expect_true("2d" %in% names(ident$vector_fields$fields$velocity_umap$files))
 })
 
+test_that("a _1d vector field key accepts the plain vector it declares", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+
+  # Range is 4 -> scale_factor = 2 / 4 = 0.5
+  umap1 <- matrix(c(0, 2, 4), ncol = 1)
+
+  out <- tempfile("cellucid_r_vector_1d_")
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = latent,
+    obs = obs,
+    X_umap_1d = umap1,
+    vector_fields = list(pseudotime_umap_1d = c(2, 2, 2)),
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+
+  vec_path <- file.path(out, "vectors", "pseudotime_umap_1d.bin")
+  expect_true(file.exists(vec_path))
+
+  con <- file(vec_path, open = "rb")
+  on.exit(close(con), add = TRUE)
+  got <- readBin(con, what = "numeric", size = 4, endian = "little", n = 3)
+  expect_equal(got, rep(1, 3), tolerance = 1e-6)
+
+  ident <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = TRUE
+  )
+  expect_equal(ident$vector_fields$default_field, "pseudotime_umap")
+  expect_equal(
+    ident$vector_fields$fields$pseudotime_umap$available_dimensions,
+    1L
+  )
+})
+
 test_that("vector fields use one exact finite UMAP naming and ownership contract", {
   latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
   obs <- data.frame(group = factor(c("A", "B")))
@@ -1888,18 +1990,39 @@ test_that("vector fields use one exact finite UMAP naming and ownership contract
   invalid_vectors <- list(
     list(
       value = list(velocity = vector2),
-      message = "must use '<field>_umap'"
+      message = "key 'velocity' must exactly match '<field>_umap_<1\\|2\\|3>d'"
     ),
     list(
-      value = list(velocity_umap = NULL),
+      value = list(velocity_umap = vector2),
+      message = paste0(
+        "key 'velocity_umap' must exactly match ",
+        "'<field>_umap_<1\\|2\\|3>d'"
+      )
+    ),
+    list(
+      value = list(velocity_umap_4d = vector2),
+      message = "key 'velocity_umap_4d' must exactly match"
+    ),
+    list(
+      value = list(velocity_umap_2d = NULL),
       message = "cannot be NULL"
     ),
     list(
       value = list(
-        velocity_umap = vector2,
+        velocity_umap_2d = vector2,
         velocity_umap_2d = vector2
       ),
-      message = "same field and dimension"
+      message = "names must be unique"
+    ),
+    list(
+      value = list(velocity_umap_2d = c(1, 1)),
+      message = "declares 2D but contains 1 components"
+    ),
+    list(
+      value = list(
+        `CON.velocity_umap_2d` = vector2
+      ),
+      message = "reserved on Windows"
     ),
     list(
       value = list(
@@ -1950,8 +2073,8 @@ test_that("multiple vector fields require one explicit exact default", {
   umap2 <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
   vector2 <- matrix(c(1, 0, 1, 0), ncol = 2, byrow = TRUE)
   fields <- list(
-    velocity_umap = vector2,
-    displacement_umap = vector2
+    velocity_umap_2d = vector2,
+    displacement_umap_2d = vector2
   )
 
   base_args <- list(
@@ -2225,6 +2348,140 @@ test_that("gene_identifiers subsets var export and dataset identity counts expor
   expect_equal(ident$stats$n_genes, 1L)
 })
 
+.gene_scope_fixture <- function(gene_ids, id_column = NULL) {
+  var <- data.frame(symbol = gene_ids, stringsAsFactors = FALSE)
+  if (is.null(id_column)) {
+    rownames(var) <- gene_ids
+  } else {
+    names(var) <- id_column
+    rownames(var) <- paste0("row_", seq_along(gene_ids))
+  }
+  list(
+    latent = matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE),
+    obs = data.frame(cluster = factor(c("A", "A", "B"))),
+    umap2 = matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE),
+    expr = matrix(
+      as.numeric(seq_len(3L * length(gene_ids))),
+      nrow = 3L,
+      ncol = length(gene_ids)
+    ),
+    var = var
+  )
+}
+
+.prepare_gene_scope <- function(fixture, out, gene_identifiers, id_column = NULL) {
+  unlink(out, recursive = TRUE, force = TRUE)
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = fixture$latent,
+    obs = fixture$obs,
+    var = fixture$var,
+    gene_expression = fixture$expr,
+    var_gene_id_column = id_column,
+    gene_identifiers = gene_identifiers,
+    X_umap_2d = fixture$umap2,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+}
+
+test_that("an unexported gene id is not held to the payload path contract", {
+  # Filename portability is a property of the file a gene is written to, and
+  # obs_keys= already narrows which observation keys are held to it. A var row
+  # that gene_identifiers= leaves out names no path, so it names no rule.
+  unexported <- c("HLA-DRB1/2", "CON", "trailing.")
+  for (bad_id in unexported) {
+    fixture <- .gene_scope_fixture(c("gene_a", bad_id, "gene_c"))
+    out <- file.path(tempdir(), "cellucid_test_unexported_gene_id")
+
+    .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", "gene_c"))
+
+    expect_equal(
+      sort(list.files(file.path(out, "var"))),
+      c("gene_a.values.f32", "gene_c.values.f32"),
+      info = bad_id
+    )
+    unlink(out, recursive = TRUE, force = TRUE)
+  }
+})
+
+test_that("a case-insensitive collision outside the exported subset is allowed", {
+  fixture <- .gene_scope_fixture(c("gene_a", "GENE_B", "gene_b"))
+  out <- file.path(tempdir(), "cellucid_test_unexported_gene_collision")
+
+  .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", "gene_b"))
+
+  expect_equal(
+    sort(list.files(file.path(out, "var"))),
+    c("gene_a.values.f32", "gene_b.values.f32")
+  )
+  unlink(out, recursive = TRUE, force = TRUE)
+})
+
+test_that("an unexported row of the selected gene id column is not validated", {
+  fixture <- .gene_scope_fixture(
+    c("gene_a", "HLA-DRB1/2", "gene_c"),
+    id_column = "gene_id"
+  )
+  out <- file.path(tempdir(), "cellucid_test_unexported_gene_column_row")
+
+  .prepare_gene_scope(
+    fixture,
+    out,
+    gene_identifiers = c("gene_a", "gene_c"),
+    id_column = "gene_id"
+  )
+
+  expect_equal(
+    sort(list.files(file.path(out, "var"))),
+    c("gene_a.values.f32", "gene_c.values.f32")
+  )
+  unlink(out, recursive = TRUE, force = TRUE)
+})
+
+test_that("an exported gene id is still held to the payload path contract", {
+  fixture <- .gene_scope_fixture(c("gene_a", "HLA-DRB1/2", "gene_c"))
+  out <- file.path(tempdir(), "cellucid_test_exported_gene_id_rejected")
+
+  expect_error(
+    .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", "HLA-DRB1/2")),
+    "portable identifier"
+  )
+})
+
+test_that("a case-insensitive collision inside the exported subset is rejected", {
+  fixture <- .gene_scope_fixture(c("gene_a", "GENE_B", "gene_b"))
+  out <- file.path(tempdir(), "cellucid_test_exported_gene_collision")
+
+  expect_error(
+    .prepare_gene_scope(fixture, out, gene_identifiers = c("GENE_B", "gene_b")),
+    "collide"
+  )
+})
+
+test_that("a duplicate var gene id is rejected even when it is not exported", {
+  # Every var row is addressable through gene_identifiers=, so a repeated
+  # identifier makes that lookup ambiguous whichever genes are selected.
+  fixture <- .gene_scope_fixture(
+    c("gene_a", "gene_c", "gene_c"),
+    id_column = "gene_id"
+  )
+  out <- file.path(tempdir(), "cellucid_test_unexported_duplicate_gene_id")
+
+  expect_error(
+    .prepare_gene_scope(
+      fixture,
+      out,
+      gene_identifiers = c("gene_a"),
+      id_column = "gene_id"
+    ),
+    "Gene identifiers must be unique"
+  )
+})
+
 test_that("gene_identifiers rejects missing and non-character selections", {
   latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
   obs <- data.frame(cluster = factor(c("A", "A", "B")))
@@ -2443,5 +2700,274 @@ test_that("all public float32 artifacts reject unrepresentable finite values", {
       info = case_name
     )
     expect_false(dir.exists(out), info = case_name)
+  }
+})
+
+# Every user-supplied string the viewer prints must read as the value it stores.
+# A category label, a dataset name, a description, and a source line are drawn
+# verbatim in the legend, the field selector, and every exported figure, so a
+# character with no glyph changes the value without changing the picture. The
+# writer rejects those strings instead of trimming them: trimming rewrites an
+# annotation nobody asked to change, and merges "Liver " into a separate "Liver"
+# category, moving cells between them without saying so.
+
+.display_text_cases <- list(
+  list(
+    labels = c("Liver ", "Gut ", "Liver "),
+    expected = "ends with U+0020 SPACE"
+  ),
+  list(
+    labels = c(" Liver", "Gut", "Gut"),
+    expected = "starts with U+0020 SPACE"
+  ),
+  list(
+    labels = c("   ", "Gut", "Gut"),
+    expected = "starts with U+0020 SPACE"
+  ),
+  list(
+    labels = c("", "Gut", "Gut"),
+    expected = "'' is empty"
+  ),
+  list(
+    labels = c(paste0("Liver", "\u00a0"), "Gut", "Gut"),
+    expected = "ends with U+00A0 NO-BREAK SPACE"
+  ),
+  list(
+    labels = c(paste0("Liver", "\u3000"), "Gut", "Gut"),
+    expected = "ends with U+3000 IDEOGRAPHIC SPACE"
+  ),
+  list(
+    labels = c("Li\tver", "Gut", "Gut"),
+    expected = "contains U+0009 (control character)"
+  ),
+  list(
+    labels = c("Li\nver", "Gut", "Gut"),
+    expected = "contains U+000A (control character)"
+  ),
+  list(
+    labels = c(paste0("Liver", "\u0085"), "Gut", "Gut"),
+    expected = "contains U+0085 (control character)"
+  ),
+  list(
+    labels = c(paste0("Liver", "\u200b"), "Gut", "Gut"),
+    expected = "contains U+200B ZERO WIDTH SPACE"
+  ),
+  list(
+    labels = c(paste0("\ufeff", "Liver"), "Gut", "Gut"),
+    expected = "contains U+FEFF ZERO WIDTH NO-BREAK SPACE"
+  ),
+  list(
+    labels = c(paste0("Liver", "\u2060"), "Gut", "Gut"),
+    expected = "contains U+2060 WORD JOINER"
+  )
+)
+
+.display_text_prepare <- function(out, obs, ...) {
+  coordinates <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  args <- list(
+    dataset_id = "display-text",
+    dataset_name = "Display text",
+    latent_space = coordinates,
+    obs = obs,
+    X_umap_2d = coordinates,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  overrides <- list(...)
+  for (name in names(overrides)) {
+    args[[name]] <- overrides[[name]]
+  }
+  do.call(cellucid_prepare, args)
+}
+
+test_that("category labels the viewer cannot show verbatim are rejected", {
+  for (case in .display_text_cases) {
+    out <- tempfile("cellucid_r_display_label_")
+    expect_error(
+      .display_text_prepare(out, data.frame(organ = case$labels)),
+      "Categorical field 'organ'",
+      fixed = TRUE,
+      info = case$expected
+    )
+    expect_error(
+      .display_text_prepare(out, data.frame(organ = case$labels)),
+      case$expected,
+      fixed = TRUE
+    )
+    expect_false(dir.exists(out), info = case$expected)
+  }
+})
+
+test_that("the published suo organ labels are rejected in one message", {
+  published <- c(
+    "Bone_marrow ",
+    "Gut ",
+    "Kidney ",
+    "Liver ",
+    "Mesenteric_lymph_node",
+    "Skin ",
+    "Spleen ",
+    "Thymus ",
+    "Yolk_sac "
+  )
+  obs <- data.frame(organ = factor(published[c(1L, 4L, 5L)], levels = published))
+  out <- tempfile("cellucid_r_display_suo_")
+
+  failure <- tryCatch(
+    .display_text_prepare(out, obs),
+    error = conditionMessage
+  )
+
+  expect_true(grepl("8 labels", failure, fixed = TRUE))
+  for (label in published[c(1L, 2L, 3L, 4L)]) {
+    expect_true(grepl(paste0("'", label, "'"), failure, fixed = TRUE))
+  }
+  expect_false(grepl("'Mesenteric_lymph_node'", failure, fixed = TRUE))
+  expect_false(dir.exists(out))
+})
+
+test_that("a padded label colliding with its clean twin is rejected", {
+  out <- tempfile("cellucid_r_display_collision_")
+  failure <- tryCatch(
+    .display_text_prepare(
+      out,
+      data.frame(organ = c("Liver", "Liver ", "Liver"))
+    ),
+    error = conditionMessage
+  )
+
+  expect_true(grepl("'Liver '", failure, fixed = TRUE))
+  expect_true(grepl("ends with U+0020 SPACE", failure, fixed = TRUE))
+  expect_true(grepl("can merge two categories into one", failure, fixed = TRUE))
+  expect_false(dir.exists(out))
+})
+
+test_that("labels a whitespace-collapsing renderer draws alike are rejected", {
+  out <- tempfile("cellucid_r_display_render_")
+  failure <- tryCatch(
+    .display_text_prepare(
+      out,
+      data.frame(organ = c("T cell", "T  cell", "T cell"))
+    ),
+    error = conditionMessage
+  )
+
+  expect_true(grepl("'T  cell'", failure, fixed = TRUE))
+  expect_true(grepl("'T cell'", failure, fixed = TRUE))
+  expect_true(grepl("drawn identically", failure, fixed = TRUE))
+  expect_false(dir.exists(out))
+})
+
+test_that("the rejection names the field, the reason, and the repair", {
+  out <- tempfile("cellucid_r_display_repair_")
+  failure <- tryCatch(
+    .display_text_prepare(out, data.frame(organ = c("Liver ", "Gut", "Gut"))),
+    error = conditionMessage
+  )
+
+  expect_true(grepl(
+    "the legend, the field selector, and exported figures",
+    failure,
+    fixed = TRUE
+  ))
+  expect_true(grepl(
+    "Cellucid does not clean them for you",
+    failure,
+    fixed = TRUE
+  ))
+  expect_true(grepl(
+    "obs[['organ']] <- factor(trimws(as.character(obs[['organ']])",
+    failure,
+    fixed = TRUE
+  ))
+})
+
+test_that("labels that read as they are stored survive unchanged", {
+  out <- tempfile("cellucid_r_display_clean_")
+  obs <- data.frame(
+    organ = c("T cell", "Ganglion", "Islet"),
+    case = c("Liver", "liver", "LIVER"),
+    flag = c(TRUE, FALSE, TRUE),
+    stringsAsFactors = FALSE
+  )
+
+  .display_text_prepare(out, obs)
+
+  manifest <- jsonlite::fromJSON(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  categories <- lapply(
+    manifest[["_categoricalFields"]],
+    function(field) unlist(field[[2L]])
+  )
+  names(categories) <- vapply(
+    manifest[["_categoricalFields"]],
+    function(field) field[[1L]],
+    character(1)
+  )
+  expect_identical(
+    categories$organ,
+    c("Ganglion", "Islet", "T cell")
+  )
+  # Case-only differences are visible on screen, so they stay two categories.
+  expect_identical(categories$case, c("LIVER", "Liver", "liver"))
+  expect_identical(categories$flag, c(FALSE, TRUE))
+})
+
+test_that("identity text the viewer cannot show verbatim is rejected", {
+  arguments <- c(
+    "dataset_name",
+    "dataset_description",
+    "source_name",
+    "source_url",
+    "source_citation"
+  )
+  values <- list(
+    list(value = " padded ", expected = "starts with U+0020 SPACE"),
+    list(
+      value = paste0("padded", "\u00a0"),
+      expected = "ends with U+00A0 NO-BREAK SPACE"
+    ),
+    list(
+      value = paste0("hid", "\u200b", "den"),
+      expected = "contains U+200B ZERO WIDTH SPACE"
+    ),
+    list(
+      value = paste0("cont", "\u0001", "rol"),
+      expected = "contains U+0001 (control character)"
+    )
+  )
+
+  for (argument in arguments) {
+    for (case in values) {
+      out <- tempfile("cellucid_r_display_identity_")
+      extra <- list()
+      if (argument %in% c("source_url", "source_citation")) {
+        extra$source_name <- "Exact source"
+      }
+      extra[[argument]] <- case$value
+      failure <- tryCatch(
+        do.call(
+          .display_text_prepare,
+          c(
+            list(out = out, obs = data.frame(group = factor(c("A", "A", "B")))),
+            extra
+          )
+        ),
+        error = conditionMessage
+      )
+      expect_true(
+        startsWith(failure, paste0(argument, " is displayed verbatim")),
+        info = paste(argument, case$expected)
+      )
+      expect_true(
+        grepl(case$expected, failure, fixed = TRUE),
+        info = paste(argument, case$expected)
+      )
+      expect_false(dir.exists(out), info = paste(argument, case$expected))
+    }
   }
 })
