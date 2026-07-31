@@ -182,18 +182,16 @@ cellucid_prepare <- function(
     obs_keys <- names(obs)
   }
   .validate_character_vector(obs_keys, what = "obs_keys")
-  if (anyDuplicated(obs_keys)) {
-    stop("obs_keys must not contain duplicate field names.", call. = FALSE)
-  }
   missing <- setdiff(obs_keys, names(obs))
   if (length(missing) > 0) {
     stop(
       "obs_keys contain columns not in obs: ",
-      paste(missing, collapse = ", "),
+      .format_value_list(missing),
       ". Available columns: ",
-      paste(names(obs), collapse = ", ")
+      .format_value_list(names(obs))
     )
   }
+  .require_field_identities(obs_keys, what = "Observation field")
 
   # Collect lightweight metadata for obs fields (used in dataset identity)
   obs_field_summaries <- lapply(
@@ -208,6 +206,7 @@ cellucid_prepare <- function(
 
   # Vector fields (optional)
   vector_fields_identity <- NULL
+  vector_payload_indices <- list()
   if (!is.null(vector_fields)) {
     vector_result <- .export_vector_fields(
       vector_fields = vector_fields,
@@ -218,6 +217,7 @@ cellucid_prepare <- function(
       vector_field_default = vector_field_default
     )
     vector_fields_identity <- vector_result$identity
+    vector_payload_indices <- vector_result$payload_indices
   } else if (!is.null(vector_field_default)) {
     stop(
       "vector_field_default requires vector_fields.",
@@ -323,6 +323,12 @@ cellucid_prepare <- function(
       call. = FALSE
     )
   }
+  .require_declared_payloads_on_disk(
+    out_dir,
+    directory_name = obs_binary_dirname,
+    declared = .declared_obs_payload_paths(obs_manifest_payload),
+    axis = "Observation"
+  )
 
   # ===========================================================================
   # VAR (GENE EXPRESSION) EXPORT
@@ -371,18 +377,22 @@ cellucid_prepare <- function(
       }
       genes_to_export <- gene_identifiers
     }
+    # Uniqueness spans the whole var, because every row is addressable through
+    # gene_identifiers=. Being drawable is a property of a name the viewer
+    # shows, so it is checked on the exported genes: a var row left out reaches
+    # no manifest, exactly as an obs column left out of obs_keys= does.
+    .require_field_identities(genes_to_export, what = "Gene")
 
     var_manifest_path <- file.path(out_dir, "var_manifest.json")
     var_binary_dir <- file.path(out_dir, var_binary_dirname)
     .dir_create(var_binary_dir)
 
     var_manifest_fields <- vector("list", length(genes_to_export))
-    safe_gene_ids <- .assert_unique_filename_components(genes_to_export, what = "Gene identifiers")
 
     for (idx in seq_along(genes_to_export)) {
       gene_id <- genes_to_export[[idx]]
       gene_idx <- unname(gene_id_to_idx[[gene_id]])
-      safe_gene_id <- safe_gene_ids[[idx]]
+      payload_index <- .payload_index(idx)
 
       values <- .get_gene_column(gene_expression, gene_idx, n_cells = n_cells)
 
@@ -393,17 +403,28 @@ cellucid_prepare <- function(
           field_name = gene_id
         )
         ext <- if (var_quantization == 8L) "u8" else "u16"
-        value_path <- file.path(var_binary_dir, sprintf("%s.values.%s", safe_gene_id, ext))
+        value_path <- file.path(
+          var_binary_dir,
+          sprintf("%d.values.%s", payload_index, ext)
+        )
         if (var_quantization == 8L) {
           .write_uint8(value_path, q$quantized, compression = compression)
         } else {
           .write_uint16(value_path, q$quantized, compression = compression)
         }
-        var_manifest_fields[[idx]] <- list(gene_id, q$min_val, q$max_val)
+        var_manifest_fields[[idx]] <- list(
+          payload_index,
+          gene_id,
+          q$min_val,
+          q$max_val
+        )
       } else {
-        value_path <- file.path(var_binary_dir, sprintf("%s.values.f32", safe_gene_id))
+        value_path <- file.path(
+          var_binary_dir,
+          sprintf("%d.values.f32", payload_index)
+        )
         .write_float32_vector(value_path, values, compression = compression)
-        var_manifest_fields[[idx]] <- list(gene_id)
+        var_manifest_fields[[idx]] <- list(payload_index, gene_id)
       }
     }
 
@@ -413,7 +434,7 @@ cellucid_prepare <- function(
       dtype_str <- if (var_quantization == 8L) "uint8" else "uint16"
       list(
         kind = "continuous",
-        pathPattern = sprintf("%s/{key}.values.%s%s", var_binary_dirname, ext, gz_suffix),
+        pathPattern = sprintf("%s/{index}.values.%s%s", var_binary_dirname, ext, gz_suffix),
         ext = ext,
         dtype = dtype_str,
         quantized = TRUE,
@@ -422,7 +443,7 @@ cellucid_prepare <- function(
     } else {
       list(
         kind = "continuous",
-        pathPattern = sprintf("%s/{key}.values.f32%s", var_binary_dirname, gz_suffix),
+        pathPattern = sprintf("%s/{index}.values.f32%s", var_binary_dirname, gz_suffix),
         ext = "f32",
         dtype = "float32",
         quantized = FALSE
@@ -439,6 +460,24 @@ cellucid_prepare <- function(
       fields = var_manifest_fields
     )
     .write_json(var_manifest_path, var_manifest_payload, pretty = FALSE)
+
+    exported_gene_names <- .gene_names_from_compact_manifest(
+      var_manifest_payload
+    )
+    if (!identical(exported_gene_names, unname(genes_to_export))) {
+      stop(
+        "Gene manifest ",
+        var_manifest_path,
+        " names do not match the staged genes.",
+        call. = FALSE
+      )
+    }
+    .require_declared_payloads_on_disk(
+      out_dir,
+      directory_name = var_binary_dirname,
+      declared = .declared_var_payload_paths(var_manifest_payload),
+      axis = "Gene"
+    )
   }
 
   # ===========================================================================
@@ -497,6 +536,54 @@ cellucid_prepare <- function(
       compression = if (!is.null(compression)) compression else NULL
     )
     .write_json(connectivity_manifest_path, connectivity_manifest_payload, pretty = FALSE)
+
+    declared_connectivity_paths <- character(0)
+    for (path_key in c("sourcesPath", "destinationsPath", "weightsPath")) {
+      declared_path <- connectivity_manifest_payload[[path_key]]
+      if (
+        !is.character(declared_path) ||
+          length(declared_path) != 1L ||
+          is.na(declared_path) ||
+          !nzchar(declared_path)
+      ) {
+        stop(
+          "connectivity_manifest.json ",
+          path_key,
+          " must be one payload path.",
+          call. = FALSE
+        )
+      }
+      declared_connectivity_paths <- c(
+        declared_connectivity_paths,
+        declared_path
+      )
+    }
+    .require_declared_payloads_on_disk(
+      out_dir,
+      directory_name = connectivity_binary_dirname,
+      declared = unique(declared_connectivity_paths),
+      axis = "Connectivity"
+    )
+  }
+
+  if (!is.null(vector_fields_identity)) {
+    declared_vector_paths <- unlist(
+      lapply(
+        vector_fields_identity$fields,
+        function(field_metadata) unlist(field_metadata$files, use.names = FALSE)
+      ),
+      use.names = FALSE
+    )
+    .require_dense_payload_indices(
+      vector_payload_indices,
+      axis = "Vector field"
+    )
+    .require_declared_payloads_on_disk(
+      out_dir,
+      directory_name = "vectors",
+      declared = unique(declared_vector_paths),
+      axis = "Vector field"
+    )
   }
 
   # ===========================================================================
@@ -1935,6 +2022,10 @@ cellucid_prepare <- function(
   invisible(path)
 }
 
+# dataset_id is the one identifier that still names a path: the export
+# directory a producer publishes and every data path addresses it by. Payload
+# names on the obs, var, and vectors axes are integer indices, so no field
+# identifier reaches this rule.
 .safe_filename_component <- function(name, what = "Filename component") {
   name <- .validate_required_string(name, what)
   if (
@@ -1962,35 +2053,278 @@ cellucid_prepare <- function(
   name
 }
 
-.assert_unique_filename_components <- function(keys, what) {
-  if (!is.character(keys) || anyNA(keys) || any(!nzchar(keys))) {
-    stop(what, " must contain only non-empty strings.", call. = FALSE)
+# A payload filename is an integer index, so an identifier is never a path and
+# carries no filename rule at all: no ASCII restriction, no case-collision
+# rule, no reserved Windows name. What survives is what the identity is
+# actually for. It names one field in the manifest, so it must be a non-empty
+# string, distinct within its axis so a lookup resolves one field, and text the
+# viewer can draw exactly as it is stored -- the same rule every category label
+# obeys, because a gene name and a category label are shown in the same legend.
+# The cellucid Python package enforces the identical rule.
+#
+# `what` names one field in the singular -- "Gene", "Observation field",
+# "Vector field" -- because it is read as the subject of a sentence about a
+# single identifier: "Gene identifier at position 1 ...". The checks that speak
+# about the whole axis add their own plural, so no caller has to guess which
+# number a message will need. cellucid-python passes the same singular nouns to
+# _require_field_identities().
+.require_field_identities <- function(values, what) {
+  .validate_character_vector(values, what = paste0(what, " keys"))
+  for (position in seq_along(values)) {
+    .validate_display_text(
+      values[[position]],
+      paste0(what, " identifier at position ", position - 1L),
+      allow_empty = FALSE
+    )
   }
-  safe <- vapply(keys, .safe_filename_component, character(1), what = what)
+  .require_unique_identifiers(values, what = what)
+}
 
-  folded <- tolower(safe)
-  dup_safe <- unique(folded[duplicated(folded)])
-  if (length(dup_safe) == 0L) {
-    return(invisible(safe))
+# Identity, not path. A repeated key names no single field, so a lookup by key
+# resolves to more than one row whatever the payloads are called. The reported
+# key is the first repeat in supplied order, which is the one
+# cellucid-python's _require_unique_identifiers() reports.
+.require_unique_identifiers <- function(keys, what) {
+  .validate_character_vector(keys, what = paste0(what, " keys"))
+  repeated <- which(duplicated(keys))
+  if (length(repeated) > 0L) {
+    stop(
+      what,
+      " key '",
+      keys[[repeated[[1L]]]],
+      "' is duplicated.",
+      call. = FALSE
+    )
   }
+  invisible(keys)
+}
 
-  collision_lines <- character(0)
-  for (safe_key in dup_safe) {
-    originals <- unique(keys[folded == safe_key])
-    preview <- paste(sprintf("'%s'", utils::head(originals, 5)), collapse = ", ")
-    if (length(originals) > 5L) {
-      preview <- paste0(preview, ", ...")
+# A message that shows the reader a set of values shows it as a list, not as a
+# sentence that happens to continue after a comma: without a boundary,
+# "columns not in obs: a, b. Available columns: x" cannot be read back as two
+# lists. cellucid-python interpolates a Python list, which prints as [0, 1] for
+# integers and ['a', 'b'] for strings, and the two writers report one defect to
+# one reader, so they print it the same way.
+.format_value_list <- function(values) {
+  if (is.character(values)) {
+    items <- sprintf("'%s'", values)
+  } else {
+    items <- format(values, trim = TRUE)
+  }
+  paste0("[", paste(items, collapse = ", "), "]")
+}
+
+# A payload filename is the position of its field on its axis, never the
+# field's own name, so no exported path depends on a dataset's vocabulary. The
+# manifest entry carries the same integer as its first element, and the viewer
+# substitutes it into the schema path pattern to reach the bytes.
+.payload_index <- function(position) {
+  if (
+    !is.numeric(position) ||
+      length(position) != 1L ||
+      is.na(position) ||
+      !is.finite(position) ||
+      position != floor(position) ||
+      position < 1 ||
+      position > .Machine$integer.max
+  ) {
+    stop("Payload position must be one positive integer.", call. = FALSE)
+  }
+  as.integer(position) - 1L
+}
+
+# Within one axis directory the indices must be exactly 0 to N-1, each used
+# once. The index *is* the filename, so two fields holding one index write into
+# one file: the second overwrites the first and the viewer then draws one
+# field's values under the other field's name. Nothing downstream can detect
+# that, so it is asserted here in the writer, against the manifest that was
+# just built, rather than only in a test.
+.require_dense_payload_indices <- function(indices, axis) {
+  for (position in seq_along(indices)) {
+    index <- indices[[position]]
+    if (
+      !is.integer(index) ||
+        length(index) != 1L ||
+        is.na(index)
+    ) {
+      stop(
+        axis,
+        " payload index at position ",
+        position - 1L,
+        " must be a native integer.",
+        call. = FALSE
+      )
     }
-    collision_lines <- c(collision_lines, sprintf("  - '%s' <- %s", safe_key, preview))
   }
+  resolved <- as.integer(unlist(indices, use.names = FALSE))
+  if (!identical(sort(resolved), seq_along(resolved) - 1L)) {
+    stop(
+      axis,
+      " payload indices must be exactly 0..",
+      length(resolved) - 1L,
+      ", each used once; got ",
+      .format_value_list(sort(resolved)),
+      ".",
+      call. = FALSE
+    )
+  }
+  invisible(resolved)
+}
 
-  stop(
-    what,
-    " contains names that collide on case-insensitive filesystems.\n",
-    "Rename the identifiers. Collisions:\n",
-    paste(collision_lines, collapse = "\n"),
-    call. = FALSE
+.expand_payload_pattern <- function(pattern, index, label, ext = NULL) {
+  if (
+    !is.character(pattern) ||
+      length(pattern) != 1L ||
+      is.na(pattern) ||
+      !nzchar(pattern)
+  ) {
+    stop(label, " must be a non-empty path pattern.", call. = FALSE)
+  }
+  expanded <- gsub("{index}", as.character(index), pattern, fixed = TRUE)
+  if (!is.null(ext)) {
+    expanded <- gsub("{ext}", ext, expanded, fixed = TRUE)
+  }
+  if (grepl("[{}]", expanded)) {
+    stop(
+      label,
+      " retains an unsubstituted placeholder: '",
+      expanded,
+      "'.",
+      call. = FALSE
+    )
+  }
+  expanded
+}
+
+# The manifest is the only index the viewer has: a payload it does not declare
+# is invisible, and a payload it declares but that was never written fails the
+# dataset at read time, in the browser, long after the export succeeded. Both
+# are caught here by re-expanding the emitted path patterns and comparing them
+# against the directory that was actually written.
+.require_declared_payloads_on_disk <- function(
+    out_dir,
+    directory_name,
+    declared,
+    axis
+) {
+  directory <- file.path(out_dir, directory_name)
+  on_disk <- character(0)
+  if (dir.exists(directory)) {
+    for (entry in sort(list.files(directory, all.files = TRUE, no.. = TRUE))) {
+      if (!utils::file_test("-f", file.path(directory, entry))) {
+        stop(
+          axis,
+          " payload directory holds a non-file entry: ",
+          file.path(directory, entry),
+          call. = FALSE
+        )
+      }
+      on_disk <- c(on_disk, paste0(directory_name, "/", entry))
+    }
+  }
+  missing_payloads <- sort(setdiff(declared, on_disk))
+  undeclared <- sort(setdiff(on_disk, declared))
+  if (length(missing_payloads) > 0L || length(undeclared) > 0L) {
+    stop(
+      axis,
+      " manifest does not describe the payloads that were written. ",
+      "Declared but absent: ",
+      paste(missing_payloads, collapse = ", "),
+      ". Written but undeclared: ",
+      paste(undeclared, collapse = ", "),
+      ".",
+      call. = FALSE
+    )
+  }
+  invisible(declared)
+}
+
+.codes_extension_by_dtype <- c(uint8 = "u8", uint16 = "u16")
+
+.declared_obs_payload_paths <- function(manifest) {
+  schemas <- manifest[["_obsSchemas"]]
+  declared <- character(0)
+  for (field in manifest[["_continuousFields"]]) {
+    declared <- c(declared, .expand_payload_pattern(
+      schemas$continuous$pathPattern,
+      index = field[[1L]],
+      label = "obs continuous pathPattern"
+    ))
+  }
+  for (field in manifest[["_categoricalFields"]]) {
+    extension <- unname(.codes_extension_by_dtype[field[[4L]]])
+    if (is.na(extension)) {
+      stop(
+        "Categorical obs field '",
+        field[[2L]],
+        "' declares an unknown codes dtype '",
+        field[[4L]],
+        "'.",
+        call. = FALSE
+      )
+    }
+    declared <- c(
+      declared,
+      .expand_payload_pattern(
+        schemas$categorical$codesPathPattern,
+        index = field[[1L]],
+        label = "obs categorical codesPathPattern",
+        ext = extension
+      ),
+      .expand_payload_pattern(
+        schemas$categorical$outlierPathPattern,
+        index = field[[1L]],
+        label = "obs categorical outlierPathPattern"
+      )
+    )
+  }
+  unique(declared)
+}
+
+.declared_var_payload_paths <- function(manifest) {
+  schema <- manifest[["_varSchema"]]
+  declared <- vapply(
+    manifest$fields,
+    function(field) {
+      .expand_payload_pattern(
+        schema$pathPattern,
+        index = field[[1L]],
+        label = "var pathPattern"
+      )
+    },
+    character(1)
   )
+  unique(declared)
+}
+
+.gene_names_from_compact_manifest <- function(manifest) {
+  fields <- manifest$fields
+  if (!is.list(fields)) {
+    stop("compact_v1 var manifest fields must be a list.", call. = FALSE)
+  }
+  gene_names <- character(0)
+  payload_indices <- list()
+  for (field in fields) {
+    if (
+      !is.list(field) ||
+        !(length(field) %in% c(2L, 4L)) ||
+        !is.character(field[[2L]]) ||
+        length(field[[2L]]) != 1L ||
+        is.na(field[[2L]]) ||
+        !nzchar(field[[2L]])
+    ) {
+      stop(
+        "compact_v1 var fields must be exact [index, name] or ",
+        "[index, name, minValue, maxValue] tuples.",
+        call. = FALSE
+      )
+    }
+    payload_indices[[length(payload_indices) + 1L]] <- field[[1L]]
+    gene_names <- c(gene_names, field[[2L]])
+  }
+  .require_unique_identifiers(gene_names, what = "Gene")
+  .require_dense_payload_indices(payload_indices, axis = "Gene")
+  gene_names
 }
 
 .as_dense_matrix <- function(x, name) {
@@ -2341,22 +2675,25 @@ cellucid_prepare <- function(
 
   identity_fields <- list()
   manifest_keys <- character(0)
+  # Both arrays write into obs/, so their payload indices share one space.
+  payload_indices <- list()
   for (field in continuous_fields) {
     if (
       !is.list(field) ||
-        !(length(field) %in% c(1L, 3L)) ||
-        !is.character(field[[1]]) ||
-        length(field[[1]]) != 1L ||
-        is.na(field[[1]]) ||
-        !nzchar(field[[1]])
+        !(length(field) %in% c(2L, 4L)) ||
+        !is.character(field[[2]]) ||
+        length(field[[2]]) != 1L ||
+        is.na(field[[2]]) ||
+        !nzchar(field[[2]])
     ) {
       stop(
         "compact_v1 continuous observation fields must be exact ",
-        "[key] or [key, minValue, maxValue] tuples.",
+        "[index, key] or [index, key, minValue, maxValue] tuples.",
         call. = FALSE
       )
     }
-    key <- field[[1]]
+    payload_indices[[length(payload_indices) + 1L]] <- field[[1]]
+    key <- field[[2]]
     manifest_keys <- c(manifest_keys, key)
     identity_fields[[length(identity_fields) + 1L]] <- list(
       key = key,
@@ -2367,33 +2704,35 @@ cellucid_prepare <- function(
   for (field in categorical_fields) {
     if (
       !is.list(field) ||
-        !(length(field) %in% c(5L, 7L)) ||
-        !is.character(field[[1]]) ||
-        length(field[[1]]) != 1L ||
-        is.na(field[[1]]) ||
-        !nzchar(field[[1]]) ||
-        !(is.atomic(field[[2]]) || is.list(field[[2]])) ||
-        !is.null(dim(field[[2]]))
+        !(length(field) %in% c(6L, 8L)) ||
+        !is.character(field[[2]]) ||
+        length(field[[2]]) != 1L ||
+        is.na(field[[2]]) ||
+        !nzchar(field[[2]]) ||
+        !(is.atomic(field[[3]]) || is.list(field[[3]])) ||
+        !is.null(dim(field[[3]]))
     ) {
       stop(
         "compact_v1 categorical observation fields must be exact ",
-        "five- or seven-member tuples with a category array.",
+        "six- or eight-member tuples with a category array.",
         call. = FALSE
       )
     }
-    key <- field[[1]]
+    payload_indices[[length(payload_indices) + 1L]] <- field[[1]]
+    key <- field[[2]]
     manifest_keys <- c(manifest_keys, key)
     identity_fields[[length(identity_fields) + 1L]] <- list(
       key = key,
       kind = "category",
-      n_categories = as.integer(length(field[[2]]))
+      n_categories = as.integer(length(field[[3]]))
     )
   }
 
-  .assert_unique_filename_components(
+  .require_unique_identifiers(
     manifest_keys,
-    what = "Observation field keys"
+    what = "Observation field"
   )
+  .require_dense_payload_indices(payload_indices, axis = "Observation")
   identity_fields
 }
 
@@ -2446,6 +2785,23 @@ cellucid_prepare <- function(
   rounded
 }
 
+# Name compact_v1's constant-field case from one payload's bounds.
+#
+# A gene detected in no published cell, or an obs column a subset flattened, is
+# ordinary scientific data, so the format encodes it rather than rejecting it.
+# The case is declared by equal bounds -- the entry stays exactly
+# [index, key, minValue, maxValue], so neither its shape nor its length moves --
+# and every code is written as 0. Writer and reader then take the same named
+# branch instead of the general arithmetic: the writer never divides by
+# (maxValue - minValue), and the reader fills minValue straight through. The
+# value returns bit-exact, not within a quantization step.
+#
+# Sole derivation point on this writer, and the exact peer of
+# _is_constant_continuous_range() in the Python exporter.
+.is_constant_continuous_range <- function(min_val, max_val) {
+  min_val == max_val
+}
+
 .quantize_continuous <- function(
     values,
     bits,
@@ -2479,8 +2835,6 @@ cellucid_prepare <- function(
     )
   }
 
-  source_min <- Inf
-  source_max <- -Inf
   min_val <- Inf
   max_val <- -Inf
   starts <- seq.int(1L, length(values), by = .chunk_size)
@@ -2498,8 +2852,6 @@ cellucid_prepare <- function(
         call. = FALSE
       )
     }
-    source_min <- min(source_min, min(source_chunk))
-    source_max <- max(source_max, max(source_chunk))
     rounded <- .roundtrip_finite_float32_chunk(
       source_chunk,
       field_name
@@ -2508,30 +2860,24 @@ cellucid_prepare <- function(
     max_val <- max(max_val, max(rounded))
   }
 
-  if (source_min == source_max) {
-    stop(
-      "Cannot quantize field '",
-      field_name,
-      "': all values are constant, but compact_v1 quantization ",
-      "requires minValue to be less than maxValue.",
-      call. = FALSE
-    )
-  }
-
-  if (min_val == max_val) {
-    stop(
-      "Cannot quantize field '",
-      field_name,
-      "': its native-double variation collapses to one value in the ",
-      "viewer's float32 domain.",
-      call. = FALSE
-    )
-  }
-
   if (bits == 8L) {
     max_quant <- 254L
   } else {
     max_quant <- 65534L
+  }
+
+  if (.is_constant_continuous_range(min_val, max_val)) {
+    # The constant case, taken before any scale exists. The general path
+    # divides by (max_val - min_val), which is exactly zero here, so a constant
+    # field must never reach it. This also covers native-double variation that
+    # collapses to one value in the viewer's float32 domain: one float32 value
+    # is one constant. Mirrors _quantize_continuous() in the Python exporter.
+    return(list(
+      quantized = integer(length(values)),
+      min_val = min_val,
+      max_val = max_val,
+      scale = 0
+    ))
   }
 
   scale <- max_quant / (max_val - min_val)
@@ -2739,7 +3085,6 @@ cellucid_prepare <- function(
     obs_categorical_dtype,
     compression
 ) {
-  safe_keys <- .assert_unique_filename_components(obs_keys, what = "obs_keys")
   continuous_fields <- list()
   categorical_fields <- list()
   continuous_dtype_info <- list()
@@ -2748,7 +3093,9 @@ cellucid_prepare <- function(
   for (idx in seq_along(obs_keys)) {
     key <- obs_keys[[idx]]
     s <- obs[[key]]
-    safe_key <- safe_keys[[idx]]
+    # Continuous and categorical payloads share one obs/ directory, so they
+    # share one index space: the position of the key in obs_keys.
+    payload_index <- .payload_index(idx)
 
     kind <- .observation_kind(s, key)
 
@@ -2770,13 +3117,21 @@ cellucid_prepare <- function(
         q <- .quantize_continuous(values, bits = obs_continuous_quantization, field_name = key)
         ext <- if (obs_continuous_quantization == 8L) "u8" else "u16"
         dtype_str <- if (obs_continuous_quantization == 8L) "uint8" else "uint16"
-        value_path <- file.path(obs_binary_dir, sprintf("%s.values.%s", safe_key, ext))
+        value_path <- file.path(
+          obs_binary_dir,
+          sprintf("%d.values.%s", payload_index, ext)
+        )
         if (obs_continuous_quantization == 8L) {
           .write_uint8(value_path, q$quantized, compression = compression)
         } else {
           .write_uint16(value_path, q$quantized, compression = compression)
         }
-        continuous_fields[[length(continuous_fields) + 1L]] <- list(key, q$min_val, q$max_val)
+        continuous_fields[[length(continuous_fields) + 1L]] <- list(
+          payload_index,
+          key,
+          q$min_val,
+          q$max_val
+        )
         if (length(continuous_dtype_info) == 0L) {
           continuous_dtype_info <- list(
             ext = ext,
@@ -2786,9 +3141,15 @@ cellucid_prepare <- function(
           )
         }
       } else {
-        value_path <- file.path(obs_binary_dir, sprintf("%s.values.f32", safe_key))
+        value_path <- file.path(
+          obs_binary_dir,
+          sprintf("%d.values.f32", payload_index)
+        )
         .write_float32_vector(value_path, values, compression = compression)
-        continuous_fields[[length(continuous_fields) + 1L]] <- list(key)
+        continuous_fields[[length(continuous_fields) + 1L]] <- list(
+          payload_index,
+          key
+        )
         if (length(continuous_dtype_info) == 0L) {
           continuous_dtype_info <- list(ext = "f32", dtype = "float32", quantized = FALSE)
         }
@@ -2828,11 +3189,11 @@ cellucid_prepare <- function(
     codes_typed[valid_mask] <- codes[valid_mask]
 
     if (identical(dtype_str, "uint8")) {
-      codes_fname <- sprintf("%s.codes.u8", safe_key)
+      codes_fname <- sprintf("%d.codes.u8", payload_index)
       codes_path <- file.path(obs_binary_dir, codes_fname)
       .write_uint8(codes_path, codes_typed, compression = compression)
     } else {
-      codes_fname <- sprintf("%s.codes.u16", safe_key)
+      codes_fname <- sprintf("%d.codes.u16", payload_index)
       codes_path <- file.path(obs_binary_dir, codes_fname)
       .write_uint16(codes_path, codes_typed, compression = compression)
     }
@@ -2868,7 +3229,7 @@ cellucid_prepare <- function(
       oq_ext <- if (obs_continuous_quantization == 8L) "u8" else "u16"
       oq_dtype_str <- if (obs_continuous_quantization == 8L) "uint8" else "uint16"
 
-      outlier_fname <- sprintf("%s.outliers.%s", safe_key, oq_ext)
+      outlier_fname <- sprintf("%d.outliers.%s", payload_index, oq_ext)
       outlier_path <- file.path(obs_binary_dir, outlier_fname)
       if (obs_continuous_quantization == 8L) {
         .write_uint8(outlier_path, oq$quantized, compression = compression)
@@ -2877,6 +3238,7 @@ cellucid_prepare <- function(
       }
 
       categorical_fields[[length(categorical_fields) + 1L]] <- list(
+        payload_index,
         key,
         I(categories),
         dtype_str,
@@ -2895,7 +3257,7 @@ cellucid_prepare <- function(
         )
       }
     } else {
-      outlier_fname <- sprintf("%s.outliers.f32", safe_key)
+      outlier_fname <- sprintf("%d.outliers.f32", payload_index)
       outlier_path <- file.path(obs_binary_dir, outlier_fname)
       .write_float32_vector(
         outlier_path,
@@ -2905,6 +3267,7 @@ cellucid_prepare <- function(
       )
 
       categorical_fields[[length(categorical_fields) + 1L]] <- list(
+        payload_index,
         key,
         I(categories),
         dtype_str,
@@ -2928,7 +3291,7 @@ cellucid_prepare <- function(
   if (length(continuous_dtype_info) > 0L) {
     cont <- list(
       pathPattern = sprintf(
-        "%s/{key}.values.%s%s",
+        "%s/{index}.values.%s%s",
         obs_binary_dirname,
         continuous_dtype_info$ext,
         gz_suffix
@@ -2945,9 +3308,9 @@ cellucid_prepare <- function(
 
   if (length(categorical_dtype_info) > 0L) {
     schemas$categorical <- list(
-      codesPathPattern = sprintf("%s/{key}.codes.{ext}%s", obs_binary_dirname, gz_suffix),
+      codesPathPattern = sprintf("%s/{index}.codes.{ext}%s", obs_binary_dirname, gz_suffix),
       outlierPathPattern = sprintf(
-        "%s/{key}.outliers.%s%s",
+        "%s/{index}.outliers.%s%s",
         obs_binary_dirname,
         categorical_dtype_info$outlierExt,
         gz_suffix
@@ -3094,18 +3457,7 @@ cellucid_prepare <- function(
 }
 
 .validate_gene_ids <- function(gene_ids) {
-  .validate_character_vector(gene_ids, what = "Gene identifiers")
-
-  dup <- unique(gene_ids[duplicated(gene_ids)])
-  if (length(dup) > 0L) {
-    preview <- paste(sprintf("'%s'", utils::head(dup, 5)), collapse = ", ")
-    if (length(dup) > 5L) {
-      preview <- paste0(preview, ", ...")
-    }
-    stop("Gene identifiers must be unique. Duplicates: ", preview, call. = FALSE)
-  }
-
-  invisible(gene_ids)
+  .require_unique_identifiers(gene_ids, what = "Gene")
 }
 
 .get_gene_column <- function(gene_expression, gene_idx, n_cells) {
@@ -3459,9 +3811,13 @@ cellucid_prepare <- function(
       )
     }
 
+    # The key names no file any more, so the grammar constrains only the shape
+    # the caller declares. cellucid-python's _VECTOR_KEY_PATTERN is exactly
+    # this, and a key it accepts must not be refused here.
     explicit_match <- regexec(
-      "^([A-Za-z0-9][A-Za-z0-9._-]*_umap)_([123])d$",
-      input_name
+      "^(.+_umap)_([123])d$",
+      input_name,
+      perl = TRUE
     )
     explicit_parts <- regmatches(input_name, explicit_match)[[1]]
     if (length(explicit_parts) == 0L) {
@@ -3530,8 +3886,12 @@ cellucid_prepare <- function(
     )
   }
 
-  field_ids <- names(grouped)
-  .assert_unique_filename_components(field_ids, what = "Vector field ids")
+  # cellucid-python emits its validated fields in sorted key order, and the
+  # payload index is that order, so the two writers must sort identically.
+  # method = "radix" orders by code point exactly as Python's sorted() does,
+  # instead of by the session's collation locale.
+  field_ids <- sort(names(grouped), method = "radix")
+  .require_field_identities(field_ids, what = "Vector field")
 
   if (is.null(vector_field_default)) {
     if (length(field_ids) != 1L) {
@@ -3561,11 +3921,15 @@ cellucid_prepare <- function(
   fields_meta <- list()
   gz_suffix <- if (!is.null(compression)) ".gz" else ""
 
-  for (field_id in field_ids) {
+  payload_indices <- list()
+  for (idx in seq_along(field_ids)) {
+    field_id <- field_ids[[idx]]
+    payload_index <- .payload_index(idx)
+    payload_indices[[length(payload_indices) + 1L]] <- payload_index
     dimensions <- sort(as.integer(names(grouped[[field_id]])))
     files <- list()
     for (dimension in dimensions) {
-      filename <- sprintf("%s_%dd.bin", field_id, dimension)
+      filename <- sprintf("%d_%dd.bin", payload_index, dimension)
       .write_float32_matrix_row_major(
         file.path(vectors_dir, filename),
         grouped[[field_id]][[as.character(dimension)]],
@@ -3585,12 +3949,12 @@ cellucid_prepare <- function(
       basis = "umap"
     )
   }
-
   list(
     identity = list(
       default_field = default_field,
       fields = fields_meta
-    )
+    ),
+    payload_indices = payload_indices
   )
 }
 

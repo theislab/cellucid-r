@@ -512,25 +512,50 @@ test_that("categorical code width is one required exact caller choice", {
   expect_false(dir.exists(automatic_out))
 })
 
+current_contract_gene_names <- function(out_dir) {
+  manifest <- jsonlite::read_json(
+    file.path(out_dir, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  vapply(manifest$fields, function(field) field[[2L]], character(1))
+}
+
 test_that("NULL alone selects var row names and every string names one exact column", {
   gene_id_default <- formals(cellucid_prepare)$var_gene_id_column
   expect_null(gene_id_default)
+
+  # The selected axis is now visible only in the manifest: the payload files
+  # are named by index on every dataset, so no filename can report which
+  # column was chosen.
+  payload_names <- c("0.values.f32", "1.values.f32")
 
   rowname_out <- tempfile("cellucid_r_rowname_gene_ids_")
   rowname_args <- current_contract_fixture(rowname_out)
   rowname_args$obs_categorical_dtype <- "uint16"
   rowname_args$var_gene_id_column <- NULL
   do.call(cellucid_prepare, rowname_args)
-  expect_true(file.exists(file.path(rowname_out, "var", "row_gene_1.values.f32")))
-  expect_false(file.exists(file.path(rowname_out, "var", "column_gene_1.values.f32")))
+  expect_identical(
+    current_contract_gene_names(rowname_out),
+    c("row_gene_1", "row_gene_2")
+  )
+  expect_identical(
+    sort(list.files(file.path(rowname_out, "var"))),
+    payload_names
+  )
 
   column_out <- tempfile("cellucid_r_literal_index_column_")
   column_args <- current_contract_fixture(column_out)
   column_args$obs_categorical_dtype <- "uint16"
   column_args$var_gene_id_column <- "index"
   do.call(cellucid_prepare, column_args)
-  expect_true(file.exists(file.path(column_out, "var", "column_gene_1.values.f32")))
-  expect_false(file.exists(file.path(column_out, "var", "row_gene_1.values.f32")))
+  expect_identical(
+    current_contract_gene_names(column_out),
+    c("column_gene_1", "column_gene_2")
+  )
+  expect_identical(
+    sort(list.files(file.path(column_out, "var"))),
+    payload_names
+  )
 
   missing_out <- tempfile("cellucid_r_missing_gene_id_column_")
   missing_args <- current_contract_fixture(missing_out)

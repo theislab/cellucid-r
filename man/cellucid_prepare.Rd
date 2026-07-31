@@ -44,11 +44,23 @@ Every string category label must be text the viewer can show as written; see
 the note on displayed text below.}
 \item{var}{Optional \code{data.frame} of feature metadata with \code{n_genes} rows. Required if \code{gene_expression} is provided.}
 \item{gene_expression}{Optional numeric matrix-like of shape \code{(n_cells, n_genes)}. Every value must be finite and, for unquantized output, representable as a nonzero finite float32 value unless it is exactly zero. Rows are always interpreted as cells; Cellucid never transposes the matrix or infers its semantic orientation from \code{var}.}
-\item{var_gene_id_column}{Column name in \code{var} containing gene identifiers. Use \code{NULL} (default) to use \code{rownames(var)}. Every string, including \code{"index"}, names that exact column. Every identifier in the selected axis must be a non-empty string and must be distinct, because \code{gene_identifiers} addresses \code{var} rows by identifier and a repeated one names no single row.}
-\item{gene_identifiers}{Optional character vector specifying which genes to export. If \code{NULL}, all genes are exported. Identifiers must be distinct and must all be present in \code{var}. Narrowing the export narrows the filename contract with it: only the exported identifiers must be portable filename components unique under case-insensitive comparison, exactly as \code{obs_keys} narrows which observation keys are held to that rule. A \code{var} row this argument leaves out is written to no path and is not checked against it.}
+\item{var_gene_id_column}{Column name in \code{var} containing the gene names to
+record. Use \code{NULL} (default) to use \code{rownames(var)}. Every string,
+including \code{"index"}, names that exact column. Whatever this selects is
+recorded faithfully: Cellucid performs no symbol lookup and ships no mapping, so
+the caller decides what a gene is called. Every identifier in the selected axis
+must be a non-empty string and must be distinct, because \code{gene_identifiers}
+addresses \code{var} rows by identifier and a repeated one names no single row.}
+\item{gene_identifiers}{Optional character vector specifying which genes to
+export. If \code{NULL}, all genes are exported. Identifiers must be distinct and
+must all be present in \code{var}. Payload files are named by integer index, so
+an identifier is never a path; the exported ones must additionally be text the
+viewer can draw exactly as stored, exactly as \code{obs_keys} narrows which
+observation keys are held to that rule. A \code{var} row this argument leaves
+out reaches no manifest and is not checked against it.}
 \item{connectivities}{Optional adjacency/connectivity matrix of shape \code{(n_cells, n_cells)}. Sparse matrices from the \pkg{Matrix} package are supported. Weights must be finite and non-negative, the matrix must be exactly symmetric in topology and weight, sparse coordinates must be unique and omit stored zero values, and its diagonal must be exactly zero.}
 \item{out_dir}{Output directory path. Defaults to \code{file.path(getwd(), "exports")}.}
-\item{obs_keys}{Optional character vector of column names in \code{obs} to export. If \code{NULL}, all columns are exported. Numeric observation fields must contain only finite values and, for unquantized output, every nonzero value must remain nonzero and finite as float32.}
+\item{obs_keys}{Optional character vector of column names in \code{obs} to export. If \code{NULL}, all columns are exported. Exported keys must be distinct and must be text the viewer can draw exactly as stored; see the note on displayed text below. Numeric observation fields must contain only finite values and, for unquantized output, every nonzero value must remain nonzero and finite as float32.}
 \item{centroid_outlier_quantile}{Quantile of distances to keep as inliers when computing centroids for categorical fields. Set to \code{NULL} to disable centroid computation.}
 \item{centroid_min_points}{Minimum number of points in a category required to compute centroids and outlier quantiles.}
 \item{force}{If \code{TRUE}, atomically replace an existing output
@@ -106,10 +118,29 @@ The export directory includes:
 \itemize{
   \item \code{points_1d.bin}, \code{points_2d.bin}, \code{points_3d.bin} (embedding coordinates; float32 row-major; optionally gzipped)
   \item \code{obs_manifest.json} and \code{obs/} binaries for continuous values, categorical codes, and per-cell outlier quantiles
-  \item \code{var_manifest.json} and \code{var/} binaries for gene expression (one file per gene)
+  \item \code{var_manifest.json} and \code{var/} binaries for gene expression (one file per exported gene)
   \item \code{connectivity_manifest.json} and aligned \code{connectivity/edges.src.bin}, \code{edges.dst.bin}, and little-endian float64 \code{edges.weights.f64.bin} payloads for unique undirected edges
+  \item \code{vectors/} binaries for each exported vector field and dimension
   \item \code{dataset_identity.json} describing the export and available embeddings
 }
+
+Note on payload names: no exported filename carries dataset content. A payload
+on the \code{obs}, \code{var}, or \code{vectors} axis is named by the integer
+position of its field in the export -- \code{var/0.values.f32},
+\code{obs/1.codes.u8}, \code{vectors/0_2d.bin} -- and \code{connectivity/} uses
+fixed neutral names. Every dataset therefore has the same directory listing.
+Each manifest entry declares its own index as its first element, so
+\code{fields} entries read \code{[index, name]} or
+\code{[index, name, minValue, maxValue]}, \code{_continuousFields} entries read
+\code{[index, key]} or \code{[index, key, minValue, maxValue]}, and
+\code{_categoricalFields} entries read \code{[index, key, categories, dtype,
+sentinel, centroids]} with \code{outlierMinValue} and \code{outlierMaxValue}
+appended when the generated quantiles are quantized. The schema path patterns
+\code{pathPattern}, \code{codesPathPattern}, and \code{outlierPathPattern}
+substitute \code{\{index\}}. Within one axis directory the indices are exactly
+\code{0} through \code{N-1} with each used once; \code{obs/} is written by both
+manifest arrays, so those two arrays share one index space. The
+\code{cellucid} Python package writes the identical layout.
 
 Note on gene expression orientation: \code{gene_expression} must be shaped
 \code{(n_cells, n_genes)} (cells as rows, genes as columns). Many R single-cell
@@ -124,15 +155,18 @@ embedding/vector scaling, must have an absolute magnitude from \code{2^-149}
 through \code{(2 - 2^-23) * 2^127}; values that would become zero or infinity
 in the file are rejected before publication. Quantized continuous values and
 their manifest bounds are derived only after round-tripping through the
-viewer's float32 domain. Source variation that collapses to one float32 value
-is rejected rather than advertised as quantized variation that the viewer
-cannot display. An individual nonzero source value may round to zero when the
-resulting float32 range remains non-collapsed. Categorical outlier quantiles are
+viewer's float32 domain. A field whose exported values are all one float32
+value -- including source variation that collapses to one under float32
+rounding -- is published as a constant field: equal manifest bounds and every
+code \code{0}, which the viewer decodes back to that exact value. An
+individual nonzero source value may round to zero when the resulting float32
+range remains non-collapsed. Categorical outlier quantiles are
 generated internally; cells in categories smaller than
 \code{centroid_min_points} carry \code{NaN}, encoded with the reserved integer
 marker only when those generated quantiles are quantized.
 
-Note on displayed text: a category label, \code{dataset_name},
+Note on displayed text: a category label, an exported gene name, an exported
+\code{obs} key, a vector-field id, \code{dataset_name},
 \code{dataset_description}, \code{source_name}, \code{source_url}, and
 \code{source_citation} are drawn verbatim in the viewer's legend, its field
 selector, and every exported figure, so a character with no glyph changes the
@@ -148,16 +182,23 @@ rewrite an annotation the caller never asked to change, and would merge
 them. The rejection names every offending label in the field at once. The
 \code{cellucid} Python package enforces the identical rule.
 
-Note on filename safety: gene IDs, obs keys, dataset IDs, and vector-field IDs
-must already be 1--180-byte portable ASCII filename components. They begin with
-a letter or digit, contain only letters, digits, \code{.}, \code{_}, or
-\code{-}, do not end with \code{.}, are not Windows device names, and are
-unique under case-insensitive filesystem comparison. This holds for the
-identifiers that are exported, because the rule is about the file each one is
-written to: \code{obs_keys} and \code{gene_identifiers} narrow the export and
-narrow this rule with it. Gene IDs carry one further rule that is not about
-paths and is therefore not narrowed -- every ID in \code{var} must be a
-non-empty string and must be distinct.
+Note on field identity: a payload filename is an integer index, so a gene name,
+an \code{obs} key, and a vector-field id are never paths and carry no filename
+rule -- no ASCII restriction, no case-insensitive collision rule, and no
+Windows device-name rule. What each one must be is what it is for: a non-empty
+string, distinct within its axis so a lookup resolves one field, and text the
+viewer can draw exactly as it is stored, because a gene name and a category
+label appear in the same legend. The rule covers the identifiers that are
+exported: \code{obs_keys} and \code{gene_identifiers} narrow the export and
+narrow this rule with it, and a \code{var} row left out reaches no manifest.
+Gene IDs carry one further rule that spans the whole \code{var} and is
+therefore not narrowed -- every ID must be a non-empty string and must be
+distinct, because \code{gene_identifiers} addresses \code{var} rows by
+identifier. \code{dataset_id} is the one identifier that still names a
+directory, so it must be a 1--180-byte portable ASCII filename component: it
+begins with a letter or digit, contains only letters, digits, \code{.},
+\code{_}, or \code{-}, does not end with \code{.}, and is not a Windows device
+name.
 }
 \examples{
 latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)

@@ -40,14 +40,335 @@ test_that("cellucid_prepare writes expected core files", {
   expect_true(file.exists(file.path(out, "var_manifest.json")))
   expect_true(file.exists(file.path(out, "dataset_identity.json")))
 
+  # Every payload path is an index, so the directory listing is the same on
+  # every dataset and carries none of this dataset's vocabulary.
   obs_dir <- file.path(out, "obs")
-  expect_true(file.exists(file.path(obs_dir, "cluster.codes.u8")))
-  expect_true(file.exists(file.path(obs_dir, "cluster.outliers.f32")))
-  expect_true(file.exists(file.path(obs_dir, "score.values.f32")))
+  expect_identical(
+    sort(list.files(obs_dir)),
+    c("0.codes.u8", "0.outliers.f32", "1.values.f32")
+  )
 
   var_dir <- file.path(out, "var")
-  expect_true(file.exists(file.path(var_dir, "G1.values.f32")))
-  expect_true(file.exists(file.path(var_dir, "G2.values.f32")))
+  expect_identical(
+    sort(list.files(var_dir)),
+    c("0.values.f32", "1.values.f32")
+  )
+
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$continuous$pathPattern,
+    "obs/{index}.values.f32"
+  )
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$categorical$codesPathPattern,
+    "obs/{index}.codes.{ext}"
+  )
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$categorical$outlierPathPattern,
+    "obs/{index}.outliers.f32"
+  )
+  expect_identical(obs_manifest[["_continuousFields"]][[1L]], list(1L, "score"))
+  expect_identical(obs_manifest[["_categoricalFields"]][[1L]][[1L]], 0L)
+  expect_identical(obs_manifest[["_categoricalFields"]][[1L]][[2L]], "cluster")
+
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    var_manifest[["_varSchema"]]$pathPattern,
+    "var/{index}.values.f32"
+  )
+  expect_identical(
+    var_manifest$fields,
+    list(list(0L, "G1"), list(1L, "G2"))
+  )
+})
+
+# Identifiers that no filesystem could carry, and that no longer have to. The
+# cellucid Python package holds the identical set in its own contract test.
+.hostile_obs_keys <- c("% mito", "cell type", "CON", "Field", "field")
+.hostile_gene_names <- c(
+  "HLA-DRB1/2", "NUL.txt", "trailing.", "細胞", "Gene", "gene"
+)
+
+.hostile_export <- function(out, ...) {
+  n_cells <- 6L
+  coordinates <- matrix(
+    c(0, 0, 1, 0, 0, 1, 1, 1, 0.5, 0.25, 0.25, 0.75),
+    ncol = 2,
+    byrow = TRUE
+  )
+  # Distinct within-category distances, so the generated outlier quantiles vary
+  # and the quantized variant of this export is encodable.
+  latent <- matrix(
+    c(0, 0, 3, 0, 0.5, 0, 7, 0, 1.5, 0, 9, 0),
+    ncol = 2,
+    byrow = TRUE
+  )
+  connectivities <- matrix(0, nrow = n_cells, ncol = n_cells)
+  for (edge in list(c(1, 2), c(2, 3), c(3, 4), c(4, 5), c(5, 6))) {
+    connectivities[edge[[1]], edge[[2]]] <- 0.5
+    connectivities[edge[[2]], edge[[1]]] <- 0.5
+  }
+
+  obs <- data.frame(
+    `% mito` = seq(0, 1, length.out = n_cells),
+    `cell type` = factor(c("a", "a", "a", "b", "b", "b")),
+    CON = factor(c("x", "y", "y", "y", "x", "x")),
+    Field = seq(1, 2, length.out = n_cells),
+    field = seq(3, 4, length.out = n_cells),
+    check.names = FALSE
+  )
+  expect_identical(names(obs), .hostile_obs_keys)
+
+  var <- data.frame(row.names = .hostile_gene_names)
+  expression <- matrix(
+    as.numeric(seq_len(n_cells * length(.hostile_gene_names))),
+    nrow = n_cells,
+    ncol = length(.hostile_gene_names)
+  )
+
+  arguments <- list(
+    dataset_id = "payload-index",
+    dataset_name = "Payload index",
+    created_at = "2026-01-01T00:00:00Z",
+    latent_space = latent,
+    obs = obs,
+    var = var,
+    gene_expression = expression,
+    connectivities = connectivities,
+    X_umap_2d = coordinates,
+    vector_fields = list(
+      Velocity_umap_2d = coordinates * 0.25,
+      velocity_umap_2d = coordinates * 0.5
+    ),
+    vector_field_default = "Velocity_umap",
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  do.call(cellucid_prepare, utils::modifyList(arguments, list(...)))
+  out
+}
+
+test_that("identifiers that can never be filenames export without complaint", {
+  out <- .hostile_export(tempfile("cellucid_r_hostile_identifiers_"))
+
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  exported_obs_keys <- c(
+    vapply(obs_manifest[["_continuousFields"]], `[[`, character(1), 2L),
+    vapply(obs_manifest[["_categoricalFields"]], `[[`, character(1), 2L)
+  )
+  expect_setequal(exported_obs_keys, .hostile_obs_keys)
+  expect_identical(
+    vapply(var_manifest$fields, `[[`, character(1), 2L),
+    .hostile_gene_names
+  )
+})
+
+test_that("no payload filename carries any identifier", {
+  out <- .hostile_export(tempfile("cellucid_r_neutral_paths_"))
+
+  indexed_payload <- "^(0|[1-9][0-9]*)\\.(values|codes|outliers)\\.(f32|u8|u16)$"
+  for (directory in c("obs", "var")) {
+    names <- sort(list.files(file.path(out, directory)))
+    expect_gt(length(names), 0L)
+    expect_true(all(grepl(indexed_payload, names)), info = directory)
+  }
+  expect_true(
+    all(grepl(
+      "^(0|[1-9][0-9]*)_[123]d\\.bin$",
+      list.files(file.path(out, "vectors"))
+    ))
+  )
+  expect_identical(
+    sort(list.files(file.path(out, "connectivity"))),
+    c("edges.dst.bin", "edges.src.bin", "edges.weights.f64.bin")
+  )
+
+  # Nothing anywhere in the tree spells any identifier, including the sanitized
+  # forms an escaping scheme would have produced.
+  written <- list.files(out, recursive = TRUE, all.files = TRUE)
+  joined <- paste(written, collapse = "\n")
+  identifiers <- c(
+    .hostile_obs_keys,
+    .hostile_gene_names,
+    "Velocity_umap",
+    "velocity_umap"
+  )
+  for (identifier in identifiers) {
+    expect_false(grepl(identifier, joined, fixed = TRUE), info = identifier)
+    expect_false(
+      grepl(
+        gsub("/", "_", gsub(" ", "_", identifier, fixed = TRUE), fixed = TRUE),
+        joined,
+        fixed = TRUE
+      ),
+      info = identifier
+    )
+  }
+  expect_setequal(
+    written,
+    c(
+      "points_2d.bin",
+      "obs_manifest.json",
+      "var_manifest.json",
+      "connectivity_manifest.json",
+      "dataset_identity.json",
+      file.path("obs", c(
+        "0.values.f32",
+        "1.codes.u16", "1.outliers.f32",
+        "2.codes.u16", "2.outliers.f32",
+        "3.values.f32",
+        "4.values.f32"
+      )),
+      file.path("var", sprintf("%d.values.f32", 0:5)),
+      file.path(
+        "connectivity",
+        c("edges.src.bin", "edges.dst.bin", "edges.weights.f64.bin")
+      ),
+      file.path("vectors", c("0_2d.bin", "1_2d.bin"))
+    )
+  )
+})
+
+test_that("obs indices are one dense space shared by both field arrays", {
+  out <- .hostile_export(tempfile("cellucid_r_shared_obs_index_"))
+  manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  continuous <- manifest[["_continuousFields"]]
+  categorical <- manifest[["_categoricalFields"]]
+
+  # The space follows the obs column order, so it interleaves the two arrays.
+  expect_identical(
+    lapply(continuous, function(field) field[1:2]),
+    list(list(0L, "% mito"), list(3L, "Field"), list(4L, "field"))
+  )
+  expect_identical(
+    lapply(categorical, function(field) field[1:2]),
+    list(list(1L, "cell type"), list(2L, "CON"))
+  )
+  indices <- c(
+    vapply(continuous, `[[`, integer(1), 1L),
+    vapply(categorical, `[[`, integer(1), 1L)
+  )
+  expect_identical(sort(indices), 0:4)
+})
+
+test_that("var and vector indices are dense and position based", {
+  out <- .hostile_export(tempfile("cellucid_r_dense_var_vector_index_"))
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    vapply(var_manifest$fields, `[[`, integer(1), 1L),
+    seq_along(.hostile_gene_names) - 1L
+  )
+
+  identity <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  # Both writers emit vector fields in code-point order of their ids, so the
+  # same input receives the same payload index in either language.
+  expect_identical(
+    lapply(identity$vector_fields$fields, function(field) field$files),
+    list(
+      Velocity_umap = list(`2d` = "vectors/0_2d.bin"),
+      velocity_umap = list(`2d` = "vectors/1_2d.bin")
+    )
+  )
+})
+
+test_that("manifest path patterns substitute the index", {
+  out <- .hostile_export(tempfile("cellucid_r_index_path_patterns_"))
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$continuous$pathPattern,
+    "obs/{index}.values.f32"
+  )
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$categorical,
+    list(
+      codesPathPattern = "obs/{index}.codes.{ext}",
+      outlierPathPattern = "obs/{index}.outliers.f32",
+      outlierExt = "f32",
+      outlierDtype = "float32",
+      outlierQuantized = FALSE
+    )
+  )
+  expect_identical(
+    var_manifest[["_varSchema"]]$pathPattern,
+    "var/{index}.values.f32"
+  )
+})
+
+test_that("quantized entries keep the index and gain their bounds", {
+  out <- .hostile_export(
+    tempfile("cellucid_r_quantized_index_entries_"),
+    var_quantization = 8,
+    obs_continuous_quantization = 8,
+    compression = 6
+  )
+
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    var_manifest[["_varSchema"]]$pathPattern,
+    "var/{index}.values.u8.gz"
+  )
+  for (position in seq_along(var_manifest$fields)) {
+    field <- var_manifest$fields[[position]]
+    expect_length(field, 4L)
+    expect_identical(field[[1L]], position - 1L)
+    expect_identical(field[[2L]], .hostile_gene_names[[position]])
+    expect_lt(field[[3L]], field[[4L]])
+  }
+
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$continuous$pathPattern,
+    "obs/{index}.values.u8.gz"
+  )
+  expect_identical(
+    obs_manifest[["_obsSchemas"]]$categorical$outlierPathPattern,
+    "obs/{index}.outliers.u8.gz"
+  )
+  for (field in obs_manifest[["_continuousFields"]]) {
+    expect_length(field, 4L)
+  }
+  for (field in obs_manifest[["_categoricalFields"]]) {
+    expect_length(field, 8L)
+  }
+  expect_true(all(endsWith(list.files(file.path(out, "obs")), ".gz")))
 })
 
 test_that("identity obs fields follow emitted compact manifest order", {
@@ -85,15 +406,15 @@ test_that("identity obs fields follow emitted compact manifest order", {
   manifest_order <- c(
     lapply(
       manifest[["_continuousFields"]],
-      function(field) list(key = field[[1]], kind = "continuous")
+      function(field) list(key = field[[2]], kind = "continuous")
     ),
     lapply(
       manifest[["_categoricalFields"]],
       function(field) {
         list(
-          key = field[[1]],
+          key = field[[2]],
           kind = "category",
-          n_categories = length(field[[2]])
+          n_categories = length(field[[3]])
         )
       }
     )
@@ -107,6 +428,175 @@ test_that("identity obs fields follow emitted compact manifest order", {
   expect_identical(identity$stats$n_obs_fields, 4L)
   expect_identical(identity$stats$n_continuous_fields, 2L)
   expect_identical(identity$stats$n_categorical_fields, 2L)
+
+  # obs/ is written by both arrays, so their declared indices are one shared
+  # space: exactly the obs_keys positions, 0..3, each used once.
+  expect_identical(
+    vapply(manifest[["_continuousFields"]], `[[`, integer(1), 1L),
+    c(1L, 3L)
+  )
+  expect_identical(
+    vapply(manifest[["_categoricalFields"]], `[[`, integer(1), 1L),
+    c(0L, 2L)
+  )
+  expect_identical(
+    sort(list.files(file.path(out, "obs"))),
+    c(
+      "0.codes.u16", "0.outliers.f32",
+      "1.values.f32",
+      "2.codes.u16", "2.outliers.f32",
+      "3.values.f32"
+    )
+  )
+})
+
+test_that("the writer refuses a payload index space it cannot write once", {
+  expect_error(
+    cellucid:::.require_dense_payload_indices(
+      list(0L, 1L, 1L),
+      axis = "Observation"
+    ),
+    paste0(
+      "^Observation payload indices must be exactly 0\\.\\.2, each used once; ",
+      "got \\[0, 1, 1\\]\\.$"
+    )
+  )
+  expect_error(
+    cellucid:::.require_dense_payload_indices(list(0L, 2L), axis = "Gene"),
+    "^Gene payload indices must be exactly 0\\.\\.1, each used once; got \\[0, 2\\]\\.$"
+  )
+  expect_error(
+    cellucid:::.require_dense_payload_indices(list(0L, 1), axis = "Gene"),
+    "^Gene payload index at position 1 must be a native integer\\.$"
+  )
+  expect_identical(
+    cellucid:::.require_dense_payload_indices(list(1L, 0L), axis = "Gene"),
+    c(1L, 0L)
+  )
+  expect_identical(
+    cellucid:::.require_dense_payload_indices(list(), axis = "Gene"),
+    integer(0)
+  )
+})
+
+test_that("an emitted manifest whose entries collide on one index is rejected", {
+  colliding_obs <- list(
+    `_format` = "compact_v1",
+    n_points = 2L,
+    centroid_outlier_quantile = NULL,
+    latent_key = "latent_space",
+    compression = NULL,
+    `_obsSchemas` = list(),
+    `_continuousFields` = list(list(0L, "score")),
+    `_categoricalFields` = list(
+      list(0L, "cluster", I("A"), "uint8", 255L, list())
+    )
+  )
+  expect_error(
+    cellucid:::.identity_obs_fields_from_compact_manifest(colliding_obs),
+    "^Observation payload indices must be exactly 0\\.\\.1, each used once"
+  )
+
+  expect_error(
+    cellucid:::.gene_names_from_compact_manifest(
+      list(fields = list(list(0L, "TNMD"), list(0L, "CIITA")))
+    ),
+    "^Gene payload indices must be exactly 0\\.\\.1, each used once"
+  )
+  expect_error(
+    cellucid:::.gene_names_from_compact_manifest(
+      list(fields = list(list(0L, "TNMD"), list(1L, "TNMD")))
+    ),
+    "^Gene key 'TNMD' is duplicated\\.$"
+  )
+  expect_error(
+    cellucid:::.gene_names_from_compact_manifest(
+      list(fields = list(list("0", "TNMD")))
+    ),
+    "^Gene payload index at position 0 must be a native integer\\.$"
+  )
+  expect_identical(
+    cellucid:::.gene_names_from_compact_manifest(
+      list(fields = list(list(0L, "TNMD"), list(1L, "CIITA")))
+    ),
+    c("TNMD", "CIITA")
+  )
+})
+
+test_that("a payload pattern must resolve to one complete path", {
+  expect_identical(
+    cellucid:::.expand_payload_pattern(
+      "obs/{index}.codes.{ext}.gz",
+      index = 3L,
+      label = "obs categorical codesPathPattern",
+      ext = "u16"
+    ),
+    "obs/3.codes.u16.gz"
+  )
+  expect_error(
+    cellucid:::.expand_payload_pattern(
+      "obs/{index}.codes.{ext}",
+      index = 3L,
+      label = "obs categorical codesPathPattern"
+    ),
+    paste0(
+      "^obs categorical codesPathPattern retains an unsubstituted ",
+      "placeholder: 'obs/3\\.codes\\.\\{ext\\}'\\.$"
+    )
+  )
+  expect_error(
+    cellucid:::.expand_payload_pattern(NULL, index = 0L, label = "var pathPattern"),
+    "^var pathPattern must be a non-empty path pattern\\.$"
+  )
+})
+
+test_that("an axis directory must hold exactly the payloads its manifest declares", {
+  root <- tempfile("cellucid_r_declared_payloads_")
+  dir.create(file.path(root, "var"), recursive = TRUE)
+  writeBin(raw(1L), file.path(root, "var", "0.values.f32"))
+
+  expect_identical(
+    cellucid:::.require_declared_payloads_on_disk(
+      root,
+      directory_name = "var",
+      declared = "var/0.values.f32",
+      axis = "Gene"
+    ),
+    "var/0.values.f32"
+  )
+  expect_error(
+    cellucid:::.require_declared_payloads_on_disk(
+      root,
+      directory_name = "var",
+      declared = c("var/0.values.f32", "var/1.values.f32"),
+      axis = "Gene"
+    ),
+    paste0(
+      "^Gene manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: var/1\\.values\\.f32\\. Written but undeclared: \\.$"
+    )
+  )
+  writeBin(raw(1L), file.path(root, "var", "stray.bin"))
+  expect_error(
+    cellucid:::.require_declared_payloads_on_disk(
+      root,
+      directory_name = "var",
+      declared = "var/0.values.f32",
+      axis = "Gene"
+    ),
+    "Written but undeclared: var/stray\\.bin\\.$"
+  )
+})
+
+test_that("payload positions are one-based and become zero-based indices", {
+  expect_identical(cellucid:::.payload_index(1L), 0L)
+  expect_identical(cellucid:::.payload_index(4), 3L)
+  for (invalid in list(0L, -1L, 1.5, NA_integer_, c(1L, 2L), "1", Inf)) {
+    expect_error(
+      cellucid:::.payload_index(invalid),
+      "^Payload position must be one positive integer\\.$"
+    )
+  }
 })
 
 test_that("force FALSE refuses to mix with an existing generation", {
@@ -881,7 +1371,7 @@ test_that("unsafe export lock paths are rejected without mutation", {
   expect_identical(readLines(victim), "must remain unchanged")
 })
 
-test_that("manifest field keys must already be portable filenames", {
+test_that("dataset_id is the one identifier that still names a directory", {
   expect_error(
     cellucid:::.safe_filename_component(".."),
     "portable identifier"
@@ -901,74 +1391,116 @@ test_that("manifest field keys must already be portable filenames", {
     )
   }
   expect_error(
-    cellucid:::.assert_unique_filename_components(
-      c("Gene", "gene"),
-      "Gene identifiers"
-    ),
-    "case-insensitive filesystems"
+    cellucid:::.validate_dataset_id("bad id!"),
+    "^dataset_id 'bad id!' is not a portable identifier\\. "
   )
+  expect_identical(cellucid:::.validate_dataset_id("neutral-paths"), "neutral-paths")
 })
 
-test_that("filename component rejections name the caller's identifier axis", {
+test_that("identifier axes are held to distinctness and to being drawable", {
+  # The nouns cellucid_prepare() actually passes. They are singular because
+  # they are read as the subject of "<what> identifier at position N ...",
+  # which is the sentence cellucid-python composes from the same nouns.
   callers <- c(
-    "Gene identifiers",
-    "Observation field keys",
-    "obs_keys",
-    "Vector field ids"
+    "Gene",
+    "Observation field",
+    "Vector field"
   )
 
   for (what in callers) {
     expect_error(
-      cellucid:::.assert_unique_filename_components(c("ok", "bad id!"), what),
-      paste0("^", what, " 'bad id!' is not a portable identifier\\. ")
+      cellucid:::.require_field_identities(c("Gene", "Gene"), what),
+      paste0("^", what, " key 'Gene' is duplicated\\.$")
     )
     expect_error(
-      cellucid:::.assert_unique_filename_components(c("ok", "CON"), what),
-      paste0("^", what, " 'CON' is reserved on Windows\\.$")
+      cellucid:::.require_field_identities(c("ok", ""), what),
+      paste0("^", what, " keys must contain only non-missing, non-empty strings\\.$")
+    )
+    # A gene name and a category label are drawn in the same legend, so an
+    # identifier obeys the rule every category label obeys.
+    expect_error(
+      cellucid:::.require_field_identities(c("ok", "Liver "), what),
+      paste0(
+        "^", what, " identifier at position 1 is displayed verbatim, so it ",
+        "must not carry characters that have no glyph"
+      )
     )
     expect_error(
-      cellucid:::.assert_unique_filename_components(c("ok", ""), what),
-      paste0("^", what, " must contain only non-empty strings\\.$")
+      cellucid:::.require_field_identities(paste0("a", "\u200b", "b"), what),
+      paste0("^", what, " identifier at position 0 is displayed verbatim")
     )
-    expect_error(
-      cellucid:::.assert_unique_filename_components(c("Gene", "gene"), what),
-      paste0("^", what, " contains names that collide on case-insensitive ")
+    # Payload paths are indices, so an identifier's spelling can no longer
+    # collide with another identifier's file on any filesystem.
+    expect_identical(
+      cellucid:::.require_field_identities(
+        c("Gene", "gene", "bad id!", "CON", "trailing.", "HLA-DRB1/2"),
+        what
+      ),
+      c("Gene", "gene", "bad id!", "CON", "trailing.", "HLA-DRB1/2")
     )
   }
-
-  expect_identical(
-    unname(cellucid:::.assert_unique_filename_components(
-      c("alpha", "beta.gamma"),
-      "obs_keys"
-    )),
-    c("alpha", "beta.gamma")
-  )
 })
 
-test_that("a rejected vector field id is reported as a vector field id", {
-  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
-  obs <- data.frame(group = factor(c("A", "B")))
-  umap2 <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
-  out <- tempfile("cellucid_r_reserved_vector_id_")
-
-  expect_error(
-    cellucid_prepare(
-      dataset_id = "test-dataset",
-      dataset_name = "Test dataset",
-      latent_space = latent,
-      obs = obs,
-      X_umap_2d = umap2,
-      vector_fields = list(
-        CON.velocity_umap_2d = matrix(c(1, 0, 1, 0), ncol = 2, byrow = TRUE)
-      ),
-      out_dir = out,
-      centroid_min_points = 1,
-      force = TRUE,
-      obs_categorical_dtype = "uint16"
-    ),
-    "^Vector field ids 'CON\\.velocity_umap' is reserved on Windows\\.$"
+test_that("identifiers no filesystem could hold are exported verbatim", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(
+    CON = factor(c("A", "A", "B")),
+    `sample score (%)` = c(0.1, 0.2, 0.3),
+    check.names = FALSE
   )
-  expect_false(dir.exists(out))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
+  var <- data.frame(symbol = c("Gene", "gene"))
+  rownames(var) <- c("row_1", "row_2")
+
+  out <- tempfile("cellucid_r_unportable_identifiers_")
+  cellucid_prepare(
+    dataset_id = "unportable-identifiers",
+    dataset_name = "Unportable identifiers",
+    latent_space = latent,
+    obs = obs,
+    var = var,
+    var_gene_id_column = "symbol",
+    gene_expression = expr,
+    X_umap_2d = umap2,
+    vector_fields = list(
+      CON.velocity_umap_2d = matrix(c(1, 0, 1, 0, 1, 0), ncol = 2, byrow = TRUE)
+    ),
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(obs_manifest[["_categoricalFields"]][[1L]][[2L]], "CON")
+  expect_identical(
+    obs_manifest[["_continuousFields"]][[1L]],
+    list(1L, "sample score (%)")
+  )
+
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    var_manifest$fields,
+    list(list(0L, "Gene"), list(1L, "gene"))
+  )
+
+  identity <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(identity$vector_fields$default_field, "CON.velocity_umap")
+  expect_identical(
+    identity$vector_fields$fields[["CON.velocity_umap"]]$files[["2d"]],
+    "vectors/0_2d.bin"
+  )
+  expect_identical(list.files(file.path(out, "vectors")), "0_2d.bin")
 })
 
 test_that("categorical storage uses the exact portable code capacities", {
@@ -1483,11 +2015,11 @@ test_that("singleton scientific arrays remain JSON arrays", {
 
   expect_identical(identity$embeddings$available_dimensions, list(1L))
   expect_identical(
-    manifest[["_categoricalFields"]][[1]][[2]],
+    manifest[["_categoricalFields"]][[1]][[3]],
     list("A")
   )
   expect_identical(
-    manifest[["_categoricalFields"]][[1]][[5]][["1"]][[1]]$position,
+    manifest[["_categoricalFields"]][[1]][[6]][["1"]][[1]]$position,
     list(0L)
   )
 })
@@ -1510,14 +2042,6 @@ test_that("invalid centroid and quantization domains are rejected", {
       field_name = "all-invalid"
     ),
     "contains no finite values"
-  )
-  expect_error(
-    cellucid:::.quantize_continuous(
-      c(3, 3),
-      bits = 8,
-      field_name = "constant"
-    ),
-    "all values are constant"
   )
   expect_error(
     cellucid:::.quantize_continuous(
@@ -1553,14 +2077,18 @@ test_that("quantization owns the viewer-visible float32 value domain", {
     )
   }
 
-  expect_error(
-    cellucid:::.quantize_continuous(
-      c(1, 1 + 1e-8, 1 + 2e-8),
-      bits = 8L,
-      field_name = "collapsed"
-    ),
-    "variation collapses to one value.*float32 domain"
+  # Native-double variation finer than float32 resolution is one float32 value,
+  # which is one constant, and constants have an encoding.
+  collapsed <- cellucid:::.quantize_continuous(
+    c(1, 1 + 1e-8, 1 + 2e-8),
+    bits = 8L,
+    field_name = "collapsed"
   )
+  expect_identical(collapsed$quantized, c(0L, 0L, 0L))
+  expect_identical(collapsed$min_val, 1)
+  expect_identical(collapsed$max_val, 1)
+  expect_identical(collapsed$scale, 0)
+
   expect_error(
     cellucid:::.quantize_continuous(
       c(0, 2^128),
@@ -1626,49 +2154,293 @@ test_that("quantization owns the viewer-visible float32 value domain", {
   expect_identical(observed_chunk_lengths, c(2L, 1L, 2L, 1L))
 })
 
-test_that("public quantized fields reject float32-collapsed variation atomically", {
-  values <- c(1, 1 + 1e-8, 1 + 2e-8)
-  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
-  embedding <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
-  base_args <- list(
-    dataset_id = "float32-quantization",
-    dataset_name = "Float32 quantization",
-    latent_space = latent,
-    X_umap_2d = embedding,
-    centroid_min_points = 1L,
-    force = TRUE,
-    obs_categorical_dtype = "uint16"
-  )
-  cases <- list(
-    observation = list(
-      obs = data.frame(score = values),
-      obs_continuous_quantization = 8L
+# A gene expressed at one level in every published cell -- very often zero, once
+# an atlas is subset to one lineage -- is ordinary scientific data, and so is an
+# obs column a subset flattened. compact_v1 publishes such a field as equal
+# bounds with every code 0, so dequantization returns the exact constant
+# instead of an approximation and nothing divides by (maxValue - minValue).
+# The Python exporter is asserted against the same contract in
+# cellucid-python/tests/test_prepare_data_constant_field_contract.py.
+.constant_field_export <- function(out, ...) {
+  n_cells <- 6L
+  cellucid_prepare(
+    out_dir = out,
+    dataset_id = "constant-fields",
+    dataset_name = "Constant fields",
+    latent_space = matrix(
+      c(0, 0, 3, 0, 0.5, 0, 7, 0, 1.5, 0, 9, 0),
+      ncol = 2,
+      byrow = TRUE
     ),
-    gene = list(
-      obs = data.frame(group = factor(c("A", "B", "C"))),
-      var = data.frame(row.names = "GENE"),
-      gene_expression = matrix(values, ncol = 1L),
-      var_quantization = 8L
+    X_umap_2d = matrix(
+      c(0, 0, 1, 0, 0, 1, 1, 1, 0.5, 0.25, 0.25, 0.75),
+      ncol = 2,
+      byrow = TRUE
+    ),
+    obs = data.frame(
+      group = factor(c("a", "a", "a", "b", "b", "b")),
+      flat = rep(1.5, n_cells),
+      zeroed = rep(0, n_cells),
+      varies = seq(0, 1, length.out = n_cells)
+    ),
+    var = data.frame(row.names = c("ZERO", "CONST", "NORM")),
+    gene_expression = cbind(
+      rep(0, n_cells),
+      rep(2.5, n_cells),
+      seq(0.5, 1.5, length.out = n_cells)
+    ),
+    centroid_min_points = 1L,
+    obs_categorical_dtype = "uint16",
+    force = TRUE,
+    ...
+  )
+  out
+}
+
+.read_payload_codes <- function(out, path_pattern, payload_index, size, n) {
+  relative <- sub("{index}", payload_index, path_pattern, fixed = TRUE)
+  connection <- gzfile(file.path(out, relative), "rb")
+  on.exit(close(connection))
+  readBin(
+    connection,
+    what = "integer",
+    size = size,
+    n = n,
+    signed = FALSE,
+    endian = "little"
+  )
+}
+
+.read_payload_float32 <- function(out, path_pattern, payload_index, n) {
+  relative <- sub("{index}", payload_index, path_pattern, fixed = TRUE)
+  connection <- gzfile(file.path(out, relative), "rb")
+  on.exit(close(connection))
+  readBin(
+    connection,
+    what = "double",
+    size = 4L,
+    n = n,
+    endian = "little"
+  )
+}
+
+# Decode exactly as dequantize() in the viewer's data-loaders.js does: the
+# expression is evaluated in double precision and stored into a Float32Array.
+.viewer_dequantize <- function(codes, minimum, maximum, bits) {
+  max_quant <- if (bits == 8L) 254 else 65534
+  decoded <- minimum + codes * ((maximum - minimum) / max_quant)
+  readBin(
+    writeBin(decoded, raw(), size = 4L, endian = "little"),
+    what = double(),
+    n = length(decoded),
+    size = 4L,
+    endian = "little"
+  )
+}
+
+.manifest_entry <- function(entries, name) {
+  for (entry in entries) {
+    if (identical(entry[[2L]], name)) {
+      return(entry)
+    }
+  }
+  stop("no manifest entry named '", name, "'")
+}
+
+# JSON carries one number type, so a whole-valued bound parses back as an R
+# integer. The published value is the number, not the R storage mode it lands
+# in, and the viewer reads both as one Number.
+.manifest_bounds <- function(entry) {
+  c(as.double(entry[[3L]]), as.double(entry[[4L]]))
+}
+
+for (bits in c(8L, 16L)) {
+  local({
+    bits <- bits
+    test_that(
+      paste0(
+        "constant genes and obs fields round-trip exactly at ",
+        bits,
+        " bits"
+      ),
+      {
+        n_cells <- 6L
+        out <- .constant_field_export(
+          tempfile(paste0("cellucid_r_constant_", bits, "bit_")),
+          var_quantization = bits,
+          obs_continuous_quantization = bits,
+          compression = 6
+        )
+        code_size <- if (bits == 8L) 1L else 2L
+
+        var_manifest <- jsonlite::read_json(
+          file.path(out, "var_manifest.json"),
+          simplifyVector = FALSE
+        )
+        var_pattern <- var_manifest[["_varSchema"]]$pathPattern
+        obs_manifest <- jsonlite::read_json(
+          file.path(out, "obs_manifest.json"),
+          simplifyVector = FALSE
+        )
+        obs_pattern <- obs_manifest[["_obsSchemas"]]$continuous$pathPattern
+
+        constants <- list(
+          list(entries = var_manifest$fields, pattern = var_pattern,
+               name = "ZERO", value = 0),
+          list(entries = var_manifest$fields, pattern = var_pattern,
+               name = "CONST", value = 2.5),
+          list(entries = obs_manifest[["_continuousFields"]],
+               pattern = obs_pattern, name = "flat", value = 1.5),
+          list(entries = obs_manifest[["_continuousFields"]],
+               pattern = obs_pattern, name = "zeroed", value = 0)
+        )
+        for (constant in constants) {
+          entry <- .manifest_entry(constant$entries, constant$name)
+          expect_length(entry, 4L)
+          bounds <- .manifest_bounds(entry)
+          # The manifest declares the constant case: equal bounds, both the
+          # constant itself.
+          expect_identical(bounds[[1L]], constant$value, info = constant$name)
+          expect_identical(bounds[[2L]], constant$value, info = constant$name)
+          codes <- .read_payload_codes(
+            out,
+            constant$pattern,
+            entry[[1L]],
+            size = code_size,
+            n = n_cells
+          )
+          # Every code is 0: the writer never derived a scale for this field.
+          expect_identical(codes, integer(n_cells), info = constant$name)
+          # The general dequantization arithmetic stays exact and finite: it
+          # divides by maxQuant, never by (maxValue - minValue).
+          decoded <- .viewer_dequantize(
+            codes,
+            bounds[[1L]],
+            bounds[[2L]],
+            bits
+          )
+          expect_identical(
+            decoded,
+            rep(constant$value, n_cells),
+            info = constant$name
+          )
+          expect_true(all(is.finite(decoded)), info = constant$name)
+        }
+
+        # A field the writer took the general path for still reaches both
+        # terminal codes and keeps distinct bounds.
+        max_quant <- if (bits == 8L) 254L else 65534L
+        for (varying in list(
+          list(entries = var_manifest$fields, pattern = var_pattern,
+               name = "NORM"),
+          list(entries = obs_manifest[["_continuousFields"]],
+               pattern = obs_pattern, name = "varies")
+        )) {
+          entry <- .manifest_entry(varying$entries, varying$name)
+          bounds <- .manifest_bounds(entry)
+          expect_lt(bounds[[1L]], bounds[[2L]])
+          codes <- .read_payload_codes(
+            out,
+            varying$pattern,
+            entry[[1L]],
+            size = code_size,
+            n = n_cells
+          )
+          expect_identical(min(codes), 0L, info = varying$name)
+          expect_identical(max(codes), max_quant, info = varying$name)
+        }
+      }
     )
+  })
+}
+
+test_that("constant genes and obs fields round-trip exactly unquantized", {
+  n_cells <- 6L
+  out <- .constant_field_export(
+    tempfile("cellucid_r_constant_f32_"),
+    var_quantization = NULL,
+    obs_continuous_quantization = NULL
   )
 
-  for (case_name in names(cases)) {
-    out <- tempfile(paste0("cellucid_r_float32_quantized_", case_name, "_"))
-    expect_error(
-      do.call(
-        cellucid_prepare,
-        c(base_args, cases[[case_name]], list(out_dir = out))
-      ),
-      "variation collapses to one value.*float32 domain",
-      info = case_name
-    )
-    expect_false(dir.exists(out), info = case_name)
-    stage_prefix <- paste0(".", basename(out), ".cellucid-stage-")
-    expect_false(
-      any(startsWith(list.files(dirname(out), all.files = TRUE), stage_prefix)),
-      info = case_name
+  var_manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  cases <- list(
+    list(entries = var_manifest$fields,
+         pattern = var_manifest[["_varSchema"]]$pathPattern,
+         name = "ZERO", value = 0),
+    list(entries = var_manifest$fields,
+         pattern = var_manifest[["_varSchema"]]$pathPattern,
+         name = "CONST", value = 2.5),
+    list(entries = obs_manifest[["_continuousFields"]],
+         pattern = obs_manifest[["_obsSchemas"]]$continuous$pathPattern,
+         name = "flat", value = 1.5)
+  )
+  for (case in cases) {
+    entry <- .manifest_entry(case$entries, case$name)
+    # A full-precision entry carries no bounds at all.
+    expect_length(entry, 2L)
+    expect_identical(
+      .read_payload_float32(out, case$pattern, entry[[1L]], n_cells),
+      rep(case$value, n_cells),
+      info = case$name
     )
   }
+})
+
+test_that("float32-collapsed variation is published as a constant field", {
+  n_cells <- 6L
+  values <- 1 + (seq_len(n_cells) - 1) * 1e-8
+  out <- tempfile("cellucid_r_float32_collapsed_")
+  cellucid_prepare(
+    out_dir = out,
+    dataset_id = "float32-quantization",
+    dataset_name = "Float32 quantization",
+    latent_space = matrix(
+      c(0, 0, 3, 0, 0.5, 0, 7, 0, 1.5, 0, 9, 0),
+      ncol = 2,
+      byrow = TRUE
+    ),
+    X_umap_2d = matrix(
+      c(0, 0, 1, 0, 0, 1, 1, 1, 0.5, 0.25, 0.25, 0.75),
+      ncol = 2,
+      byrow = TRUE
+    ),
+    obs = data.frame(
+      group = factor(c("a", "a", "a", "b", "b", "b")),
+      score = values
+    ),
+    centroid_min_points = 1L,
+    obs_categorical_dtype = "uint16",
+    obs_continuous_quantization = 8L,
+    force = TRUE
+  )
+
+  obs_manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  entry <- .manifest_entry(obs_manifest[["_continuousFields"]], "score")
+  bounds <- .manifest_bounds(entry)
+  expect_identical(bounds[[1L]], 1)
+  expect_identical(bounds[[2L]], 1)
+  codes <- .read_payload_codes(
+    out,
+    obs_manifest[["_obsSchemas"]]$continuous$pathPattern,
+    entry[[1L]],
+    size = 1L,
+    n = n_cells
+  )
+  expect_identical(codes, integer(n_cells))
+  expect_identical(
+    .viewer_dequantize(codes, bounds[[1L]], bounds[[2L]], 8L),
+    rep(1, n_cells)
+  )
 })
 
 test_that("only generated outlier NaN uses the exact reserved marker", {
@@ -1818,7 +2590,7 @@ test_that("categorical outlier quantiles preserve generated missing markers", {
   )
 
   con <- file(
-    file.path(out, "obs", "cluster.outliers.u8"),
+    file.path(out, "obs", "0.outliers.u8"),
     open = "rb"
   )
   on.exit(close(con), add = TRUE)
@@ -1925,7 +2697,7 @@ test_that("vector fields are exported and scaled with embedding normalization", 
     obs_categorical_dtype = "uint16"
   )
 
-  vec_path <- file.path(out, "vectors", "velocity_umap_2d.bin")
+  vec_path <- file.path(out, "vectors", "0_2d.bin")
   expect_true(file.exists(vec_path))
 
   con <- file(vec_path, open = "rb")
@@ -1938,7 +2710,10 @@ test_that("vector fields are exported and scaled with embedding normalization", 
   ident <- jsonlite::read_json(file.path(out, "dataset_identity.json"), simplifyVector = TRUE)
   expect_equal(ident$vector_fields$default_field, "velocity_umap")
   expect_true("velocity_umap" %in% names(ident$vector_fields$fields))
-  expect_true("2d" %in% names(ident$vector_fields$fields$velocity_umap$files))
+  expect_equal(
+    ident$vector_fields$fields$velocity_umap$files$`2d`,
+    "vectors/0_2d.bin"
+  )
 })
 
 test_that("a _1d vector field key accepts the plain vector it declares", {
@@ -1962,7 +2737,7 @@ test_that("a _1d vector field key accepts the plain vector it declares", {
     obs_categorical_dtype = "uint16"
   )
 
-  vec_path <- file.path(out, "vectors", "pseudotime_umap_1d.bin")
+  vec_path <- file.path(out, "vectors", "0_1d.bin")
   expect_true(file.exists(vec_path))
 
   con <- file(vec_path, open = "rb")
@@ -2020,12 +2795,6 @@ test_that("vector fields use one exact finite UMAP naming and ownership contract
     ),
     list(
       value = list(
-        `CON.velocity_umap_2d` = vector2
-      ),
-      message = "reserved on Windows"
-    ),
-    list(
-      value = list(
         velocity_umap_3d = matrix(
           c(1, 0, 0, 1, 0, 0),
           ncol = 3,
@@ -2065,6 +2834,66 @@ test_that("vector fields use one exact finite UMAP naming and ownership contract
     )
     expect_false(dir.exists(out))
   }
+})
+
+test_that("the vector field key grammar constrains only the shape", {
+  # cellucid-python's _VECTOR_KEY_PATTERN is '^(?P<field>.+_umap)_([123])d$'.
+  # The part before _umap is otherwise unconstrained, because it names a field
+  # in dataset_identity.json and never a file, so R must not stay stricter.
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  vector2 <- matrix(c(1, 0, 1, 0), ncol = 2, byrow = TRUE)
+  fields <- list(vector2, vector2, vector2, vector2)
+  names(fields) <- c(
+    "RNA velocity/latent_umap_2d",
+    ".leading_dot_umap_2d",
+    "-leading_dash_umap_2d",
+    "細胞_umap_2d"
+  )
+
+  out <- tempfile("cellucid_r_loose_vector_keys_")
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = latent,
+    obs = obs,
+    X_umap_2d = umap2,
+    vector_fields = fields,
+    vector_field_default = ".leading_dot_umap",
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+
+  identity <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  # Code-point order: '-' (0x2D) < '.' (0x2E) < 'R' (0x52) < non-ASCII.
+  expect_identical(
+    names(identity$vector_fields$fields),
+    c(
+      "-leading_dash_umap",
+      ".leading_dot_umap",
+      "RNA velocity/latent_umap",
+      "細胞_umap"
+    )
+  )
+  expect_identical(
+    vapply(
+      identity$vector_fields$fields,
+      function(field) field$files[["2d"]],
+      character(1),
+      USE.NAMES = FALSE
+    ),
+    sprintf("vectors/%d_2d.bin", 0:3)
+  )
+  expect_identical(
+    sort(list.files(file.path(out, "vectors"))),
+    sprintf("%d_2d.bin", 0:3)
+  )
 })
 
 test_that("multiple vector fields require one explicit exact default", {
@@ -2163,7 +2992,8 @@ test_that("obs manifest preserves viewer float32 min/max precision in JSON", {
   expect_equal(length(fields), 1L)
 
   entry <- fields[[1]]
-  expect_equal(entry[[1]], "score")
+  expect_identical(entry[[1]], 0L)
+  expect_equal(entry[[2]], "score")
   viewer_bounds <- readBin(
     writeBin(
       c(1 / 3, 2 / 3),
@@ -2176,8 +3006,8 @@ test_that("obs manifest preserves viewer float32 min/max precision in JSON", {
     size = 4L,
     endian = "little"
   )
-  expect_identical(entry[[2]], viewer_bounds[[1L]])
-  expect_identical(entry[[3]], viewer_bounds[[2L]])
+  expect_identical(entry[[3]], viewer_bounds[[1L]])
+  expect_identical(entry[[4]], viewer_bounds[[2L]])
 })
 
 test_that("gene expression rejects missing values for every codec", {
@@ -2278,37 +3108,7 @@ test_that("duplicate gene identifiers are rejected", {
       force = TRUE,
       obs_categorical_dtype = "uint16"
     ),
-    "Gene identifiers must be unique"
-  )
-})
-
-test_that("gene ids must already be portable filename components", {
-  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
-  obs <- data.frame(cluster = factor(c("A", "A", "B")))
-  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
-
-  expr <- matrix(0, nrow = 3, ncol = 2)
-  var <- data.frame(symbol = c("A/B", "A B"))
-  rownames(var) <- var$symbol
-
-  out <- file.path(tempdir(), "cellucid_test_gene_id_collision")
-  unlink(out, recursive = TRUE, force = TRUE)
-
-  expect_error(
-    cellucid_prepare(
-      dataset_id = "test-dataset",
-      dataset_name = "Test dataset",
-      latent_space = latent,
-      obs = obs,
-      var = var,
-      gene_expression = expr,
-      X_umap_2d = umap2,
-      out_dir = out,
-      centroid_min_points = 1,
-      force = TRUE,
-      obs_categorical_dtype = "uint16"
-    ),
-    "portable identifier"
+    "Gene key 'G1' is duplicated\\."
   )
 })
 
@@ -2340,12 +3140,62 @@ test_that("gene_identifiers subsets var export and dataset identity counts expor
     obs_categorical_dtype = "uint16"
   )
 
+  # The subset is renumbered from zero: the index is a position in the export,
+  # never a position in var.
   var_dir <- file.path(out, "var")
-  expect_false(file.exists(file.path(var_dir, "G1.values.f32")))
-  expect_true(file.exists(file.path(var_dir, "G2.values.f32")))
+  expect_identical(list.files(var_dir), "0.values.f32")
+  manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(manifest$fields, list(list(0L, "G2")))
 
   ident <- jsonlite::read_json(file.path(out, "dataset_identity.json"), simplifyVector = TRUE)
   expect_equal(ident$stats$n_genes, 1L)
+})
+
+test_that("gene_identifiers order is the exported payload index order", {
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  expr <- matrix(as.numeric(seq_len(9L)), nrow = 3, ncol = 3)
+  var <- data.frame(symbol = c("G1", "G2", "G3"))
+  rownames(var) <- var$symbol
+
+  out <- tempfile("cellucid_r_gene_subset_order_")
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = latent,
+    obs = obs,
+    var = var,
+    gene_expression = expr,
+    gene_identifiers = c("G3", "G1"),
+    X_umap_2d = umap2,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+
+  manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(manifest$fields, list(list(0L, "G3"), list(1L, "G1")))
+  expect_identical(
+    sort(list.files(file.path(out, "var"))),
+    c("0.values.f32", "1.values.f32")
+  )
+
+  # var/0 must hold G3's column, not var's first column.
+  con <- file(file.path(out, "var", "0.values.f32"), open = "rb")
+  on.exit(close(con), add = TRUE)
+  expect_equal(
+    readBin(con, what = "numeric", size = 4, endian = "little", n = 3L),
+    expr[, 3L],
+    tolerance = 1e-6
+  )
 })
 
 .gene_scope_fixture <- function(gene_ids, id_column = NULL) {
@@ -2388,78 +3238,31 @@ test_that("gene_identifiers subsets var export and dataset identity counts expor
   )
 }
 
-test_that("an unexported gene id is not held to the payload path contract", {
-  # Filename portability is a property of the file a gene is written to, and
-  # obs_keys= already narrows which observation keys are held to it. A var row
-  # that gene_identifiers= leaves out names no path, so it names no rule.
-  unexported <- c("HLA-DRB1/2", "CON", "trailing.")
-  for (bad_id in unexported) {
-    fixture <- .gene_scope_fixture(c("gene_a", bad_id, "gene_c"))
-    out <- file.path(tempdir(), "cellucid_test_unexported_gene_id")
+test_that("a gene identifier no path could hold is exported and recorded", {
+  # Payload paths are indices, so nothing about a gene's spelling can name a
+  # file any more. Every one of these was rejected while paths carried names.
+  for (gene_id in c("HLA-DRB1/2", "CON", "trailing.", "GENE_B")) {
+    fixture <- .gene_scope_fixture(c("gene_a", gene_id, "gene_b"))
+    out <- file.path(tempdir(), "cellucid_test_unportable_gene_id")
 
-    .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", "gene_c"))
+    .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", gene_id))
 
+    manifest <- jsonlite::read_json(
+      file.path(out, "var_manifest.json"),
+      simplifyVector = FALSE
+    )
+    expect_identical(
+      manifest$fields,
+      list(list(0L, "gene_a"), list(1L, gene_id)),
+      info = gene_id
+    )
     expect_equal(
       sort(list.files(file.path(out, "var"))),
-      c("gene_a.values.f32", "gene_c.values.f32"),
-      info = bad_id
+      c("0.values.f32", "1.values.f32"),
+      info = gene_id
     )
     unlink(out, recursive = TRUE, force = TRUE)
   }
-})
-
-test_that("a case-insensitive collision outside the exported subset is allowed", {
-  fixture <- .gene_scope_fixture(c("gene_a", "GENE_B", "gene_b"))
-  out <- file.path(tempdir(), "cellucid_test_unexported_gene_collision")
-
-  .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", "gene_b"))
-
-  expect_equal(
-    sort(list.files(file.path(out, "var"))),
-    c("gene_a.values.f32", "gene_b.values.f32")
-  )
-  unlink(out, recursive = TRUE, force = TRUE)
-})
-
-test_that("an unexported row of the selected gene id column is not validated", {
-  fixture <- .gene_scope_fixture(
-    c("gene_a", "HLA-DRB1/2", "gene_c"),
-    id_column = "gene_id"
-  )
-  out <- file.path(tempdir(), "cellucid_test_unexported_gene_column_row")
-
-  .prepare_gene_scope(
-    fixture,
-    out,
-    gene_identifiers = c("gene_a", "gene_c"),
-    id_column = "gene_id"
-  )
-
-  expect_equal(
-    sort(list.files(file.path(out, "var"))),
-    c("gene_a.values.f32", "gene_c.values.f32")
-  )
-  unlink(out, recursive = TRUE, force = TRUE)
-})
-
-test_that("an exported gene id is still held to the payload path contract", {
-  fixture <- .gene_scope_fixture(c("gene_a", "HLA-DRB1/2", "gene_c"))
-  out <- file.path(tempdir(), "cellucid_test_exported_gene_id_rejected")
-
-  expect_error(
-    .prepare_gene_scope(fixture, out, gene_identifiers = c("gene_a", "HLA-DRB1/2")),
-    "portable identifier"
-  )
-})
-
-test_that("a case-insensitive collision inside the exported subset is rejected", {
-  fixture <- .gene_scope_fixture(c("gene_a", "GENE_B", "gene_b"))
-  out <- file.path(tempdir(), "cellucid_test_exported_gene_collision")
-
-  expect_error(
-    .prepare_gene_scope(fixture, out, gene_identifiers = c("GENE_B", "gene_b")),
-    "collide"
-  )
 })
 
 test_that("a duplicate var gene id is rejected even when it is not exported", {
@@ -2478,7 +3281,7 @@ test_that("a duplicate var gene id is rejected even when it is not exported", {
       gene_identifiers = c("gene_a"),
       id_column = "gene_id"
     ),
-    "Gene identifiers must be unique"
+    "Gene key 'gene_c' is duplicated\\."
   )
 })
 
@@ -2545,7 +3348,7 @@ test_that("gene_identifiers rejects missing and non-character selections", {
   )
 })
 
-test_that("obs keys must already be portable filename components", {
+test_that("obs keys no path could hold are exported and recorded", {
   latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
   obs <- data.frame(
     "a/b" = factor(c("A", "A", "B")),
@@ -2557,19 +3360,32 @@ test_that("obs keys must already be portable filename components", {
   out <- file.path(tempdir(), "cellucid_test_obs_key_collision")
   unlink(out, recursive = TRUE, force = TRUE)
 
-  expect_error(
-    cellucid_prepare(
-      dataset_id = "test-dataset",
-      dataset_name = "Test dataset",
-      latent_space = latent,
-      obs = obs,
-      X_umap_2d = umap2,
-      out_dir = out,
-      centroid_min_points = 1,
-      force = TRUE,
-      obs_categorical_dtype = "uint16"
-    ),
-    "portable identifier"
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = latent,
+    obs = obs,
+    X_umap_2d = umap2,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  manifest <- jsonlite::read_json(
+    file.path(out, "obs_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    vapply(manifest[["_categoricalFields"]], `[[`, character(1), 2L),
+    c("a/b", "a b")
+  )
+  expect_identical(
+    vapply(manifest[["_categoricalFields"]], `[[`, integer(1), 1L),
+    c(0L, 1L)
+  )
+  expect_identical(
+    sort(list.files(file.path(out, "obs"))),
+    c("0.codes.u16", "0.outliers.f32", "1.codes.u16", "1.outliers.f32")
   )
 
   expect_error(
@@ -2901,11 +3717,11 @@ test_that("labels that read as they are stored survive unchanged", {
   )
   categories <- lapply(
     manifest[["_categoricalFields"]],
-    function(field) unlist(field[[2L]])
+    function(field) unlist(field[[3L]])
   )
   names(categories) <- vapply(
     manifest[["_categoricalFields"]],
-    function(field) field[[1L]],
+    function(field) field[[2L]],
     character(1)
   )
   expect_identical(
