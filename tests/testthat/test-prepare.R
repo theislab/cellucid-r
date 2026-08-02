@@ -458,12 +458,12 @@ test_that("the writer refuses a payload index space it cannot write once", {
     ),
     paste0(
       "^Observation payload indices must be exactly 0\\.\\.2, each used once; ",
-      "got \\[0, 1, 1\\]\\.$"
+      "got c\\(0, 1, 1\\)\\.$"
     )
   )
   expect_error(
     cellucid:::.require_dense_payload_indices(list(0L, 2L), axis = "Gene"),
-    "^Gene payload indices must be exactly 0\\.\\.1, each used once; got \\[0, 2\\]\\.$"
+    "^Gene payload indices must be exactly 0\\.\\.1, each used once; got c\\(0, 2\\)\\.$"
   )
   expect_error(
     cellucid:::.require_dense_payload_indices(list(0L, 1), axis = "Gene"),
@@ -486,7 +486,7 @@ test_that("an emitted manifest whose entries collide on one index is rejected", 
     centroid_outlier_quantile = NULL,
     latent_key = "latent_space",
     compression = NULL,
-    `_obsSchemas` = list(),
+    `_obsSchemas` = cellucid:::.json_object(),
     `_continuousFields` = list(list(0L, "score")),
     `_categoricalFields` = list(
       list(0L, "cluster", I("A"), "uint8", 255L, list())
@@ -573,7 +573,8 @@ test_that("an axis directory must hold exactly the payloads its manifest declare
     ),
     paste0(
       "^Gene manifest does not describe the payloads that were written\\. ",
-      "Declared but absent: var/1\\.values\\.f32\\. Written but undeclared: \\.$"
+      "Declared but absent: c\\(\"var/1\\.values\\.f32\"\\)\\. ",
+      "Written but undeclared: c\\(\\)\\.$"
     )
   )
   writeBin(raw(1L), file.path(root, "var", "stray.bin"))
@@ -584,8 +585,201 @@ test_that("an axis directory must hold exactly the payloads its manifest declare
       declared = "var/0.values.f32",
       axis = "Gene"
     ),
-    "Written but undeclared: var/stray\\.bin\\.$"
+    paste0(
+      "^Gene manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\\)\\. ",
+      "Written but undeclared: c\\(\"var/stray\\.bin\"\\)\\.$"
+    )
   )
+  unlink(file.path(root, "var", "stray.bin"))
+  dir.create(file.path(root, "var", "nested"))
+  expect_error(
+    cellucid:::.require_declared_payloads_on_disk(
+      root,
+      directory_name = "var",
+      declared = "var/0.values.f32",
+      axis = "Gene"
+    ),
+    "^Gene payload directory holds a non-file entry: .*/var/nested$"
+  )
+})
+
+test_that("the export root must hold exactly what the export declares", {
+  root <- tempfile("cellucid_r_declared_root_")
+  dir.create(file.path(root, "obs"), recursive = TRUE)
+  writeBin(raw(1L), file.path(root, "dataset_identity.json"))
+  writeBin(raw(1L), file.path(root, "obs_manifest.json"))
+  writeBin(raw(1L), file.path(root, "points_2d.bin.gz"))
+  declared <- c(
+    "dataset_identity.json",
+    "obs_manifest.json",
+    "points_2d.bin.gz"
+  )
+  reconcile <- function(
+      declared = c("dataset_identity.json", "obs_manifest.json", "points_2d.bin.gz"),
+      declared_directories = "obs"
+  ) {
+    cellucid:::.require_declared_payloads_on_disk(
+      root,
+      directory_name = NULL,
+      declared = declared,
+      axis = "Export",
+      declared_directories = declared_directories
+    )
+  }
+
+  expect_identical(reconcile(), declared)
+
+  # The mutation that reached disk once: the coordinates were written
+  # uncompressed while dataset_identity.json declared the compressed name.
+  file.rename(
+    file.path(root, "points_2d.bin.gz"),
+    file.path(root, "points_2d.bin")
+  )
+  expect_error(
+    reconcile(),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\"points_2d\\.bin\\.gz\"\\)\\. ",
+      "Written but undeclared: c\\(\"points_2d\\.bin\"\\)\\.$"
+    )
+  )
+  file.rename(
+    file.path(root, "points_2d.bin"),
+    file.path(root, "points_2d.bin.gz")
+  )
+  expect_identical(reconcile(), declared)
+
+  # A payload directory the export never created is absent, not invisible.
+  expect_error(
+    reconcile(declared_directories = c("obs", "var")),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\"var\"\\)\\. ",
+      "Written but undeclared: c\\(\\)\\.$"
+    )
+  )
+
+  # A directory the export does not declare is refused by kind, so it can
+  # never be mistaken for a declared payload of the same name.
+  dir.create(file.path(root, "vectors"))
+  expect_error(
+    reconcile(),
+    "^Export payload directory holds a non-file entry: .*/vectors$"
+  )
+  unlink(file.path(root, "vectors"), recursive = TRUE)
+
+  # A declared directory that reached disk as a regular file is reported on
+  # both sides, because it is neither the directory declared nor a file
+  # anything declared.
+  writeBin(raw(1L), file.path(root, "var"))
+  expect_error(
+    reconcile(declared_directories = c("obs", "var")),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\"var\"\\)\\. ",
+      "Written but undeclared: c\\(\"var\"\\)\\.$"
+    )
+  )
+  unlink(file.path(root, "var"))
+
+  writeBin(raw(1L), file.path(root, "scratch.tmp"))
+  expect_error(
+    reconcile(),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\\)\\. ",
+      "Written but undeclared: c\\(\"scratch\\.tmp\"\\)\\.$"
+    )
+  )
+})
+
+# The point payloads are the one artifact the export declares by path from the
+# export root, so until the root itself was reconciled nothing compared the
+# coordinate files dataset_identity.json tells the viewer to fetch against the
+# files that were written. The declared name and the written name are two
+# independent expressions of the compression setting, and a generation whose
+# points disagree publishes successfully and then fails in the browser.
+.undeclared_points_export <- function(out, ...) {
+  cellucid_prepare(
+    dataset_id = "root-reconciliation",
+    dataset_name = "Root reconciliation",
+    latent_space = matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE),
+    obs = data.frame(group = factor(c("A", "B", "A"))),
+    X_umap_2d = matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE),
+    out_dir = out,
+    centroid_min_points = 1,
+    compression = 6,
+    obs_categorical_dtype = "uint16",
+    force = TRUE
+  )
+}
+
+test_that("a published generation cannot declare a point payload it did not write", {
+  out <- tempfile("cellucid_r_root_reconciliation_")
+  written <- cellucid:::.write_float32_matrix_row_major
+
+  expect_silent(.undeclared_points_export(out))
+  identity <- jsonlite::read_json(
+    file.path(out, "dataset_identity.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(identity$embeddings$files$`2d`, "points_2d.bin.gz")
+  expect_true(file.exists(file.path(out, "points_2d.bin.gz")))
+  unlink(out, recursive = TRUE)
+
+  # Written uncompressed while the identity declares the compressed name.
+  expect_error(
+    testthat::with_mocked_bindings(
+      .undeclared_points_export(out),
+      .write_float32_matrix_row_major = function(path, mat, compression = NULL) {
+        written(path, mat, compression = NULL)
+      },
+      .package = "cellucid"
+    ),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\"points_2d\\.bin\\.gz\"\\)\\. ",
+      "Written but undeclared: c\\(\"points_2d\\.bin\"\\)\\.$"
+    )
+  )
+  expect_false(dir.exists(out))
+
+  # Declared and never written at all.
+  expect_error(
+    testthat::with_mocked_bindings(
+      .undeclared_points_export(out),
+      .write_float32_matrix_row_major = function(path, mat, compression = NULL) {
+        invisible(path)
+      },
+      .package = "cellucid"
+    ),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\"points_2d\\.bin\\.gz\"\\)\\. ",
+      "Written but undeclared: c\\(\\)\\.$"
+    )
+  )
+  expect_false(dir.exists(out))
+
+  # A file at the export root that no manifest names is refused too.
+  expect_error(
+    testthat::with_mocked_bindings(
+      .undeclared_points_export(out),
+      .write_float32_matrix_row_major = function(path, mat, compression = NULL) {
+        result <- written(path, mat, compression = compression)
+        writeBin(raw(1L), file.path(dirname(path), "scratch.tmp"))
+        result
+      },
+      .package = "cellucid"
+    ),
+    paste0(
+      "^Export manifest does not describe the payloads that were written\\. ",
+      "Declared but absent: c\\(\\)\\. ",
+      "Written but undeclared: c\\(\"scratch\\.tmp\"\\)\\.$"
+    )
+  )
+  expect_false(dir.exists(out))
 })
 
 test_that("payload positions are one-based and become zero-based indices", {
@@ -808,8 +1002,32 @@ test_that("rejected native lock attempts do not leak descriptors or handles", {
     as.numeric(length(list.files(descriptor_root)))
   }
 
+  # The leak assertion at the end of this test is `after == before`, and a
+  # counter that never moves satisfies it without measuring anything. That is
+  # a real configuration rather than a hypothetical one: /dev/fd is a
+  # per-process view only where fdescfs or procfs is mounted, and a stub
+  # directory holding 0, 1 and 2 in its place would report the same number for
+  # the life of the process. So the instrument is calibrated against
+  # descriptors this test opens itself before anything is concluded from it. A
+  # platform that publishes no counter at all is skipped with a reason; a
+  # counter that exists but does not track descriptors fails here, loudly,
+  # instead of passing while asserting nothing. On Windows the counter is the
+  # process's kernel handle count, which an open R file connection occupies
+  # too, so one calibration covers both branches.
+  calibration_path <- file.path(parent, "calibration")
+  writeLines("calibration", calibration_path)
   before <- resource_count()
   skip_if(is.na(before), "native process resource count is unavailable")
+  calibration_connections <- lapply(
+    seq_len(8L),
+    function(index) file(calibration_path, open = "rb")
+  )
+  calibration_open <- resource_count()
+  invisible(lapply(calibration_connections, close))
+  calibration_closed <- resource_count()
+  expect_gt(calibration_open, before)
+  expect_identical(calibration_closed, before)
+
   for (attempt in seq_len(1000L)) {
     stopifnot(is.null(cellucid:::.native_export_lock_acquire(lock_path)))
   }
@@ -1026,6 +1244,12 @@ test_that("case aliases and Unicode targets retain exact lock ownership", {
     }
   }, add = TRUE)
 
+  # Both filesystems are asserted, because only one of them exists on any
+  # given machine. Where names fold, the alias is the same lock and has to be
+  # refused in this process and contended from another. Where they do not, it
+  # is a different lock and has to be granted. With the second case left
+  # unwritten this whole block simply vanished on every case-sensitive host --
+  # which is every Linux runner -- and the test still reported a pass.
   if (file.exists(alias_lock_path)) {
     expect_error(
       cellucid:::.acquire_export_generation_lock(alias_target),
@@ -1042,6 +1266,10 @@ test_that("case aliases and Unicode targets retain exact lock ownership", {
       alias_lock_path
     )[[1]]
     expect_true(alias_contended)
+  } else {
+    alias_lock <- cellucid:::.acquire_export_generation_lock(alias_target)
+    expect_true(file.exists(alias_lock_path))
+    expect_true(cellucid:::.release_export_generation_lock(alias_lock))
   }
 
   expect_true(cellucid:::.release_export_generation_lock(lock))
@@ -1394,6 +1622,17 @@ test_that("dataset_id is the one identifier that still names a directory", {
     cellucid:::.validate_dataset_id("bad id!"),
     "^dataset_id 'bad id!' is not a portable identifier\\. "
   )
+  # The portable-identifier rule is the rule an empty or padded value breaks,
+  # so it is the rule that speaks. Naming edge whitespace instead would report
+  # a defect '' does not have.
+  expect_error(
+    cellucid:::.validate_dataset_id(""),
+    "^dataset_id '' is not a portable identifier\\. "
+  )
+  expect_error(
+    cellucid:::.validate_dataset_id(" padded "),
+    "^dataset_id ' padded ' is not a portable identifier\\. "
+  )
   expect_identical(cellucid:::.validate_dataset_id("neutral-paths"), "neutral-paths")
 })
 
@@ -1438,6 +1677,84 @@ test_that("identifier axes are held to distinctness and to being drawable", {
       ),
       c("Gene", "gene", "bad id!", "CON", "trailing.", "HLA-DRB1/2")
     )
+  }
+})
+
+test_that("an identifier set is refused unless it is stored as one", {
+  # Identity is decided with base semantics -- duplicated(), setdiff(), %in%,
+  # setNames(), and the identical() that checks the written var manifest
+  # against the staged gene names. identical() compares attributes, so a
+  # classed character vector that reaches that assertion fails it, and the
+  # caller is shown an internal manifest message naming a staging path
+  # instead of being told which argument was wrong. The rule therefore runs
+  # on the argument, in the same words on every identifier axis.
+  classed <- structure(c("R1", "R2"), class = c("glue", "character"))
+  for (what in c("Gene", "Observation field", "Vector field")) {
+    expect_error(
+      cellucid:::.require_field_identities(classed, what),
+      paste0("^", what, " keys must be a native character vector\\.$")
+    )
+  }
+
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
+  var <- data.frame(symbol = c("G1", "G2"), row.names = c("R1", "R2"))
+  var_classed <- var
+  var_classed$symbol <- structure(
+    c("G1", "G2"),
+    class = c("glue", "character")
+  )
+
+  axes <- list(
+    list(
+      args = list(
+        var = var,
+        gene_expression = expr,
+        gene_identifiers = classed
+      ),
+      message = "^gene_identifiers must be a native character vector\\.$"
+    ),
+    list(
+      args = list(
+        var = var_classed,
+        gene_expression = expr,
+        var_gene_id_column = "symbol"
+      ),
+      message = "^Gene keys must be a native character vector\\.$"
+    ),
+    list(
+      args = list(
+        obs_keys = structure("cluster", class = c("glue", "character"))
+      ),
+      message = "^obs_keys must be a native character vector\\.$"
+    )
+  )
+
+  for (axis in axes) {
+    out <- tempfile("cellucid_r_classed_identifiers_")
+    expect_error(
+      do.call(
+        cellucid_prepare,
+        c(
+          list(
+            dataset_id = "test-dataset",
+            dataset_name = "Test dataset",
+            latent_space = latent,
+            obs = obs,
+            X_umap_2d = umap2,
+            out_dir = out,
+            centroid_min_points = 1,
+            force = TRUE,
+            obs_categorical_dtype = "uint16"
+          ),
+          axis$args
+        )
+      ),
+      axis$message
+    )
+    expect_false(dir.exists(out))
   }
 })
 
@@ -1580,6 +1897,98 @@ test_that("compression and quantization settings require exact scalar values", {
   }
 })
 
+test_that("a numeric argument is refused by name when it carries a class", {
+  # Every one of these values is published in a manifest, and jsonlite has no
+  # asJSON method for an arbitrary S3 class. A classed number that gets past
+  # the argument check therefore does not fail as a bad argument: it fails
+  # inside the manifest writer with `No method asJSON S3 class: <class>`,
+  # after the export has begun staging, naming no argument and no rule. The
+  # check has to be on the argument, in the argument's own words.
+  classed <- function(x) structure(x, class = "units", units = "m")
+
+  expect_error(
+    cellucid:::.normalize_compression(classed(6)),
+    "^compression must be NULL or one integer from 1 to 9\\.$"
+  )
+  expect_error(
+    cellucid:::.validate_quantization_bits(classed(8), "var_quantization"),
+    "^var_quantization must be exactly 8 or 16\\.$"
+  )
+  expect_error(
+    cellucid:::.validate_centroid_outlier_quantile(classed(0.9)),
+    "^centroid_outlier_quantile must be NULL or one finite number "
+  )
+  expect_error(
+    cellucid:::.validate_positive_integer(classed(10), "centroid_min_points"),
+    "^centroid_min_points must be one positive integer\\.$"
+  )
+
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(alpha = c(1, 2, 3), cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
+  var <- data.frame(symbol = c("G1", "G2"), row.names = c("R1", "R2"))
+
+  arguments <- list(
+    list(
+      args = list(compression = classed(6)),
+      message = "^compression must be NULL or one integer from 1 to 9\\.$"
+    ),
+    list(
+      args = list(
+        var = var,
+        gene_expression = expr,
+        var_quantization = classed(8)
+      ),
+      message = "^var_quantization must be exactly 8 or 16\\.$"
+    ),
+    list(
+      args = list(obs_continuous_quantization = classed(16)),
+      message = "^obs_continuous_quantization must be exactly 8 or 16\\.$"
+    ),
+    list(
+      args = list(centroid_outlier_quantile = classed(0.9)),
+      message = "^centroid_outlier_quantile must be NULL or one finite number "
+    ),
+    list(
+      args = list(centroid_min_points = classed(1)),
+      message = "^centroid_min_points must be one positive integer\\.$"
+    )
+  )
+
+  for (argument in arguments) {
+    out <- tempfile("cellucid_r_classed_scalar_")
+    expect_error(
+      do.call(
+        cellucid_prepare,
+        c(
+          list(
+            dataset_id = "test-dataset",
+            dataset_name = "Test dataset",
+            latent_space = latent,
+            obs = obs,
+            X_umap_2d = umap2,
+            out_dir = out,
+            centroid_min_points = 1,
+            force = TRUE,
+            obs_categorical_dtype = "uint16"
+          )[setdiff(
+            c(
+              "dataset_id", "dataset_name", "latent_space", "obs",
+              "X_umap_2d", "out_dir", "centroid_min_points", "force",
+              "obs_categorical_dtype"
+            ),
+            names(argument$args)
+          )],
+          argument$args
+        )
+      ),
+      argument$message
+    )
+    expect_false(dir.exists(out))
+  }
+})
+
 test_that("public writer options reject partial matches and non-boolean force values", {
   latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
   obs <- data.frame(group = factor(c("A", "B")))
@@ -1682,6 +2091,7 @@ test_that("created_at is exact, reproducible, and validated before mutation", {
   expect_identical(identity$created_at, fixed)
 
   default_out <- tempfile("cellucid_r_default_created_at_")
+  before <- Sys.time()
   cellucid_prepare(
     dataset_id = "default-created-at",
     dataset_name = "Default created at",
@@ -1693,6 +2103,7 @@ test_that("created_at is exact, reproducible, and validated before mutation", {
     force = TRUE,
     obs_categorical_dtype = "uint16"
   )
+  after <- Sys.time()
   default_identity <- jsonlite::read_json(
     file.path(default_out, "dataset_identity.json"),
     simplifyVector = FALSE
@@ -1705,6 +2116,22 @@ test_that("created_at is exact, reproducible, and validated before mutation", {
     cellucid:::.resolve_created_at(default_identity$created_at),
     default_identity$created_at
   )
+
+  # The pattern above fixes the shape and the line above it only shows that the
+  # validator accepts its own output, so neither says what instant was stamped
+  # or in which zone. Read the stamp back as UTC and bracket it between two
+  # clock readings taken around the call: a stamp in local time carrying a "Z",
+  # a frozen clock, and a swapped day and month all fall outside the window.
+  # The seconds field is truncated rather than rounded, so the lower bound is
+  # the whole second containing `before`.
+  stamped <- as.POSIXct(
+    default_identity$created_at,
+    format = "%Y-%m-%dT%H:%M:%SZ",
+    tz = "UTC"
+  )
+  expect_false(is.na(stamped))
+  expect_gte(as.numeric(stamped), floor(as.numeric(before)))
+  expect_lte(as.numeric(stamped), as.numeric(after))
 })
 
 test_that("dataset and source identity require exact caller-owned strings", {
@@ -2494,6 +2921,94 @@ test_that("manifest identifiers require exact character values", {
   )
 })
 
+test_that("row numbers are never selected as gene identifiers", {
+  # A data frame always has row names, so the old is.null(rownames(var)) test
+  # could not fire and rownames() handed back the automatic sequence as the
+  # strings "1" to "N". Those are unique, drawable, and pass every check after
+  # this one, so the export published genes named after their own row numbers
+  # and nothing failed. .row_names_info() is the one thing that distinguishes
+  # the automatic sequence from row names a caller set.
+  automatic <- data.frame(symbol = c("CD8A", "MS4A1"))
+  explicit <- data.frame(
+    symbol = c("CD8A", "MS4A1"),
+    row.names = c("ENSG00000153563", "ENSG00000156738")
+  )
+  # Explicit row names that happen to look like row numbers are the caller's
+  # own identifiers and stay accepted.
+  numeric_looking <- data.frame(
+    symbol = c("CD8A", "MS4A1"),
+    row.names = c("1", "2")
+  )
+
+  expect_error(
+    cellucid:::.extract_gene_ids(automatic, NULL),
+    paste0(
+      "^var has only automatic row names, so rownames\\(var\\) would name ",
+      "the genes '1' to '2'\\."
+    )
+  )
+  expect_identical(
+    cellucid:::.extract_gene_ids(explicit, NULL),
+    c("ENSG00000153563", "ENSG00000156738")
+  )
+  expect_identical(
+    cellucid:::.extract_gene_ids(numeric_looking, NULL),
+    c("1", "2")
+  )
+  # The column is still the way out, and it is what the message recommends.
+  expect_identical(
+    cellucid:::.extract_gene_ids(automatic, "symbol"),
+    c("CD8A", "MS4A1")
+  )
+
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+  expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
+
+  out <- tempfile("cellucid_r_automatic_row_names_")
+  expect_error(
+    cellucid_prepare(
+      dataset_id = "test-dataset",
+      dataset_name = "Test dataset",
+      latent_space = latent,
+      obs = obs,
+      var = automatic,
+      gene_expression = expr,
+      X_umap_2d = umap2,
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE,
+      obs_categorical_dtype = "uint16"
+    ),
+    "^var has only automatic row names"
+  )
+  expect_false(dir.exists(out))
+
+  out <- tempfile("cellucid_r_explicit_row_names_")
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = latent,
+    obs = obs,
+    var = explicit,
+    gene_expression = expr,
+    X_umap_2d = umap2,
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  manifest <- jsonlite::read_json(
+    file.path(out, "var_manifest.json"),
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    vapply(manifest$fields, function(field) field[[2L]], character(1)),
+    c("ENSG00000153563", "ENSG00000156738")
+  )
+})
+
 test_that("points_2d.bin is float32 row-major and normalized", {
   latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
   obs <- data.frame(cluster = factor(c("A", "A", "B")))
@@ -2561,8 +3076,15 @@ test_that("continuous observations reject missing values for every codec", {
 })
 
 test_that("categorical outlier quantiles preserve generated missing markers", {
+  # This is the only place in the suite that reads an outlier payload back, so
+  # it is the only place the latent geometry is observed at all. The second
+  # column carries a value no other row shares: with a column of zeros -- or
+  # any column that is a constant multiple or offset of the first -- the
+  # distances differ only by a positive factor, the ranks are unchanged, and
+  # a centroid routine reduced to `latent[idx, 1L]` would produce these exact
+  # bytes. Here, dropping the second column reorders the three ranks.
   latent <- matrix(
-    c(0, 0, 1, 0, 4, 0, 8, 0),
+    c(0, 0, 1, 6, 4, 0, 8, 0),
     ncol = 2,
     byrow = TRUE
   )
@@ -2595,7 +3117,12 @@ test_that("categorical outlier quantiles preserve generated missing markers", {
   )
   on.exit(close(con), add = TRUE)
   got <- readBin(con, what = "raw", n = 4)
-  expect_identical(as.integer(got), c(127L, 0L, 254L, 255L))
+  # Cluster "large" is rows 1-3 around centroid (5/3, 2): the distances are
+  # sqrt(61/9), sqrt(148/9) and sqrt(85/9), so the ranks are 1, 3, 2 and the
+  # quantiles 1/3, 1 and 2/3. Quantized over [1/3, 1] into 0-254 those are 0,
+  # 254 and 127. Row 4 is alone in "small", below centroid_min_points, and
+  # keeps the reserved missing marker.
+  expect_identical(as.integer(got), c(0L, 254L, 127L, 255L))
 })
 
 test_that("connectivity export writes uint16 edge pairs", {
@@ -2673,10 +3200,14 @@ test_that("vector fields are exported and scaled with embedding normalization", 
                     0, 4),
                   ncol = 2, byrow = TRUE)
 
+  # Each row differs from the others and no component is zero throughout, so
+  # the payload below pins which cell each vector belongs to and both of its
+  # components. Identical rows, or a column that is zero in every row, are
+  # satisfied by a writer that permutes the cells or drops an axis.
   vector_fields <- list(
-    velocity_umap_2d = matrix(c(2, 0,
-                                2, 0,
-                                2, 0),
+    velocity_umap_2d = matrix(c(2, -1,
+                                0, 3,
+                                4, 1),
                               ncol = 2, byrow = TRUE)
   )
 
@@ -2704,8 +3235,9 @@ test_that("vector fields are exported and scaled with embedding normalization", 
   on.exit(close(con), add = TRUE)
   got <- readBin(con, what = "numeric", size = 4, endian = "little", n = 3 * 2)
 
-  # Input vectors are (2, 0); scale_factor=0.5 -> expected (1, 0)
-  expect_equal(got, rep(c(1, 0), 3), tolerance = 1e-6)
+  # scale_factor = 0.5, applied to each component, cells in input order and
+  # row major. Column major would publish c(1, 0, 2, -0.5, 1.5, 0.5).
+  expect_equal(got, c(1, -0.5, 0, 1.5, 2, 0.5), tolerance = 1e-6)
 
   ident <- jsonlite::read_json(file.path(out, "dataset_identity.json"), simplifyVector = TRUE)
   expect_equal(ident$vector_fields$default_field, "velocity_umap")
@@ -2730,7 +3262,9 @@ test_that("a _1d vector field key accepts the plain vector it declares", {
     latent_space = latent,
     obs = obs,
     X_umap_1d = umap1,
-    vector_fields = list(pseudotime_umap_1d = c(2, 2, 2)),
+    # Three different values, so the payload pins cell order rather than one
+    # repeated magnitude.
+    vector_fields = list(pseudotime_umap_1d = c(2, 4, 0)),
     out_dir = out,
     centroid_min_points = 1,
     force = TRUE,
@@ -2743,7 +3277,7 @@ test_that("a _1d vector field key accepts the plain vector it declares", {
   con <- file(vec_path, open = "rb")
   on.exit(close(con), add = TRUE)
   got <- readBin(con, what = "numeric", size = 4, endian = "little", n = 3)
-  expect_equal(got, rep(1, 3), tolerance = 1e-6)
+  expect_equal(got, c(1, 2, 0), tolerance = 1e-6)
 
   ident <- jsonlite::read_json(
     file.path(out, "dataset_identity.json"),
@@ -2836,6 +3370,131 @@ test_that("vector fields use one exact finite UMAP naming and ownership contract
   }
 })
 
+test_that("every axis refuses the same classed-column data frame", {
+  # A data frame stands in for a matrix only when as.matrix() reproduces what
+  # the caller passed. A classed numeric column breaks that: as.matrix() keeps
+  # the numbers and drops the attribute that says what they mean, and nothing
+  # downstream can tell the difference afterwards, because ordinary finite
+  # doubles are exactly what it produces. So the rule has to run on the input,
+  # on every axis, and it has to be the same rule -- a caller cannot be told
+  # their frame is unusable as an embedding and have it silently accepted as
+  # the vectors drawn over that embedding.
+  #
+  # is.numeric() answers FALSE for Date, POSIXct, difftime, and factor, so a
+  # frame of those is already refused by the numeric term. The class that
+  # needs the second term is the classed numeric with no is.numeric() method:
+  # units::units, bit64::integer64, and any S3 class a caller wrote. This
+  # fixture is one of them, built here rather than taken from a package
+  # because the mechanism is entirely base R.
+  as_units <- function(x, unit) {
+    structure(as.double(x), class = "units", units = unit)
+  }
+
+  latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+  obs <- data.frame(cluster = factor(c("A", "A", "B")))
+  # Range 4 on both axes -> scale_factor = 2 / 4 = 0.5.
+  umap2 <- matrix(c(0, 0, 4, 0, 0, 4), ncol = 2, byrow = TRUE)
+  var <- data.frame(gene = c("G1", "G2"), row.names = c("G1", "G2"))
+
+  # Metres across, kilometres up: coercion drops both units, so the two frames
+  # become one and the same matrix and a vector a thousand times longer than it
+  # looks would be published unremarked. The rows differ from each other and
+  # both columns change sign, so the payload asserted at the end of this test
+  # pins cell order and both components rather than one repeated magnitude.
+  classed <- data.frame(
+    dx = as_units(c(1, 0, 3), "m"),
+    dy = as_units(c(-1, 4, 1), "km")
+  )
+  plain <- data.frame(dx = c(1, 0, 3), dy = c(-1, 4, 1))
+
+  # The causal condition, asserted so the refusals below cannot pass for some
+  # other reason: after coercion the two frames are one and the same matrix,
+  # which is why the class has to be inspected before the coercion.
+  expect_true(all(vapply(classed, is.numeric, logical(1))))
+  expect_identical(unname(as.matrix(classed)), unname(as.matrix(plain)))
+  expect_false(cellucid:::.is_numeric_data_frame(classed))
+  expect_true(cellucid:::.is_numeric_data_frame(plain))
+
+  axes <- list(
+    list(
+      args = list(X_umap_2d = classed, latent_space = latent),
+      message = "^X_umap_2d must be a finite real numeric matrix\\.$"
+    ),
+    list(
+      args = list(X_umap_2d = umap2, latent_space = classed),
+      message = "^latent_space must be a finite real numeric matrix\\.$"
+    ),
+    list(
+      args = list(
+        X_umap_2d = umap2,
+        latent_space = latent,
+        var = var,
+        gene_expression = classed
+      ),
+      message = "^gene_expression must be a real numeric matrix\\.$"
+    ),
+    list(
+      args = list(
+        X_umap_2d = umap2,
+        latent_space = latent,
+        vector_fields = list(velocity_umap_2d = classed)
+      ),
+      message = paste0(
+        "^Vector field 'velocity_umap_2d' must be a finite real vector or ",
+        "matrix\\.$"
+      )
+    )
+  )
+
+  for (axis in axes) {
+    out <- tempfile("cellucid_r_classed_frame_")
+    expect_error(
+      do.call(
+        cellucid_prepare,
+        c(
+          list(
+            dataset_id = "test-dataset",
+            dataset_name = "Test dataset",
+            obs = obs,
+            out_dir = out,
+            centroid_min_points = 1,
+            force = TRUE,
+            obs_categorical_dtype = "uint16"
+          ),
+          axis$args
+        )
+      ),
+      axis$message
+    )
+    expect_false(dir.exists(out))
+  }
+
+  # A native numeric data frame still stands in for a matrix on the same axis,
+  # so the rule refuses the classed column rather than the data frame.
+  out <- tempfile("cellucid_r_plain_frame_")
+  cellucid_prepare(
+    dataset_id = "test-dataset",
+    dataset_name = "Test dataset",
+    latent_space = as.data.frame(latent),
+    obs = obs,
+    X_umap_2d = as.data.frame(umap2),
+    vector_fields = list(velocity_umap_2d = plain),
+    out_dir = out,
+    centroid_min_points = 1,
+    force = TRUE,
+    obs_categorical_dtype = "uint16"
+  )
+  con <- file(file.path(out, "vectors", "0_2d.bin"), open = "rb")
+  on.exit(close(con), add = TRUE)
+  # scale_factor = 0.5, row major. Column major would publish
+  # c(0.5, 0, 1.5, -0.5, 2, 0.5).
+  expect_equal(
+    readBin(con, what = "numeric", size = 4, endian = "little", n = 6L),
+    c(0.5, -0.5, 0, 2, 1.5, 0.5),
+    tolerance = 1e-6
+  )
+})
+
 test_that("the vector field key grammar constrains only the shape", {
   # cellucid-python's _VECTOR_KEY_PATTERN is '^(?P<field>.+_umap)_([123])d$'.
   # The part before _umap is otherwise unconstrained, because it names a field
@@ -2843,8 +3502,15 @@ test_that("the vector field key grammar constrains only the shape", {
   latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
   obs <- data.frame(group = factor(c("A", "B")))
   umap2 <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
-  vector2 <- matrix(c(1, 0, 1, 0), ncol = 2, byrow = TRUE)
-  fields <- list(vector2, vector2, vector2, vector2)
+  # Four distinct payloads, not four references to one matrix: with identical
+  # data every pairing of a field with a file looks the same, and this is the
+  # only multi-field vector export in the suite. Each field is a different
+  # multiple of the same base, and all four share one embedding scale factor,
+  # so the ratios below pin which field's numbers reached which file without
+  # re-deriving that scale. The base itself has four distinct non-zero values
+  # whose row-major order differs from their column-major order.
+  base <- matrix(c(1, -2, 3, -4), ncol = 2, byrow = TRUE)
+  fields <- list(base, 2 * base, 3 * base, 4 * base)
   names(fields) <- c(
     "RNA velocity/latent_umap_2d",
     ".leading_dot_umap_2d",
@@ -2894,6 +3560,63 @@ test_that("the vector field key grammar constrains only the shape", {
     sort(list.files(file.path(out, "vectors"))),
     sprintf("%d_2d.bin", 0:3)
   )
+
+  # The manifest above says which file each field claims. These bytes say
+  # which field's numbers are actually in it: without them a writer that
+  # numbered the files forward while writing the payloads in another order
+  # satisfies every assertion in this test.
+  read_payload <- function(index) {
+    connection <- file(
+      file.path(out, "vectors", sprintf("%d_2d.bin", index)),
+      open = "rb"
+    )
+    on.exit(close(connection), add = TRUE)
+    readBin(connection, what = "numeric", size = 4, endian = "little", n = 4L)
+  }
+  # Payload 2 is "RNA velocity/latent_umap", the field given the unscaled base.
+  unit <- read_payload(2L)
+  expect_false(any(unit == 0))
+  expect_equal(read_payload(0L), 3 * unit, tolerance = 1e-6)
+  expect_equal(read_payload(1L), 2 * unit, tolerance = 1e-6)
+  expect_equal(read_payload(3L), 4 * unit, tolerance = 1e-6)
+})
+
+test_that("a vector field id that cannot be drawn is refused by its own key", {
+  # The counterpart of the grammar test above: because the part in front of
+  # `_umap` is unconstrained, a key can carry a character that occupies no
+  # glyph, and the id parsed out of it reaches dataset_identity.json and the
+  # viewer's field selector. This is the clause of the shared identity rule
+  # that this axis can still fail -- the uniqueness clause cannot, because the
+  # ids are the names of a list built by assignment -- so it is what makes
+  # calling the whole rule here correct rather than decorative.
+  latent <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  obs <- data.frame(group = factor(c("A", "B")))
+  umap2 <- matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)
+  vector2 <- matrix(c(1, 0, 1, 0), ncol = 2, byrow = TRUE)
+
+  out <- tempfile("cellucid_r_undrawable_vector_id_")
+  expect_error(
+    cellucid_prepare(
+      dataset_id = "test-dataset",
+      dataset_name = "Test dataset",
+      latent_space = latent,
+      obs = obs,
+      X_umap_2d = umap2,
+      vector_fields = stats::setNames(
+        list(vector2),
+        paste0("velocity", "\u200b", "_umap_2d")
+      ),
+      out_dir = out,
+      centroid_min_points = 1,
+      force = TRUE,
+      obs_categorical_dtype = "uint16"
+    ),
+    paste0(
+      "^Vector field identifier at position 0 is displayed verbatim, so it ",
+      "must not carry characters that have no glyph"
+    )
+  )
+  expect_false(dir.exists(out))
 })
 
 test_that("multiple vector fields require one explicit exact default", {
@@ -3308,7 +4031,7 @@ test_that("gene_identifiers rejects missing and non-character selections", {
       force = TRUE,
       obs_categorical_dtype = "uint16"
     ),
-    "identifiers not found in var: missing"
+    "identifiers not found in var: c\\(\"missing\"\\)\\.$"
   )
 
   expect_error(
@@ -3326,7 +4049,7 @@ test_that("gene_identifiers rejects missing and non-character selections", {
       force = TRUE,
       obs_categorical_dtype = "uint16"
     ),
-    "gene_identifiers must be a character vector"
+    "gene_identifiers must be a native character vector"
   )
 
   expect_error(
@@ -3401,7 +4124,7 @@ test_that("obs keys no path could hold are exported and recorded", {
       force = TRUE,
       obs_categorical_dtype = "uint16"
     ),
-    "obs_keys must be a character vector"
+    "obs_keys must be a native character vector"
   )
 })
 
@@ -3429,10 +4152,20 @@ test_that("float32 writer rejects overflow and underflow before publication", {
     endian = "little",
     n = 5L
   )
-  expect_true(all(is.finite(encoded)))
-  expect_true(all(encoded[c(1L, 2L)] < 0))
-  expect_identical(encoded[[3L]], 0)
-  expect_true(all(encoded[c(4L, 5L)] > 0))
+  # The five boundary quantities themselves, not their signs. Every one of
+  # them is exactly representable in float32, so widening the readback to
+  # double returns them unchanged; asserting only sign and finiteness let a
+  # writer silently clamp the extremes it is named for.
+  expect_identical(
+    encoded,
+    c(
+      -float32_max,
+      -float32_min_subnormal,
+      0,
+      float32_min_subnormal,
+      float32_max
+    )
+  )
 
   expect_error(
     cellucid:::.write_float32_vector(tempfile(), 2^128),

@@ -198,11 +198,13 @@ test_that("an identifier defect is reported in the words the other writer uses",
     "^Vector field key 'a' is duplicated\\.$"
   )
   # A set of values is shown as a list, with the boundary that lets a reader
-  # tell where it ends. cellucid-python prints the same list.
+  # tell where it ends. The boundary is what the two writers share; the syntax
+  # inside it is each reader's own language, so this one is R's c().
   expect_error(
     cellucid:::.require_dense_payload_indices(list(0L, 1L, 1L), axis = "Gene"),
-    "^Gene payload indices must be exactly 0\\.\\.2, each used once; got \\[0, 1, 1\\]\\.$"
+    "^Gene payload indices must be exactly 0\\.\\.2, each used once; got c\\(0, 1, 1\\)\\.$"
   )
-  expect_identical(cellucid:::.format_value_list(c("a", "b")), "['a', 'b']")
-  expect_identical(cellucid:::.format_value_list(c(0L, 2L)), "[0, 2]")
+  expect_identical(cellucid:::.format_value_list(c("a", "b")), "c(\"a\", \"b\")")
+  expect_identical(cellucid:::.format_value_list(c(0L, 2L)), "c(0, 2)")
+  expect_identical(cellucid:::.format_value_list(character()), "c()")
 })

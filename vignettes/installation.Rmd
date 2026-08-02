@@ -15,7 +15,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Current version and availability
 
-**The active Cellucid for R source and documentation version is 0.9.1.** It is
+**The active Cellucid for R source and documentation version is 0.9.1.** It is <!-- CELLUCID_VERSION -->
 the CRAN submission release. The
 [CRAN package index](https://cran.r-project.org/web/packages/available_packages_by_name.html)
 is authoritative for registry availability. Use the CRAN command below when

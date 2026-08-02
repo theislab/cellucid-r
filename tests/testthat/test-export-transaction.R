@@ -25,7 +25,22 @@
 
 .transaction_create_directory <- function(path, owner) {
   expect_true(dir.create(path))
-  writeLines(owner, file.path(path, "owner"), useBytes = TRUE)
+  # writeBin rather than writeLines: the bytes of this file are compared
+  # against a hand-written literal below, and a text connection would end the
+  # line with CRLF on Windows.
+  writeBin(charToRaw(paste0(owner, "\n")), file.path(path, "owner"))
+}
+
+# Every "a failed call left the generation alone" assertion in this file
+# compares a snapshot taken afterwards with one taken before, which puts
+# .transaction_snapshot() on both sides of the comparison: one that returned a
+# constant, dropped the file contents, or read a fixed number of bytes instead
+# of the whole file would agree with itself and report nothing. So each use
+# also pins its "before" value to a literal built here, out of the owner name
+# alone, and both this constructor and .transaction_snapshot() are pinned to
+# hand-written bytes in the first test below.
+.transaction_owner_snapshot <- function(owner) {
+  list(owner = charToRaw(paste0(owner, "\n")))
 }
 
 .transaction_snapshot <- function(path) {
@@ -145,6 +160,61 @@
   }
   invisible(parent)
 }
+
+test_that("the snapshot helper records every name and every byte", {
+  parent <- .transaction_test_parent("snapshot_self")
+  on.exit(unlink(parent, recursive = TRUE, force = TRUE), add = TRUE)
+
+  expect_null(.transaction_snapshot(file.path(parent, "absent")))
+
+  regular <- file.path(parent, "regular")
+  writeBin(as.raw(c(0L, 1L, 254L, 255L)), regular)
+  expect_identical(
+    .transaction_snapshot(regular),
+    as.raw(c(0L, 1L, 254L, 255L))
+  )
+
+  # "ab" and "ba" are the same two bytes in opposite orders and "empty" has
+  # none of them, so a snapshot that reversed, truncated, padded, or ignored
+  # what it read disagrees with at least one of the three.
+  tree <- file.path(parent, "tree")
+  expect_true(dir.create(tree))
+  expect_true(dir.create(file.path(tree, "nested")))
+  writeBin(raw(), file.path(tree, "empty"))
+  writeBin(as.raw(c(97L, 98L)), file.path(tree, "ab"))
+  writeBin(as.raw(c(98L, 97L)), file.path(tree, "nested", "ba"))
+  expect_identical(
+    .transaction_snapshot(tree),
+    list(
+      ab = as.raw(c(97L, 98L)),
+      empty = raw(),
+      `nested/ba` = as.raw(c(98L, 97L))
+    )
+  )
+
+  # One changed byte and one removed file each have to become visible.
+  writeBin(as.raw(c(97L, 99L)), file.path(tree, "ab"))
+  expect_identical(
+    .transaction_snapshot(tree)[["ab"]],
+    as.raw(c(97L, 99L))
+  )
+  expect_true(file.remove(file.path(tree, "empty")))
+  expect_identical(
+    names(.transaction_snapshot(tree)),
+    c("ab", "nested/ba")
+  )
+
+  expect_identical(
+    .transaction_owner_snapshot("prior"),
+    list(owner = as.raw(c(112L, 114L, 105L, 111L, 114L, 10L)))
+  )
+  fixture <- file.path(parent, "fixture")
+  .transaction_create_directory(fixture, "prior")
+  expect_identical(
+    .transaction_snapshot(fixture),
+    .transaction_owner_snapshot("prior")
+  )
+})
 
 test_that("transaction descriptor bytes and reserved paths match Python exactly", {
   parent <- .transaction_test_parent("canonical_bytes")
@@ -333,6 +403,18 @@ test_that("all nine unspecified transaction states fail closed", {
             }
           }
           before <- lapply(nodes, .transaction_snapshot)
+          expect_identical(
+            before,
+            lapply(seq_along(state), function(index) {
+              if (!state[[index]]) {
+                return(NULL)
+              }
+              .transaction_owner_snapshot(
+                c("target", "stage", "backup")[[index]]
+              )
+            }),
+            info = paste(had_target, state_key)
+          )
           journal_before <- readBin(
             paths$journal,
             what = "raw",
@@ -419,6 +501,11 @@ test_that("malformed and noncanonical journals never mutate a generation", {
     )
     writeBin(malformed[[name]], paths$journal)
     before <- .transaction_snapshot(target)
+    expect_identical(
+      before,
+      .transaction_owner_snapshot("prior"),
+      info = name
+    )
     journal_before <- readBin(
       paths$journal,
       what = "raw",
@@ -456,6 +543,7 @@ test_that("unsafe journal and temporary control nodes fail without mutation", {
   )
   skip_if_not(file.link(source, paths$journal), "hard links unavailable")
   before <- .transaction_snapshot(target)
+  expect_identical(before, .transaction_owner_snapshot("prior"))
   expect_error(
     cellucid:::.recover_export_transaction(target),
     "non-linked"
@@ -566,6 +654,11 @@ test_that("unsafe target, stage, and backup nodes fail closed", {
       reparse_nodes <- c(reparse_nodes, paths$backup)
     }
     outside_before <- .transaction_snapshot(outside)
+    expect_identical(
+      outside_before,
+      .transaction_owner_snapshot("outside"),
+      info = case
+    )
     journal_before <- readBin(
       paths$journal,
       what = "raw",
@@ -609,6 +702,7 @@ test_that("the public writer never follows the final output symlink", {
   }
   skip_if_not(link_created, "directory reparse points unavailable")
   before <- .transaction_snapshot(outside)
+  expect_identical(before, .transaction_owner_snapshot("outside"))
   on.exit(
     .expect_transaction_cleanup(
       parent,

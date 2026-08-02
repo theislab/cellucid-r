@@ -23,9 +23,9 @@ cellucid_prepare(
   obs_continuous_quantization = NULL,
   obs_categorical_dtype,
   compression = NULL,
-  dataset_name = NULL,
-  dataset_description = "",
-  dataset_id = NULL,
+  dataset_name,
+  dataset_description = NULL,
+  dataset_id,
   source_name = NULL,
   source_url = NULL,
   source_citation = NULL,
@@ -45,7 +45,10 @@ the note on displayed text below.}
 \item{var}{Optional \code{data.frame} of feature metadata with \code{n_genes} rows. Required if \code{gene_expression} is provided.}
 \item{gene_expression}{Optional numeric matrix-like of shape \code{(n_cells, n_genes)}. Every value must be finite and, for unquantized output, representable as a nonzero finite float32 value unless it is exactly zero. Rows are always interpreted as cells; Cellucid never transposes the matrix or infers its semantic orientation from \code{var}.}
 \item{var_gene_id_column}{Column name in \code{var} containing the gene names to
-record. Use \code{NULL} (default) to use \code{rownames(var)}. Every string,
+record. Use \code{NULL} (default) to use \code{rownames(var)}; that requires
+row names a caller actually set, because a \code{data.frame} that never had any
+reports the automatic sequence \code{"1"} to \code{"n_genes"} and those are row
+numbers, not gene identifiers. Every string,
 including \code{"index"}, names that exact column. Whatever this selects is
 recorded faithfully: Cellucid performs no symbol lookup and ships no mapping, so
 the caller decides what a gene is called. Every identifier in the selected axis
@@ -80,14 +83,28 @@ Quantization is derived from the exact float32 values materialized by the
 viewer; a native-double range that collapses to one float32 value is
 rejected. Individual source values may round to zero when the float32
 range remains non-collapsed.}
-\item{obs_categorical_dtype}{Required exact categorical code storage: \code{"uint8"} or \code{"uint16"}.}
-\item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use \code{NULL} to disable compression.}
-\item{dataset_name}{Required non-empty dataset name without leading or trailing
-whitespace or ASCII control characters for \code{dataset_identity.json}.}
-\item{dataset_description}{Dataset description shown to the reader verbatim.
-Defaults to an empty string, and when non-empty must satisfy the same rule as a
-category label; see the note on displayed text below.}
-\item{dataset_id}{Required portable dataset identifier.}
+\item{obs_categorical_dtype}{Required exact categorical code storage:
+\code{"uint8"} or \code{"uint16"}. It has no default, so omitting it is
+reported as a missing argument rather than as a value of the wrong type.}
+\item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use
+\code{NULL} to disable compression. Every compressed payload carries the same
+fixed gzip header on every platform: no filename, a Unix-epoch timestamp, and
+the \code{OS} code \code{0xff}, which records no operating system. It is the
+header the \code{cellucid} Python package writes. The deflate stream itself is
+whatever the zlib underneath R produces at the requested level.}
+\item{dataset_name}{Required non-empty dataset name for
+\code{dataset_identity.json}, shown to the reader verbatim; see the note on
+displayed text below. It has no default, so omitting it is reported as a
+missing argument rather than as a value of the wrong type.}
+\item{dataset_description}{Optional dataset description shown to the reader
+verbatim. \code{NULL} (the default) and \code{""} both mean the dataset carries
+no description and both publish \code{""}; any other value must satisfy the same
+rule as a category label, see the note on displayed text below.}
+\item{dataset_id}{Required portable dataset identifier: 1--180 ASCII letters,
+numbers, \code{.}, \code{_}, or \code{-}, beginning with a letter or number,
+not ending with \code{.}, and not a Windows device name. It has no default, so
+omitting it is reported as a missing argument rather than as a value of the
+wrong type.}
 \item{source_name}{Optional non-empty data source name. Required whenever \code{source_url} or \code{source_citation} is supplied.}
 \item{source_url}{Optional non-empty data source URL. May be supplied independently when \code{source_name} is present.}
 \item{source_citation}{Optional non-empty citation text. May be supplied independently when \code{source_name} is present.}
@@ -164,6 +181,15 @@ range remains non-collapsed. Categorical outlier quantiles are
 generated internally; cells in categories smaller than
 \code{centroid_min_points} carry \code{NaN}, encoded with the reserved integer
 marker only when those generated quantiles are quantized.
+
+Note on required arguments: \code{obs_categorical_dtype}, \code{dataset_name},
+and \code{dataset_id} carry no default, because no value of any of them is a
+reasonable guess about someone else's dataset. Leaving one out is reported as
+what it is -- \code{cellucid_prepare() is missing 1 required argument:} --
+followed by the argument's name and what a valid value of it is, so a missing
+argument is never described as a value of the wrong type. Every argument that
+is left out is named in that one message. The \code{cellucid} Python package
+requires the same three and reports the same set in one \code{TypeError}.
 
 Note on displayed text: a category label, an exported gene name, an exported
 \code{obs} key, a vector-field id, \code{dataset_name},

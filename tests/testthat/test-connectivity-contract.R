@@ -157,15 +157,11 @@ test_that("duplicate sparse coordinates are rejected before Matrix coalescing", 
 })
 
 test_that("unsigned packers reject non-integer and out-of-range values", {
-  expect_identical(
-    cellucid:::.pack_uint16(c(0, 65535)),
-    as.raw(c(0, 0, 255, 255))
-  )
-  expect_identical(
-    cellucid:::.pack_uint32(c(0, 4294967295)),
-    as.raw(c(0, 0, 0, 0, 255, 255, 255, 255))
-  )
-
+  # The byte layout these packers produce is asserted in test-byte-order.R,
+  # against values that are not byte palindromes. It was asserted here against
+  # 0, 65535 and 4294967295, whose bytes are all identical to each other, so
+  # every permutation of the byte lanes satisfied it -- including a reversed
+  # packer. What is left here is what this test is named for.
   for (invalid in list(-1, 65536)) {
     expect_error(cellucid:::.pack_uint16(invalid), "0.*65,535")
   }
@@ -259,10 +255,26 @@ test_that("empty graphs and browser index-width boundaries are exact", {
     cellucid:::.connectivity_index_dtype(4294967296),
     list(index_dtype = "uint32", index_bytes = 4L)
   )
-  for (invalid_n_cells in list(0L, -1L, TRUE, 1.5, 4294967297)) {
+  # Two separate rules refuse these, and each input is bound to the one that
+  # owns it. A single "positive|uint32" alternation was satisfied by either
+  # message for every input, so it could not tell the rules apart -- a count
+  # rejected for exceeding the index domain and a count rejected for not being
+  # a positive integer read the same to it.
+  invalid <- list(
+    list(value = 0L, message = "^n_cells must be one positive integer\\.$"),
+    list(value = -1L, message = "^n_cells must be one positive integer\\.$"),
+    list(value = TRUE, message = "^n_cells must be one positive integer\\.$"),
+    list(value = 1.5, message = "^n_cells must be one positive integer\\.$"),
+    list(
+      value = 4294967297,
+      message = "^Connectivity cannot exceed 4,294,967,296 cells"
+    )
+  )
+  for (case in invalid) {
     expect_error(
-      cellucid:::.connectivity_index_dtype(invalid_n_cells),
-      "positive|uint32"
+      cellucid:::.connectivity_index_dtype(case$value),
+      case$message,
+      info = format(case$value)
     )
   }
 })

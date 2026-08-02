@@ -2,11 +2,22 @@ citHeader("To cite cellucid in publications use:")
 
 package_version <- meta$Version
 
+# The year is derived, not written down, for the reason CITATION.cff omits
+# `date-released:`: this package has not been published yet, so a literal year
+# committed here is a publication date claimed before the publication. It was
+# also the one field in this entry nothing held in place -- the version beside
+# it comes from meta$Version and is asserted by tests/testthat, while a
+# hardcoded year is named by no release checklist and would have gone stale in
+# silence the moment acceptance slipped into another year. Deriving it from the
+# citing date is what base R itself does for a package with no
+# Date/Publication, and it always yields exactly one string.
+citation_year <- format(Sys.Date(), "%Y")
+
 bibentry(
   bibtype = "Manual",
   title = "cellucid: Export Single-Cell Data to the Cellucid Viewer Format",
   author = person("Kemal", "Inecik"),
-  year = "2026",
+  year = citation_year,
   note = paste0("R package version ", package_version),
   url = "https://github.com/theislab/cellucid-r"
 )

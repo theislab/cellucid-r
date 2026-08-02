@@ -3,6 +3,7 @@
 ^_pkgdown\.yml$
 ^\.DS_Store$
 ^\.gitignore$
+^\.gitattributes$
 ^CITATION\.cff$
 ^CODE_OF_CONDUCT\.md$
 ^CONTRIBUTING\.md$

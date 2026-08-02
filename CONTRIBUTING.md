@@ -22,6 +22,8 @@ Cellucid is split by responsibility:
 | `cellucid-python` | Python package + CLI (`prepare`, `serve`, `show_anndata`, hooks) + Sphinx docs | are fixing Python/CLI bugs, data prep/export, server endpoints, Jupyter hooks, or docs on ReadTheDocs |
 | `cellucid-r` (this repo) | R package for exporting data to the Cellucid viewer format | are changing the R exporter (`cellucid_prepare()`), adding R-side tests/docs, or preparing for CRAN |
 | `cellucid-annotation` | GitHub repo template for community annotation | are changing the repo schema/validation/workflows |
+| `cellucid-datasets` | The published demo catalog | are correcting a published generation or its catalog entry |
+| `cellucid-demo-custom-datasets` | Worked example of publishing your own datasets | are changing that guide or its synthetic examples |
 
 If you’re not sure where a bug belongs, open an issue in the repo you’re currently using and include:
 - how you loaded data (exports vs h5ad/zarr vs remote server vs Jupyter),

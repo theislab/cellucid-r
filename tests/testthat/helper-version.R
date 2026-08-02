@@ -1,21 +1,15 @@
 # DESCRIPTION is the one in-repo source of the package version. Every other
 # in-repo site (NEWS.md, CITATION.cff, README.md, vignettes/installation.Rmd)
 # is checked against it in test-current-contract.R, so a partial bump fails.
-
-cellucid_repository_root <- function() {
-  normalizePath(
-    file.path(testthat::test_path(), "..", ".."),
-    mustWork = FALSE
-  )
-}
+#
+# The root this reads from is resolved in helper-repository.R, which finds the
+# real sources in both the git checkout and an R CMD check directory. Reading
+# the version from anywhere else would let DESCRIPTION and the pages compared
+# against it drift apart unnoticed.
 
 cellucid_description_version <- function() {
   description_path <- file.path(cellucid_repository_root(), "DESCRIPTION")
-  if (file.exists(description_path)) {
-    unname(read.dcf(description_path)[1L, "Version"])
-  } else {
-    as.character(utils::packageVersion("cellucid"))
-  }
+  unname(read.dcf(description_path)[1L, "Version"])
 }
 
 cellucid_semantic_versions <- function(path) {
