@@ -14,8 +14,15 @@ Version 0.9.1 is the CRAN submission release.
   portable edge-index widths without reinterpreting the source graph.
 - Rejects non-finite or non-representable float32 values and duplicate
   scientific identifiers before publication, and says how many and where: a
-  refusal counts the NaN, NA, and infinite values it found and names the first
-  few positions, matching what `cellucid-python` reports for the same input.
+  refusal counts the offending values and names the first few positions.
+  `cellucid-python` reports the same counts; each writer prints positions the
+  way its own caller indexes them, and names the categories its own language
+  distinguishes.
+- Applies the float32 range check wherever a value can enter, not only at the
+  write. A quantized field below the smallest subnormal was published as zero,
+  and an embedding or `latent_space` coordinate was normalized into range before
+  the writer saw it; both ends are now one predicate, checked at the source, as
+  in `cellucid-python`.
 - Names every payload by its integer position on its axis, so no exported
   filename carries dataset content and every dataset has the same directory
   listing: `var/0.values.f32`, `obs/1.codes.u8`, `vectors/0_2d.bin`, and the

@@ -12,6 +12,47 @@
 # not written there -- an argument that looks like the guarantee but is inert
 # would hide where the guarantee actually is.
 
+# The two ends of the viewer's float32 domain, named once.
+#
+# Overflow is the loud end: a value past the largest float32 becomes Inf, and
+# every finiteness check in the package already catches it. Underflow is the
+# quiet one: a nonzero value below the smallest subnormal becomes 0, which is
+# finite, so a finiteness-only check publishes a payload whose value has
+# silently been replaced by zero. Both ends are one rule, so both live in one
+# predicate -- a second copy of it is how the quantized path came to accept
+# what the unquantized path refused.
+
+.float32_max_magnitude <- (2 - 2^-23) * 2^127
+.float32_min_subnormal <- 2^-149
+
+.outside_finite_float32 <- function(values) {
+  abs(values) > .float32_max_magnitude |
+    (values != 0 & abs(values) < .float32_min_subnormal)
+}
+
+# Gate an input the exporter transforms before writing.
+#
+# `.write_float32_vector()` measures the bytes it is about to write, which is
+# the right place for everything published unchanged. It is the wrong place for
+# an input that is normalized first: embedding coordinates are centred and
+# scaled into roughly [-1, 1], so a source coordinate of 1e300 or 1e-320
+# arrives at the writer already inside the float32 range and is published as a
+# number the caller never supplied. cellucid-python refuses both at the source
+# in `_require_finite_embedding_source()`, and one export format cannot depend
+# on which writer wrote it.
+.require_finite_float32_source <- function(values, label) {
+  if (any(.outside_finite_float32(values), na.rm = TRUE)) {
+    stop(
+      label,
+      " contains values outside the finite float32 range: every nonzero ",
+      "value must be representable between 2^-149 and (2 - 2^-23) * 2^127 ",
+      "in absolute magnitude.",
+      call. = FALSE
+    )
+  }
+  invisible(values)
+}
+
 .write_float32_matrix_row_major <- function(path, mat, compression = NULL) {
   .write_float32_vector(path, as.vector(t(mat)), compression = compression)
 }
@@ -52,13 +93,7 @@
     )
   }
 
-  float32_max <- (2 - 2^-23) * 2^127
-  float32_min_subnormal <- 2^-149
-  outside_finite_float32 <- (
-    abs(values) > float32_max |
-      (values != 0 & abs(values) < float32_min_subnormal)
-  )
-  if (any(outside_finite_float32, na.rm = TRUE)) {
+  if (any(.outside_finite_float32(values), na.rm = TRUE)) {
     stop(
       "Every nonzero finite float32 value must be representable between ",
       "2^-149 and (2 - 2^-23) * 2^127 in absolute magnitude.",

@@ -156,6 +156,15 @@ cellucid_prepare <- function(
         "Please filter or impute before export."
       )
     }
+    # Before normalization, because normalization hides it. Centring and
+    # scaling pull every coordinate into roughly [-1, 1], so a source
+    # coordinate of 1e300 or 1e-320 reaches the writer already inside the
+    # float32 range and would be published as a number the caller never
+    # supplied. cellucid-python gates the same values at the same point.
+    .require_finite_float32_source(
+      embeddings[[dim]],
+      paste0("X_umap_", dim, "d")
+    )
     normalized <- .normalize_embedding(embeddings[[dim]])
     embeddings[[dim]] <- normalized$coords
     normalization_info[[dim]] <- normalized$info
@@ -180,6 +189,12 @@ cellucid_prepare <- function(
     stop("latent_space is required for outlier quantile calculation.")
   }
   latent <- .as_dense_matrix(latent_space, name = "latent_space")
+  # The latent space is never written, only measured: the outlier quantiles
+  # come from distances computed in it. Those distances are published as
+  # float32, so a latent coordinate that cannot survive the conversion cannot
+  # produce a quantile that means anything, and cellucid-python refuses it for
+  # the same reason.
+  .require_finite_float32_source(latent, "latent_space")
   if (nrow(latent) != n_cells) {
     stop(
       "Latent space has ", nrow(latent), " cells, but embeddings have ", n_cells, " cells."

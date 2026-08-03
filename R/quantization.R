@@ -31,6 +31,21 @@
       call. = FALSE
     )
   }
+  # Underflow is the other end of the same range and this path was missing it:
+  # a nonzero value below the smallest float32 subnormal round-trips to 0,
+  # which is finite, so the check above accepted it and the field was published
+  # with that value silently replaced by zero. The rule itself lives in
+  # `.outside_finite_float32()` beside the writer that already enforced it --
+  # a second copy of the rule is exactly how this path drifted -- and only the
+  # message, which names the field, belongs here.
+  if (any(.outside_finite_float32(values), na.rm = TRUE)) {
+    stop(
+      "Cannot quantize field '",
+      field_name,
+      "': values must remain finite in the viewer's float32 domain.",
+      call. = FALSE
+    )
+  }
   rounded
 }
 

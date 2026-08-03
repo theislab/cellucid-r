@@ -2540,24 +2540,53 @@ test_that("quantization owns the viewer-visible float32 value domain", {
     q$quantized / 254 * (q$max_val - q$min_val)
   expect_identical(roundtrip_float32(decoded), visible_values)
 
+  # A nonzero value below the smallest float32 subnormal round-trips to 0, which
+  # is finite, so a finiteness-only check accepted it and published a field whose
+  # value had silently become zero. Both writers refuse it now, at every
+  # quantization setting, and the unquantized path already did.
   underflow_source <- c(2^-150, 2^-149, 2^-148)
-  underflow_visible <- roundtrip_float32(underflow_source)
-  expect_identical(underflow_visible, c(0, 2^-149, 2^-148))
-  underflow_q <- cellucid:::.quantize_continuous(
-    underflow_source,
+  expect_identical(roundtrip_float32(underflow_source), c(0, 2^-149, 2^-148))
+  expect_error(
+    cellucid:::.quantize_continuous(
+      underflow_source,
+      bits = 8L,
+      field_name = "subnormal"
+    ),
+    "values must remain finite in the viewer's float32 domain",
+    fixed = TRUE
+  )
+  expect_error(
+    cellucid:::.quantize_continuous(
+      underflow_source,
+      bits = 16L,
+      field_name = "subnormal"
+    ),
+    "values must remain finite in the viewer's float32 domain",
+    fixed = TRUE
+  )
+
+  # Refusing the value below the boundary must not cost the values on it. The
+  # smallest float32 subnormal and its multiples are exactly representable, so
+  # they quantize like any other evenly spaced triple.
+  subnormal_q <- cellucid:::.quantize_continuous(
+    c(2^-149, 2 * 2^-149, 3 * 2^-149),
     bits = 8L,
     field_name = "subnormal"
   )
-  expect_identical(underflow_q$quantized, c(0L, 127L, 254L))
-  expect_identical(underflow_q$min_val, 0)
-  expect_identical(underflow_q$max_val, 2^-148)
-  underflow_decoded <- underflow_q$min_val +
-    underflow_q$quantized / 254 *
-      (underflow_q$max_val - underflow_q$min_val)
-  expect_identical(
-    roundtrip_float32(underflow_decoded),
-    underflow_visible
+  expect_identical(subnormal_q$quantized, c(0L, 127L, 254L))
+  expect_identical(subnormal_q$min_val, 2^-149)
+  expect_identical(subnormal_q$max_val, 3 * 2^-149)
+
+  # A genuine zero beside nonzero values is ordinary scientific data -- a gene
+  # detected in no cell of a subset -- and is not underflow.
+  zero_q <- cellucid:::.quantize_continuous(
+    c(0, 0.5, 1),
+    bits = 8L,
+    field_name = "with-zero"
   )
+  expect_identical(zero_q$quantized, c(0L, 127L, 254L))
+  expect_identical(zero_q$min_val, 0)
+  expect_identical(zero_q$max_val, 1)
 
   observed_chunk_lengths <- integer()
   original_roundtrip <- cellucid:::.roundtrip_finite_float32_chunk
