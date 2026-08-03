@@ -45,7 +45,11 @@
   }
   storage.mode(x) <- "double"
   if (anyNA(x) || any(!is.finite(x))) {
-    stop(name, " must contain only finite values.", call. = FALSE)
+    stop(
+      name, " must contain only finite values. ",
+      .describe_non_finite(x, name),
+      call. = FALSE
+    )
   }
   x
 }
@@ -59,7 +63,8 @@
     if (anyNA(values) || any(!is.finite(values))) {
       stop(
         name,
-        " must not contain infinite or missing sparse values.",
+        " must not contain infinite or missing sparse values. ",
+        .describe_non_finite(values, name, positions = FALSE),
         call. = FALSE
       )
     }
@@ -74,7 +79,11 @@
     stop(name, " must be a real numeric matrix.", call. = FALSE)
   }
   if (anyNA(x) || any(!is.finite(x))) {
-    stop(name, " must contain only finite values.", call. = FALSE)
+    stop(
+      name, " must contain only finite values. ",
+      .describe_non_finite(x, name),
+      call. = FALSE
+    )
   }
   storage.mode(x) <- "double"
   x

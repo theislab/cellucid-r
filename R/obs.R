@@ -164,7 +164,11 @@
       if (anyNA(values) || any(!is.finite(values))) {
         stop(
           "Observation field '", key,
-          "' must contain only finite values.",
+          "' must contain only finite values. ",
+          .describe_non_finite(
+            values,
+            paste0("Observation field '", key, "'")
+          ),
           call. = FALSE
         )
       }

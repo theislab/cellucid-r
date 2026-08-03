@@ -225,7 +225,11 @@
   storage.mode(dense) <- "double"
   if (anyNA(dense) || any(!is.finite(dense))) {
     stop(
-      "Vector field '", name, "' must contain only finite values.",
+      "Vector field '", name, "' must contain only finite values. ",
+      .describe_non_finite(
+        dense,
+        paste0("Vector field '", name, "'")
+      ),
       call. = FALSE
     )
   }

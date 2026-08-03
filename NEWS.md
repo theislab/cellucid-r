@@ -13,7 +13,9 @@ Version 0.9.1 is the CRAN submission release.
 - Preserves symmetric positive connectivity weights, exact empty graphs, and
   portable edge-index widths without reinterpreting the source graph.
 - Rejects non-finite or non-representable float32 values and duplicate
-  scientific identifiers before publication.
+  scientific identifiers before publication, and says how many and where: a
+  refusal counts the NaN, NA, and infinite values it found and names the first
+  few positions, matching what `cellucid-python` reports for the same input.
 - Names every payload by its integer position on its axis, so no exported
   filename carries dataset content and every dataset has the same directory
   listing: `var/0.values.f32`, `obs/1.codes.u8`, `vectors/0_2d.bin`, and the
