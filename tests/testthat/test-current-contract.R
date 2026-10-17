@@ -190,6 +190,14 @@ test_that("main is the only workflow branch", {
     workflow_branches("pkgdown.yaml"),
     "branches: [main]"
   )
+  # The github-pages environment accepts only main: a release-triggered run
+  # deploys from the tag ref and is refused.
+  pkgdown_lines <- readLines(
+    file.path(workflow_directory, "pkgdown.yaml"),
+    warn = FALSE,
+    encoding = "UTF-8"
+  )
+  expect_false(any(grepl("^[[:space:]]*release:", pkgdown_lines)))
 })
 
 test_that("DESCRIPTION is the one in-repo source of the 0.9.2 release identity", {

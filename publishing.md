@@ -352,7 +352,7 @@ R package names cannot contain `-`, so the package itself must stay `cellucid`.
 |----------|---------|---------|
 | R-CMD-check | Push, PR | Tests on Windows/macOS/Linux |
 | Build Release Tarball | Release, manual | Creates CRAN-ready `.tar.gz` |
-| pkgdown | Push to main, release | Deploys documentation website |
+| pkgdown | Push to main, manual | Deploys documentation website |
 
 ### Useful Links
 
