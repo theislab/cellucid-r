@@ -192,11 +192,11 @@ test_that("main is the only workflow branch", {
   )
 })
 
-test_that("DESCRIPTION is the one in-repo source of the 0.9.1 release identity", {
+test_that("DESCRIPTION is the one in-repo source of the 0.9.2 release identity", {
   repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
   version <- cellucid_description_version()
-  expect_identical(version, "0.9.1")
+  expect_identical(version, "0.9.2")
 
   description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
   version_line <- which(startsWith(description, "Version:"))
