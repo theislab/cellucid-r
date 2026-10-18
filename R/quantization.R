@@ -49,7 +49,7 @@
   rounded
 }
 
-# Name compact_v1's constant-field case from one payload's bounds.
+# Name the compact format's constant-field case from one payload's bounds.
 #
 # A gene detected in no published cell, or an obs column a subset flattened, is
 # ordinary scientific data, so the format encodes it rather than rejecting it.

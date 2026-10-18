@@ -53,6 +53,10 @@
   dataset_id = paste0(
     "one portable identifier of 1-180 ASCII letters, numbers, '.', '_', or ",
     "'-', beginning with a letter or number and not ending with '.'"
+  ),
+  embeddings = paste0(
+    "a named list mapping each embedding id to a matrix or a ",
+    "cellucid_embedding(), for example list(X_umap = umap)"
   )
 )
 

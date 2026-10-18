@@ -59,7 +59,11 @@ cellucid_prepare(
   obs = obs,
   var = var,
   gene_expression = expr,
-  X_umap_2d = umap2,
+  embeddings = list(
+    X_umap = umap2,
+    X_flipped = cellucid_embedding(umap2, columns = c(2, 1), label = "Flipped")
+  ),
+  embedding_defaults = c("2d" = "X_umap"),
   out_dir = out_dir,
   centroid_min_points = 1,
   force = TRUE,
@@ -68,6 +72,25 @@ cellucid_prepare(
 
 list.files(out_dir, recursive = TRUE)
 ```
+
+`embeddings` is a named list of every embedding the export carries, any number
+per dimension. A matrix of 1, 2, or 3 columns is plotted whole;
+`cellucid_embedding()` names the 1-based columns of a wider array, a display
+label, and the key it came from. `embedding_defaults` names the embedding each
+dimension shows first and is required for any dimension with more than one.
+Each embedding is normalized on its own and written to
+`embeddings/{index}_{dimension}d.bin`.
+
+Vector fields are bound to embedding ids:
+`vector_fields = list(velocity = list(X_umap = velocity_2d))`, where each array
+has one column per dimension of its embedding.
+
+Gene names come from `rownames(var)` or `var_gene_id_column`. An empty name
+(`NA` or `""`) takes the row's name from `rownames(var)`, and repeated names are
+made unique the way anndata's `var_names_make_unique()` does it -- the second
+`MATR3` becomes `MATR3-1` -- with a message saying what changed.
+`var_gene_name_columns` adds further `var` columns as alternative gene-name sets
+the viewer can switch to, stored as metadata in `var_manifest.json`.
 
 Set `created_at` to an exact `YYYY-MM-DDTHH:MM:SSZ` UTC value when the identity
 metadata itself must be reproducible; the default is the current UTC time.
@@ -89,6 +112,7 @@ if (requireNamespace("Seurat", quietly = TRUE) &&
 
   umap2 <- Seurat::Embeddings(seu, "umap")[, 1:2, drop = FALSE]
   latent <- Seurat::Embeddings(seu, "pca")
+  pca <- cellucid_embedding(latent, columns = c(1, 2), label = "PCA")
 
   obs <- seu@meta.data
 
@@ -105,7 +129,8 @@ if (requireNamespace("Seurat", quietly = TRUE) &&
     obs = obs,
     var = var,
     gene_expression = expr_cells_by_genes,
-    X_umap_2d = umap2,
+    embeddings = list(X_umap = umap2, X_pca = pca),
+    embedding_defaults = c("2d" = "X_umap"),
     out_dir = "exports/seurat_export",
     force = TRUE,
     obs_categorical_dtype = "uint16"
@@ -144,7 +169,7 @@ if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
     obs = obs,
     var = var,
     gene_expression = expr_cells_by_genes,
-    X_umap_2d = umap2,
+    embeddings = list(X_umap = umap2),
     out_dir = "exports/sce_export",
     force = TRUE,
     obs_categorical_dtype = "uint16"
@@ -156,9 +181,12 @@ if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
 
 The export directory contains:
 
-- Embeddings: `points_1d.bin`, `points_2d.bin`, `points_3d.bin` (float32)
+- Embeddings: `embeddings/{index}_{dimension}d.bin` (float32), one per
+  exported embedding, declared in `dataset_identity.json`
 - Cell metadata: `obs_manifest.json` + `obs/` binaries
-- Gene expression: `var_manifest.json` + `var/` binaries (one file per gene)
+- Gene expression: `var_manifest.json` + `var/` binaries (one file per gene),
+  with every gene-name set in `var_manifest.json`
+- Vector fields (optional): `vectors/{fieldIndex}_{embeddingIndex}.bin`
 - Connectivity (optional): `connectivity_manifest.json` plus aligned
   `connectivity/edges.src.bin`, `edges.dst.bin`, and
   `edges.weights.f64.bin` payloads. Weights are exact little-endian float64

@@ -282,12 +282,8 @@
 # against the directory that was actually written.
 #
 # `directory_name = NULL` reconciles the export root itself rather than one
-# axis directory. The root is where the point payloads live, and they are the
-# only artifact this format declares by path from there -- in
-# dataset_identity.json -- so nothing else in the package can catch a
-# coordinate file whose name on disk is not the name the viewer is told to
-# fetch. The root also holds the manifests and the axis directories, so
-# `declared_directories` names the subdirectories that belong to the
+# axis directory. The root holds only the manifests and the axis directories,
+# so `declared_directories` names the subdirectories that belong to the
 # generation: a directory that is not one of them is refused by kind, which
 # also keeps a declared payload from being satisfied by a directory of the
 # same name.
@@ -409,10 +405,35 @@
   unique(declared)
 }
 
+# The format version both compact manifests (obs and var) carry. compact_v2
+# keys categorical centroids by embedding id and adds gene-name sets to var.
+.manifest_format_version <- "compact_v2"
+
 .gene_names_from_compact_manifest <- function(manifest) {
+  expected_names <- c(
+    "_format",
+    "n_points",
+    "compression",
+    "quantization",
+    "_varSchema",
+    "fields",
+    "gene_name_sets"
+  )
+  if (
+    !is.list(manifest) ||
+      !identical(sort(names(manifest)), sort(expected_names))
+  ) {
+    stop(
+      "var manifest must contain exactly the current compact_v2 fields.",
+      call. = FALSE
+    )
+  }
+  if (!identical(manifest[["_format"]], .manifest_format_version)) {
+    stop("var manifest must use the current compact_v2 format.", call. = FALSE)
+  }
   fields <- manifest$fields
   if (!is.list(fields)) {
-    stop("compact_v1 var manifest fields must be a list.", call. = FALSE)
+    stop("compact var manifest fields must be a list.", call. = FALSE)
   }
   gene_names <- character(0)
   payload_indices <- list()
@@ -426,7 +447,7 @@
         !nzchar(field[[2L]])
     ) {
       stop(
-        "compact_v1 var fields must be exact [index, name] or ",
+        "compact var fields must be exact [index, name] or ",
         "[index, name, minValue, maxValue] tuples.",
         call. = FALSE
       )
@@ -436,7 +457,130 @@
   }
   .require_unique_identifiers(gene_names, what = "Gene")
   .require_dense_payload_indices(payload_indices, axis = "Gene")
+  .require_gene_name_sets(manifest[["gene_name_sets"]], gene_names)
   gene_names
+}
+
+.is_name_string <- function(value) {
+  is.character(value) && length(value) == 1L && !is.na(value) && nzchar(value)
+}
+
+# Validate the gene-name sets of one var manifest against its field names.
+# Set 0 is the default: its names are the field names, so its `names` is
+# null. Every later set lists one name per field, null where it equals the
+# default name, and resolves to names that are distinct within the set. No
+# two sets read the same source. cellucid-python's _require_gene_name_sets()
+# applies the same rules.
+.require_gene_name_sets <- function(sets, default_names) {
+  set_keys <- c("source", "filled_from_index", "renamed", "names")
+  if (!is.list(sets) || !is.null(names(sets)) || length(sets) == 0L) {
+    stop("var manifest gene_name_sets must be a non-empty list.", call. = FALSE)
+  }
+  sources <- list()
+  for (position in seq_along(sets)) {
+    name_set <- sets[[position]]
+    label <- paste0("var manifest gene_name_sets[", position - 1L, "]")
+    if (!is.list(name_set) || !identical(names(name_set), set_keys)) {
+      stop(
+        label, " must hold exactly the keys ", .format_value_list(set_keys), ".",
+        call. = FALSE
+      )
+    }
+    source <- name_set$source
+    if (!is.null(source) && !.is_name_string(source)) {
+      stop(label, "$source must be null or a non-empty column name.", call. = FALSE)
+    }
+    if (position > 1L && is.null(source)) {
+      stop(label, "$source must name a var column.", call. = FALSE)
+    }
+    sources[[position]] <- if (is.null(source)) NA_character_ else source
+    filled <- name_set$filled_from_index
+    if (
+      !is.numeric(filled) ||
+        length(filled) != 1L ||
+        is.na(filled) ||
+        filled != floor(filled) ||
+        filled < 0 ||
+        filled > length(default_names)
+    ) {
+      stop(label, "$filled_from_index must count exported genes.", call. = FALSE)
+    }
+    if (is.null(source) && filled != 0) {
+      stop(label, ": the var index cannot fill names from itself.", call. = FALSE)
+    }
+    renamed <- name_set$renamed
+    if (
+      !is.list(renamed) ||
+        !all(vapply(renamed, function(pair) {
+          is.list(pair) && length(pair) == 2L &&
+            .is_name_string(pair[[1L]]) && .is_name_string(pair[[2L]])
+        }, logical(1)))
+    ) {
+      stop(label, "$renamed must be a list of [from, to] name pairs.", call. = FALSE)
+    }
+    listed <- name_set$names
+    if (position == 1L) {
+      if (!is.null(listed)) {
+        stop(label, "$names must be null: the field names are this set.", call. = FALSE)
+      }
+      resolved <- default_names
+    } else {
+      if (!is.list(listed) || length(listed) != length(default_names)) {
+        stop(label, "$names must hold one entry per gene.", call. = FALSE)
+      }
+      resolved <- character(length(listed))
+      for (index in seq_along(listed)) {
+        name <- listed[[index]]
+        if (is.null(name)) {
+          resolved[[index]] <- default_names[[index]]
+        } else if (!.is_name_string(name)) {
+          stop(label, "$names must hold non-empty strings or null.", call. = FALSE)
+        } else if (identical(name, default_names[[index]])) {
+          stop(
+            label, "$names must be null wherever a name equals the default name.",
+            call. = FALSE
+          )
+        } else {
+          resolved[[index]] <- name
+        }
+      }
+    }
+    .require_unique_identifiers(resolved, what = paste0(label, " gene"))
+  }
+  if (anyDuplicated(unlist(sources))) {
+    stop("var manifest gene_name_sets must read each source once.", call. = FALSE)
+  }
+  invisible(sets)
+}
+
+# Re-derive every embedding payload path dataset_identity.json declares. The
+# declared file of the item at position `index` must be exactly
+# embeddings/{index}_{dimension}d.bin, plus .gz when the export is compressed,
+# so the declaration is checked against that rule before it is compared with
+# the directory.
+.declared_embedding_payload_paths <- function(identity) {
+  items <- identity$embeddings$items
+  compression <- identity$export_settings$compression
+  suffix <- if (is.null(compression)) "" else ".gz"
+  declared <- character(0)
+  for (position in seq_along(items)) {
+    item <- items[[position]]
+    expected <- sprintf(
+      "embeddings/%d_%dd.bin%s",
+      position - 1L,
+      as.integer(item$dimension),
+      suffix
+    )
+    if (!identical(item$file, expected)) {
+      stop(
+        "Embedding '", names(items)[[position]], "' declares file '",
+        item$file, "'; the format requires '", expected, "'.",
+        call. = FALSE
+      )
+    }
+    declared <- c(declared, expected)
+  }
+  declared
 }
 
 .identity_obs_fields_from_compact_manifest <- function(manifest) {
@@ -457,12 +601,12 @@
       !setequal(names(manifest), expected_names)
   ) {
     stop(
-      "obs manifest must contain exactly the current compact_v1 fields.",
+      "obs manifest must contain exactly the current compact_v2 fields.",
       call. = FALSE
     )
   }
-  if (!identical(manifest[["_format"]], "compact_v1")) {
-    stop("obs manifest must use the current compact_v1 format.", call. = FALSE)
+  if (!identical(manifest[["_format"]], .manifest_format_version)) {
+    stop("obs manifest must use the current compact_v2 format.", call. = FALSE)
   }
   # The schema map is an object in every generation, including one with no
   # observation field at all, where it is empty. An empty unnamed list is a
@@ -479,13 +623,13 @@
   categorical_fields <- manifest[["_categoricalFields"]]
   if (!is.list(continuous_fields)) {
     stop(
-      "compact_v1 obs manifest _continuousFields must be a list.",
+      "compact obs manifest _continuousFields must be a list.",
       call. = FALSE
     )
   }
   if (!is.list(categorical_fields)) {
     stop(
-      "compact_v1 obs manifest _categoricalFields must be a list.",
+      "compact obs manifest _categoricalFields must be a list.",
       call. = FALSE
     )
   }
@@ -504,7 +648,7 @@
         !nzchar(field[[2]])
     ) {
       stop(
-        "compact_v1 continuous observation fields must be exact ",
+        "compact continuous observation fields must be exact ",
         "[index, key] or [index, key, minValue, maxValue] tuples.",
         call. = FALSE
       )
@@ -527,11 +671,13 @@
         is.na(field[[2]]) ||
         !nzchar(field[[2]]) ||
         !(is.atomic(field[[3]]) || is.list(field[[3]])) ||
-        !is.null(dim(field[[3]]))
+        !is.null(dim(field[[3]])) ||
+        !identical(.json_kind(field[[6]]), "object")
     ) {
       stop(
-        "compact_v1 categorical observation fields must be exact ",
-        "six- or eight-member tuples with a category array.",
+        "compact categorical observation fields must be exact six- or ",
+        "eight-member tuples with a category array and a centroid object ",
+        "keyed by embedding id.",
         call. = FALSE
       )
     }

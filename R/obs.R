@@ -132,7 +132,7 @@
     obs,
     obs_keys,
     latent,
-    embeddings,
+    embedding_items,
     obs_binary_dir,
     obs_binary_dirname,
     centroid_outlier_quantile,
@@ -247,13 +247,13 @@
     }
 
     if (is.null(centroid_outlier_quantile)) {
-      centroids_by_dim <- stats::setNames(
-        lapply(names(embeddings), function(...) list()),
-        names(embeddings)
+      centroids_by_embedding <- stats::setNames(
+        lapply(embedding_items, function(...) list()),
+        vapply(embedding_items, function(item) item$id, character(1))
       )
     } else {
-      centroids_by_dim <- .compute_centroids_for_all_dimensions(
-        embeddings = embeddings,
+      centroids_by_embedding <- .compute_centroids_for_all_embeddings(
+        items = embedding_items,
         codes = codes,
         categories = categories,
         outlier_quantile = centroid_outlier_quantile,
@@ -291,7 +291,7 @@
         I(categories),
         dtype_str,
         as.integer(missing_value),
-        centroids_by_dim,
+        centroids_by_embedding,
         oq$min_val,
         oq$max_val
       )
@@ -320,7 +320,7 @@
         I(categories),
         dtype_str,
         as.integer(missing_value),
-        centroids_by_dim
+        centroids_by_embedding
       )
 
       if (length(categorical_dtype_info) == 0L) {

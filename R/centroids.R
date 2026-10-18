@@ -55,12 +55,13 @@
   centroids
 }
 
-.compute_centroids_for_all_dimensions <- function(embeddings, codes, categories, outlier_quantile = 0.95, min_points = 10) {
+# One centroid list per exported embedding, keyed by embedding id in item
+# order -- the centroidsByEmbedding object of a categorical obs entry.
+.compute_centroids_for_all_embeddings <- function(items, codes, categories, outlier_quantile = 0.95, min_points = 10) {
   result <- list()
-  for (dim in names(embeddings)) {
-    coords <- embeddings[[dim]]
-    result[[dim]] <- .compute_centroids_for_field(
-      coords = coords,
+  for (item in items) {
+    result[[item$id]] <- .compute_centroids_for_field(
+      coords = item$coords,
       codes = codes,
       categories = categories,
       outlier_quantile = outlier_quantile,

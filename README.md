@@ -13,9 +13,9 @@
 `cellucid` (repo: `cellucid-r`) writes your embeddings, metadata, gene expression, connectivities, and vector fields
 to the on-disk format consumed by the Cellucid web app.
 
-> **Active package version — 0.9.2** <!-- CELLUCID_VERSION -->
+> **Active package version — 0.9.3** <!-- CELLUCID_VERSION -->
 >
-> Version 0.9.2 is the active Cellucid for R source and documentation version,
+> Version 0.9.3 is the active Cellucid for R source and documentation version,
 > and it is the CRAN submission release. The CRAN package index is authoritative
 > for registry availability; the Installation guide below gives both exact
 > installation paths.
@@ -90,12 +90,23 @@ cellucid_prepare(
   obs = obs,               # data.frame (cells × fields)
   var = var,               # data.frame (genes × fields)
   gene_expression = expr,  # optional: cells × genes
-  X_umap_2d = umap2,       # optional
+  embeddings = list(       # required: any number per dimension
+    X_umap = umap2,
+    X_pca = cellucid_embedding(pca, columns = c(1, 2), label = "PCA")
+  ),
+  embedding_defaults = c("2d" = "X_umap"),  # which 2D embedding shows first
   out_dir = "exports/my_dataset",
   force = TRUE,
   obs_categorical_dtype = "uint16"
 )
 ```
+
+`embeddings` names every embedding the export carries; `cellucid_embedding()`
+reads chosen 1-based columns of a wider array. Vector fields are bound to
+embedding ids, as in `vector_fields = list(velocity = list(X_umap = v2))`.
+Repeated gene names are made unique the way anndata does it (`MATR3`,
+`MATR3-1`), and `var_gene_name_columns` adds alternative gene-name sets, such
+as gene symbols beside Ensembl row names, that the viewer can switch between.
 
 For reproducible identity metadata, pass an exact UTC-seconds value such as
 `created_at = "2026-07-29T12:34:56Z"`; otherwise the exporter records the

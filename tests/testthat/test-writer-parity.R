@@ -64,8 +64,8 @@
     dataset_name = "Writer parity",
     latent_space = fixture$latent,
     obs = fixture$obs,
-    X_umap_2d = fixture$umap2,
-    vector_fields = list(velocity_umap_2d = fixture$vectors),
+    embeddings = list(X_umap = fixture$umap2),
+    vector_fields = list(velocity_umap = list(X_umap = fixture$vectors)),
     out_dir = out,
     centroid_min_points = 4L,
     force = TRUE,
@@ -84,7 +84,7 @@ test_that("a vector payload is the scaled value rounded to float32 once", {
   rounded_twice <- .parity_float32(.parity_float32(raw_values) * scale_factor)
 
   published <- .parity_read_float32(
-    file.path(out, "vectors", "0_2d.bin"),
+    file.path(out, "vectors", "0_0.bin"),
     length(raw_values)
   )
 
@@ -94,7 +94,7 @@ test_that("a vector payload is the scaled value rounded to float32 once", {
   expect_false(identical(published, rounded_twice))
 })
 
-test_that("a points payload is the normalized value rounded to float32 once", {
+test_that("an embedding payload is the normalized value rounded to float32 once", {
   fixture <- .parity_fixture()
   out <- .parity_export(fixture, file.path(tempdir(), "cellucid_parity_points"))
 
@@ -105,7 +105,7 @@ test_that("a points payload is the normalized value rounded to float32 once", {
   normalized <- sweep(fixture$umap2, 2, center, FUN = "-") * scale_factor
 
   published <- .parity_read_float32(
-    file.path(out, "points_2d.bin"),
+    file.path(out, "embeddings", "0_2d.bin"),
     length(normalized)
   )
   expect_identical(published, .parity_float32(as.vector(t(normalized))))
@@ -125,7 +125,7 @@ test_that("a centroid is measured from coordinates that were never rounded", {
     file.path(out, "obs_manifest.json"),
     simplifyVector = FALSE
   )
-  centroids <- manifest[["_categoricalFields"]][[1L]][[6L]][["2"]]
+  centroids <- manifest[["_categoricalFields"]][[1L]][[6L]][["X_umap"]]
   expect_length(centroids, 4L)
 
   codes <- as.integer(fixture$obs$cluster) - 1L
@@ -173,7 +173,7 @@ test_that("a vector field entry uses the key order both writers publish", {
   # specification prints exactly this order.
   expect_identical(
     names(entry),
-    c("label", "available_dimensions", "default_dimension", "files", "basis")
+    c("label", "files")
   )
 })
 
