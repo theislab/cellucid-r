@@ -17,6 +17,15 @@ cellucid_semantic_versions <- function(path) {
     readLines(path, warn = FALSE, encoding = "UTF-8"),
     collapse = "\n"
   )
+  # The generated citation region is not a version statement: once the
+  # preprint is published its DOI (10.1101/YYYY.MM.DD.NNNNNN) holds digit
+  # triples that are not package versions. test-citation-contract.R owns it.
+  text <- gsub(
+    "<!-- BEGIN cellucid-citation[\\s\\S]*?<!-- END cellucid-citation -->",
+    "",
+    text,
+    perl = TRUE
+  )
   unique(unlist(regmatches(
     text,
     gregexpr("[0-9]+\\.[0-9]+\\.[0-9]+", text)

@@ -6,6 +6,10 @@ It carries the changes prepared as 0.9.1, which was never published; the number
 moved to stay in step with the Python package.
 
 - Exposes `cellucid_prepare()` as the single public preparation entry point.
+- `citation("cellucid")` now lists the Cellucid preprint first, followed by
+  the package manual entry. The preprint is a placeholder until it is published
+  on bioRxiv and says so; the entry is generated from the `preferred-citation`
+  block that every Cellucid repository's `CITATION.cff` shares.
 - Publishes complete prepared generations transactionally and rejects mixed or
   stale output directories.
 - Serializes independent R and Python exporters with one persistent exact-target
