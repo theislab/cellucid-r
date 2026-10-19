@@ -1,6 +1,6 @@
 {
   "_about": "Shared conformance cases for the Cellucid data mapping. The same file is kept byte-for-byte in cellucid-python (tests/fixtures/data_mapping_conformance.json), cellucid-r (tests/testthat/fixtures/data_mapping_conformance.json) and the web app (tests/fixtures/data-mapping-conformance.json); each repository pins its SHA-256. Every 'expected' value is the canonical output of the reference rule; an 'error' value is the stable reason code, not a message.",
-  "version": 1,
+  "version": 2,
   "makeUniqueNames": [
     {
       "name": "already unique names come back unchanged",
@@ -1159,6 +1159,309 @@
       }
     }
   ],
+  "enabledEmbeddings": [
+    {
+      "name": "the default rule's slots plus every other narrow array",
+      "obsm": [
+        {
+          "key": "X_umap",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_umap_2d",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_umap_3d",
+          "width": 3,
+          "usable": true
+        },
+        {
+          "key": "X_tsne",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_pca",
+          "width": 50,
+          "usable": true
+        }
+      ],
+      "latentKey": null,
+      "loadFailures": {},
+      "expected": [
+        {
+          "key": "X_tsne",
+          "columns": [
+            0,
+            1
+          ]
+        },
+        {
+          "key": "X_umap",
+          "columns": [
+            0,
+            1
+          ]
+        },
+        {
+          "key": "X_umap_2d",
+          "columns": [
+            0,
+            1
+          ]
+        },
+        {
+          "key": "X_umap_3d",
+          "columns": [
+            0,
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a wide array is enabled only where it fills a slot",
+      "obsm": [
+        {
+          "key": "X_pca",
+          "width": 50,
+          "usable": true
+        },
+        {
+          "key": "X_scvi",
+          "width": 10,
+          "usable": true
+        }
+      ],
+      "latentKey": null,
+      "loadFailures": {},
+      "expected": [
+        {
+          "key": "X_pca",
+          "columns": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a guessed wide slot beside nothing narrow",
+      "obsm": [
+        {
+          "key": "X_pca",
+          "width": 50,
+          "usable": true
+        }
+      ],
+      "latentKey": null,
+      "loadFailures": {},
+      "expected": [
+        {
+          "key": "X_pca",
+          "columns": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "every narrow width, ranked arrays all enabled",
+      "obsm": [
+        {
+          "key": "X_draw_graph_fa",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_tsne",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_phate",
+          "width": 3,
+          "usable": true
+        },
+        {
+          "key": "X_line",
+          "width": 1,
+          "usable": true
+        },
+        {
+          "key": "X_pca",
+          "width": 50,
+          "usable": true
+        }
+      ],
+      "latentKey": null,
+      "loadFailures": {},
+      "expected": [
+        {
+          "key": "X_draw_graph_fa",
+          "columns": [
+            0,
+            1
+          ]
+        },
+        {
+          "key": "X_line",
+          "columns": [
+            0
+          ]
+        },
+        {
+          "key": "X_phate",
+          "columns": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "key": "X_tsne",
+          "columns": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vector keys, the latent key and unusable entries are not enabled",
+      "obsm": [
+        {
+          "key": "velocity_umap_2d",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_scvi",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_custom",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_df",
+          "width": null,
+          "usable": false
+        }
+      ],
+      "latentKey": "X_scvi",
+      "loadFailures": {},
+      "expected": [
+        {
+          "key": "X_custom",
+          "columns": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "an array the best guess rejected is not enabled",
+      "obsm": [
+        {
+          "key": "X_tsne",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_spatial",
+          "width": 2,
+          "usable": true
+        }
+      ],
+      "latentKey": null,
+      "loadFailures": {
+        "X_tsne": "NaN at cell 17"
+      },
+      "expected": [
+        {
+          "key": "X_spatial",
+          "columns": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "keys order by code point",
+      "obsm": [
+        {
+          "key": "X_b",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_B",
+          "width": 2,
+          "usable": true
+        },
+        {
+          "key": "X_a",
+          "width": 3,
+          "usable": true
+        },
+        {
+          "key": "X_umap",
+          "width": 2,
+          "usable": true
+        }
+      ],
+      "latentKey": null,
+      "loadFailures": {},
+      "expected": [
+        {
+          "key": "X_B",
+          "columns": [
+            0,
+            1
+          ]
+        },
+        {
+          "key": "X_a",
+          "columns": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "key": "X_b",
+          "columns": [
+            0,
+            1
+          ]
+        },
+        {
+          "key": "X_umap",
+          "columns": [
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "empty obsm enables nothing",
+      "obsm": [],
+      "latentKey": null,
+      "loadFailures": {},
+      "expected": []
+    }
+  ],
   "embeddingColumns": [
     {
       "columns": [
@@ -1693,21 +1996,47 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -1741,21 +2070,47 @@
       "expected": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -1792,14 +2147,30 @@
       "value": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "index",
@@ -1816,14 +2187,30 @@
       "expected": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "index",
@@ -1843,14 +2230,30 @@
       "value": {
         "kind": "h5ad",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "index",
@@ -1873,14 +2276,30 @@
       "value": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "index",
@@ -1904,21 +2323,47 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -1957,17 +2402,33 @@
       "value": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": [
-              0,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "index",
@@ -1990,18 +2451,44 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2037,26 +2524,52 @@
       }
     },
     {
-      "name": "anndata reference with the wrong column count",
+      "name": "anndata default with the wrong column count",
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              0,
-              1,
-              2
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2096,21 +2609,40 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              1,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                1,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2146,13 +2678,301 @@
       }
     },
     {
-      "name": "no slot filled",
+      "name": "an enabled anndata reference of four columns",
+      "value": {
+        "kind": "anndata",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            },
+            {
+              "key": "X_zz",
+              "columns": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "knn": "connectivities",
+        "geneNames": "column:gene_symbols",
+        "expression": "layer:log1p",
+        "latent": "X_scvi",
+        "vectorFields": [
+          {
+            "key": "velocity_pca",
+            "embedding": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            }
+          },
+          {
+            "key": "velocity_umap_3d",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "column_count"
+      }
+    },
+    {
+      "name": "several representations of one dimension, one of them the default",
+      "value": {
+        "kind": "anndata",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            },
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_phate",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "knn": "connectivities",
+        "geneNames": "column:gene_symbols",
+        "expression": "layer:log1p",
+        "latent": "X_scvi",
+        "vectorFields": [
+          {
+            "key": "velocity_pca",
+            "embedding": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            }
+          },
+          {
+            "key": "velocity_umap_3d",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "kind": "anndata",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            },
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_phate",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "knn": "connectivities",
+        "geneNames": "column:gene_symbols",
+        "expression": "layer:log1p",
+        "latent": "X_scvi",
+        "vectorFields": [
+          {
+            "key": "velocity_pca",
+            "embedding": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            }
+          },
+          {
+            "key": "velocity_umap_3d",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "no default named",
       "value": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": null,
-          "3d": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": null,
+            "3d": null
+          }
         },
         "geneNames": "index",
         "vectorFields": [
@@ -2170,7 +2990,385 @@
       }
     },
     {
-      "name": "bad geneNames",
+      "name": "nothing enabled",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "no_embedding"
+      }
+    },
+    {
+      "name": "enabled is not a list",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": {
+            "key": "X_tsne",
+            "columns": null
+          },
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "not_list"
+      }
+    },
+    {
+      "name": "a default that is not enabled",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_draw_graph_fa",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "default_not_enabled"
+      }
+    },
+    {
+      "name": "unsorted enabled embeddings",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "embedding_order"
+      }
+    },
+    {
+      "name": "columns order the same key: a shorter prefix first",
+      "value": {
+        "kind": "anndata",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1,
+                0
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "knn": "connectivities",
+        "geneNames": "column:gene_symbols",
+        "expression": "layer:log1p",
+        "latent": "X_scvi",
+        "vectorFields": [
+          {
+            "key": "velocity_pca",
+            "embedding": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            }
+          },
+          {
+            "key": "velocity_umap_3d",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "kind": "anndata",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1,
+                0
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "knn": "connectivities",
+        "geneNames": "column:gene_symbols",
+        "expression": "layer:log1p",
+        "latent": "X_scvi",
+        "vectorFields": [
+          {
+            "key": "velocity_pca",
+            "embedding": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            }
+          },
+          {
+            "key": "velocity_umap_3d",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "a repeated enabled embedding",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "embedding_duplicate"
+      }
+    },
+    {
+      "name": "the old slot shape",
       "value": {
         "kind": "export",
         "embeddings": {
@@ -2182,6 +3380,98 @@
           "3d": {
             "key": "X_umap_3d",
             "columns": null
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "keys"
+      }
+    },
+    {
+      "name": "a vector field bound to an embedding that is not enabled",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_draw_graph_fa",
+              "columns": null
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "vector_not_enabled"
+      }
+    },
+    {
+      "name": "bad geneNames",
+      "value": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "symbols",
@@ -2204,14 +3494,30 @@
       "value": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "column:",
@@ -2234,21 +3540,47 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2288,21 +3620,47 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2336,21 +3694,47 @@
       "expected": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2387,21 +3771,47 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "connectivities",
@@ -2441,14 +3851,30 @@
       "value": {
         "kind": "export",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_tsne",
-            "columns": null
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": null
+          "enabled": [
+            {
+              "key": "X_pca_3d",
+              "columns": null
+            },
+            {
+              "key": "X_tsne",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_tsne",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
           }
         },
         "geneNames": "index",
@@ -2478,21 +3904,47 @@
       "value": {
         "kind": "anndata",
         "embeddings": {
-          "1d": null,
-          "2d": {
-            "key": "X_pca",
-            "columns": [
-              3,
-              1
-            ]
-          },
-          "3d": {
-            "key": "X_umap_3d",
-            "columns": [
-              0,
-              1,
-              2
-            ]
+          "enabled": [
+            {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            {
+              "key": "X_tsne",
+              "columns": [
+                0,
+                1
+              ]
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "X_pca",
+              "columns": [
+                3,
+                1
+              ]
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "knn": "",
@@ -2525,6 +3977,244 @@
       },
       "expected": {
         "error": "not_string"
+      }
+    }
+  ],
+  "exportDataMapping": [
+    {
+      "name": "a Python export: one embedding per dimension, ids from obsm keys",
+      "identity": {
+        "embeddings": {
+          "items": {
+            "X_umap_1d": {
+              "dimension": 1
+            },
+            "X_umap_2d": {
+              "dimension": 2
+            },
+            "X_umap_3d": {
+              "dimension": 3
+            }
+          },
+          "defaults": {
+            "1d": "X_umap_1d",
+            "2d": "X_umap_2d",
+            "3d": "X_umap_3d"
+          }
+        },
+        "vector_fields": {
+          "fields": {
+            "velocity": {
+              "files": {
+                "X_umap_3d": "v.bin",
+                "X_umap_2d": "v2.bin"
+              }
+            }
+          }
+        }
+      },
+      "geneNameSource": null,
+      "expected": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "X_umap_1d",
+              "columns": null
+            },
+            {
+              "key": "X_umap_2d",
+              "columns": null
+            },
+            {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": {
+              "key": "X_umap_1d",
+              "columns": null
+            },
+            "2d": {
+              "key": "X_umap_2d",
+              "columns": null
+            },
+            "3d": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_2d",
+              "columns": null
+            }
+          },
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "X_umap_3d",
+              "columns": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "an R export: ids the caller chose and a single 2D default",
+      "identity": {
+        "embeddings": {
+          "items": {
+            "tsne": {
+              "dimension": 2
+            },
+            "umap": {
+              "dimension": 2
+            },
+            "umap_harmony": {
+              "dimension": 2
+            },
+            "pca_3d": {
+              "dimension": 3
+            }
+          },
+          "defaults": {
+            "2d": "umap"
+          }
+        }
+      },
+      "geneNameSource": "symbol",
+      "expected": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "pca_3d",
+              "columns": null
+            },
+            {
+              "key": "tsne",
+              "columns": null
+            },
+            {
+              "key": "umap",
+              "columns": null
+            },
+            {
+              "key": "umap_harmony",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "umap",
+              "columns": null
+            },
+            "3d": null
+          }
+        },
+        "geneNames": "column:symbol",
+        "vectorFields": []
+      }
+    },
+    {
+      "name": "several embeddings per dimension, every one enabled",
+      "identity": {
+        "embeddings": {
+          "items": {
+            "pca_3d": {
+              "dimension": 3
+            },
+            "phate_3d": {
+              "dimension": 3
+            },
+            "umap_3d": {
+              "dimension": 3
+            },
+            "tsne": {
+              "dimension": 2
+            },
+            "umap": {
+              "dimension": 2
+            }
+          },
+          "defaults": {
+            "2d": "umap",
+            "3d": "umap_3d"
+          }
+        },
+        "vector_fields": {
+          "fields": {
+            "velocity": {
+              "files": {
+                "umap": "a.bin",
+                "pca_3d": "b.bin"
+              }
+            }
+          }
+        }
+      },
+      "geneNameSource": null,
+      "expected": {
+        "kind": "export",
+        "embeddings": {
+          "enabled": [
+            {
+              "key": "pca_3d",
+              "columns": null
+            },
+            {
+              "key": "phate_3d",
+              "columns": null
+            },
+            {
+              "key": "tsne",
+              "columns": null
+            },
+            {
+              "key": "umap",
+              "columns": null
+            },
+            {
+              "key": "umap_3d",
+              "columns": null
+            }
+          ],
+          "defaults": {
+            "1d": null,
+            "2d": {
+              "key": "umap",
+              "columns": null
+            },
+            "3d": {
+              "key": "umap_3d",
+              "columns": null
+            }
+          }
+        },
+        "geneNames": "index",
+        "vectorFields": [
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "pca_3d",
+              "columns": null
+            }
+          },
+          {
+            "field": "velocity",
+            "embedding": {
+              "key": "umap",
+              "columns": null
+            }
+          }
+        ]
       }
     }
   ]

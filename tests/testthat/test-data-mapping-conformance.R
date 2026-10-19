@@ -8,25 +8,30 @@
 # (makeUniqueNames) and the one-line note that reports what that changed
 # (uniqueNamesNote). Both are run here case for case. The other sections pin
 # rules this package has no counterpart for: the best-guess embedding and
-# expression choices, the default vector bindings, the "nothing to plot" text,
-# and DataMapping validation are what a reader does with an AnnData file, and
+# expression choices, the representations enabled when a file opens, the
+# default vector bindings, the "nothing to plot" text, and DataMapping
+# validation are what a reader does with an AnnData file; exportDataMapping is
+# what the web app shows an export with, and its cases include an export
+# declared the way cellucid_prepare() declares it (caller-chosen ids, one 2D
+# default), which the reader treats exactly like a Python export; and
 # embeddingColumns and canonicalEmbeddingId describe the 0-based, typed column
 # selection of cellucid-python's guessing API. cellucid_prepare() takes
 # caller-named embedding ids and 1-based columns instead.
 
-.conformance_sha256 <- "b5b35f7d86f4472d4fc8117c49ada6341aaf9834998bff778ef8d4a07bc4fb43"
+.conformance_sha256 <- "dd08f84297c179b37e21a09dd820781cbfa21bf33f063bd79f925ec44a026660"
 
 test_that("both repositories hold the same pinned conformance fixture", {
   expect_pinned_fixture("data_mapping_conformance.json", .conformance_sha256)
   fixture <- cellucid_read_fixture("data_mapping_conformance.json")
-  expect_identical(fixture$version, 1L)
+  expect_identical(fixture$version, 2L)
   expect_identical(
     names(fixture),
     c(
       "_about", "version", "makeUniqueNames", "uniqueNamesNote",
-      "bestGuessTier", "embeddingSlots", "embeddingColumns",
-      "canonicalEmbeddingId", "defaultExpression", "defaultVectorBindings",
-      "nothingPlottable", "dataMapping"
+      "bestGuessTier", "embeddingSlots", "enabledEmbeddings",
+      "embeddingColumns", "canonicalEmbeddingId", "defaultExpression",
+      "defaultVectorBindings", "nothingPlottable", "dataMapping",
+      "exportDataMapping"
     )
   )
 })
