@@ -33,6 +33,17 @@ regenerated with this one.
 - Writes `obs_manifest.json` and `var_manifest.json` as `compact_v2`. A
   categorical entry's centroids are keyed by embedding id
   (`centroidsByEmbedding`).
+- Names genes from an integer `var` column by its digits (`7157L` is
+  `"7157"`), as the Cellucid viewer and `cellucid serve` read the same column;
+  a double or logical column is refused with the reason ("floating-point
+  values cannot name genes").
+- Computes latent-space outlier quantiles in C with the rule `cellucid-python`
+  and the web app share, bit for bit: values rounded to float32 and widened to
+  double, centroid sums in cell order, squared distances in column order, the
+  share as float32. A shared conformance fixture
+  (`tests/testthat/fixtures/latent_outlier_conformance.json`) pins the bytes
+  in all three. Quantiles can differ from earlier releases only where two
+  distances tie within rounding.
 - Accepts repeated gene names. They are made unique the way anndata's
   `var_names_make_unique()` does it -- the second `MATR3` becomes `MATR3-1` --
   with the one rule `cellucid-python` and the web app also apply, and an empty

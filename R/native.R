@@ -1,4 +1,4 @@
-# The complete surface of src/export_lock.c. Every .Call() in this package
+# The complete surface of src/. Every .Call() in this package
 # is one of these, so the R side of the native contract is readable in one
 # screen and the callers never spell a symbol name themselves.
 
@@ -28,4 +28,10 @@
 
 .native_export_sync_directory <- function(path) {
   .Call(C_cellucid_export_sync_directory, path)
+}
+
+# src/latent_outliers.c: the outlier-quantile rule cellucid-python and the web
+# app share (see .compute_latent_space_quantiles).
+.native_latent_outlier_quantiles <- function(latent, codes, n_categories, min_points) {
+  .Call(C_cellucid_latent_outlier_quantiles, latent, codes, n_categories, min_points)
 }

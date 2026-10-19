@@ -38,7 +38,7 @@ cellucid_prepare(
 )
 }
 \arguments{
-\item{latent_space}{Numeric matrix-like of shape \code{(n_cells, n_dims)}. Required for per-cell outlier quantile calculations for categorical fields.}
+\item{latent_space}{Numeric matrix-like of shape \code{(n_cells, n_dims)}. Required for per-cell outlier quantile calculations for categorical fields: a cell's quantile is the share of its category at its distance to the category's centre or closer. It is computed exactly as \code{cellucid-python} and the Cellucid viewer compute it, bit for bit: the values rounded to float32 and widened to double, centroid sums in cell order, squared distances in column order, the share as float32.}
 \item{obs}{A \code{data.frame} of cell metadata with \code{n_cells} rows.
 Every string category label must be text the viewer can show as written; see
 the note on displayed text below.}
@@ -51,7 +51,11 @@ reports the automatic sequence \code{"1"} to \code{"n_genes"} and those are row
 numbers, not gene identifiers. Every string,
 including \code{"index"}, names that exact column. Whatever this selects is
 recorded faithfully: Cellucid performs no symbol lookup and ships no mapping, so
-the caller decides what a gene is called. An empty value (\code{NA} or
+the caller decides what a gene is called. A column of text or a factor names
+genes as it is, and an integer column by its digits (\code{7157L} is
+\code{"7157"}), the rule the Cellucid viewer, \code{cellucid serve} and
+\code{cellucid-python} apply to the same column; a double or logical column
+cannot name genes and is refused. An empty value (\code{NA} or
 \code{""}) takes the row's name from \code{rownames(var)}, and repeated names are
 made unique the way anndata's \code{var_names_make_unique()} does it: the second
 \code{"MATR3"} becomes \code{"MATR3-1"}. What was changed is reported as a

@@ -2998,10 +2998,30 @@ test_that("manifest identifiers require exact character values", {
     "character vector"
   )
 
-  var <- data.frame(numeric_id = c(101, 102), row.names = c("g1", "g2"))
+  # The rule every reader applies: integers name genes by their digits; a
+  # floating-point or true/false column cannot name genes.
+  var <- data.frame(
+    numeric_id = c(101, 102),
+    entrez = c(7157L, 7157L),
+    flag = c(TRUE, FALSE),
+    empty = c(NA, NA),
+    row.names = c("g1", "g2")
+  )
   expect_error(
     cellucid:::.resolve_gene_name_set(var, "numeric_id", "var_gene_id_column"),
-    "^var column 'numeric_id': Name at position 0 must be a string, got numeric\\.$"
+    "^var column 'numeric_id': floating-point values cannot name genes\\.$"
+  )
+  expect_error(
+    cellucid:::.resolve_gene_name_set(var, "flag", "var_gene_id_column"),
+    "^var column 'flag': true/false values cannot name genes\\.$"
+  )
+  expect_identical(
+    cellucid:::.resolve_gene_name_set(var, "entrez", "var_gene_id_column")$names,
+    c("7157", "7157-1")
+  )
+  expect_identical(
+    cellucid:::.resolve_gene_name_set(var, "empty", "var_gene_id_column")$names,
+    c("g1", "g2")
   )
   expect_error(
     cellucid:::.resolve_gene_name_set(var, 1, "var_gene_id_column"),

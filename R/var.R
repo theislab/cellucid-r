@@ -54,14 +54,29 @@
     )
   }
   values <- var[[column]]
+  # The rule every Cellucid reader applies to a gene-name column (the viewer,
+  # cellucid serve, cellucid-python's prepare()): text and categories as they
+  # are, integers as their decimal digits; a floating-point or true/false
+  # column cannot name genes.
   if (is.factor(values)) {
     values <- as.character(values)
   } else if (is.object(values) || !is.null(dim(values))) {
     # A classed column carries meaning in attributes that a name list drops,
     # and identity downstream is decided with base semantics that compare
     # those attributes, so the rule every identifier axis applies is applied
-    # here: a gene name column is a native character (or factor) vector.
+    # here: a gene name column is a native vector.
     stop("Gene keys must be a native character vector.", call. = FALSE)
+  } else if (is.integer(values)) {
+    values <- as.character(values)
+  } else if (is.double(values)) {
+    stop("var column '", column, "': floating-point values cannot name genes.", call. = FALSE)
+  } else if (is.logical(values)) {
+    # NA is R's untyped missing value: a column of nothing but NA names no
+    # gene, and every row takes its row name.
+    if (!all(is.na(values))) {
+      stop("var column '", column, "': true/false values cannot name genes.", call. = FALSE)
+    }
+    values <- as.character(values)
   }
   # Automatic row names are no names at all, so an empty value has none to
   # take, exactly as a Python RangeIndex supplies integers rather than names.
