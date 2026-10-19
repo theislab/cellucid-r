@@ -11,29 +11,6 @@
 # file's SHA-256, so neither copy can change alone.
 
 .parity_v3_sha256 <- "44779fb1fce0955d6bdbdfc85df9458c8f7edff945cec07a4c9c65fbc7bb9aad"
-.conformance_sha256 <- "b5b35f7d86f4472d4fc8117c49ada6341aaf9834998bff778ef8d4a07bc4fb43"
-
-.fixture_path <- function(name) {
-  testthat::test_path("fixtures", name)
-}
-
-.file_sha256 <- function(path) {
-  # tools::md5sum is the only digest base R ships, so the SHA-256 pin is
-  # computed by the system's shasum/sha256sum when one exists.
-  for (tool in c("shasum", "sha256sum")) {
-    binary <- Sys.which(tool)
-    if (nzchar(binary)) {
-      arguments <- if (identical(tool, "shasum")) c("-a", "256", shQuote(path)) else shQuote(path)
-      output <- system2(binary, arguments, stdout = TRUE)
-      return(strsplit(output[[1L]], "[[:space:]]+")[[1L]][[1L]])
-    }
-  }
-  NA_character_
-}
-
-.read_fixture <- function(name) {
-  jsonlite::fromJSON(.fixture_path(name), simplifyVector = FALSE)
-}
 
 .as_number_matrix <- function(rows) {
   matrix(
@@ -105,19 +82,12 @@
   paste(as.character(bytes), collapse = "")
 }
 
-test_that("both repositories hold the same pinned fixtures", {
-  for (pin in list(
-    list("writer_parity_v3.json", .parity_v3_sha256),
-    list("data_mapping_conformance.json", .conformance_sha256)
-  )) {
-    digest <- .file_sha256(.fixture_path(pin[[1L]]))
-    skip_if(is.na(digest), "no SHA-256 tool on this system")
-    expect_identical(digest, pin[[2L]])
-  }
+test_that("both repositories hold the same pinned parity fixture", {
+  expect_pinned_fixture("writer_parity_v3.json", .parity_v3_sha256)
 })
 
 test_that("the v3 parity fixture exports to exactly cellucid-python's bytes and manifests", {
-  fixture <- .read_fixture("writer_parity_v3.json")
+  fixture <- cellucid_read_fixture("writer_parity_v3.json")
   out <- file.path(tempdir(), "cellucid_parity_v3")
   unlink(out, recursive = TRUE, force = TRUE)
   arguments <- .parity_v3_arguments(fixture$inputs, out)
@@ -155,50 +125,5 @@ test_that("the v3 parity fixture exports to exactly cellucid-python's bytes and 
       cellucid:::.first_json_difference(expected, written),
       info = relative
     )
-  }
-})
-
-test_that("make-unique matches every case of the shared conformance fixture", {
-  fixture <- .read_fixture("data_mapping_conformance.json")
-  for (case in fixture$makeUniqueNames) {
-    index <- if (is.null(case$index)) {
-      NULL
-    } else {
-      vapply(case$index, function(value) if (is.null(value)) NA_character_ else value, character(1))
-    }
-    run <- function() {
-      cellucid:::.make_unique_names(case$names, index = index, join = case$join)
-    }
-    if (!is.null(case$expected$error)) {
-      condition <- tryCatch(run(), cellucid_data_mapping_error = identity)
-      expect_s3_class(condition, "cellucid_data_mapping_error")
-      expect_identical(condition$code, case$expected$error, info = case$name)
-      next
-    }
-    result <- run()
-    expect_identical(result$names, as.character(unlist(case$expected$names)), info = case$name)
-    expect_identical(
-      lapply(result$renamed, as.character),
-      lapply(case$expected$renamed, function(pair) as.character(unlist(pair))),
-      info = case$name
-    )
-    expect_identical(
-      as.integer(result$filled_from_index),
-      as.integer(case$expected$filledFromIndex),
-      info = case$name
-    )
-  }
-})
-
-test_that("the make-unique note matches the shared conformance fixture word for word", {
-  fixture <- .read_fixture("data_mapping_conformance.json")
-  for (case in fixture$uniqueNamesNote) {
-    renamed <- lapply(case$renamed, function(pair) as.character(unlist(pair)))
-    note <- cellucid:::.unique_names_note(case$filledFromIndex, renamed, case$source)
-    if (is.null(case$expected)) {
-      expect_null(note)
-    } else {
-      expect_identical(note, enc2utf8(case$expected))
-    }
   }
 })
