@@ -1,12 +1,11 @@
-# cellucid 0.9.2 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.3 <!-- CELLUCID_VERSION -->
 
-Version 0.9.2 is the CRAN submission release.
-
-It carries the changes prepared as 0.9.1, which was never published; the number
-moved to stay in step with the Python package.
+Version 0.9.3 is the CRAN submission release. It carries every change of
+0.9.2, which was tagged but never published on CRAN, and stays in step with
+the Python package of the same version.
 
 `cellucid_prepare()` writes export format v3, byte for byte the format
-`cellucid-python` 0.9.2 writes. Opening a v3 export needs the Cellucid web app
+`cellucid-python` 0.9.3 writes. Opening a v3 export needs the Cellucid web app
 release that reads format 3, and an export written by an earlier version is
 regenerated with this one.
 
@@ -56,11 +55,19 @@ regenerated with this one.
   `var_gene_id_column` key (the argument of that name is unchanged and selects
   the default set); no expression payload is duplicated.
 
-- Exposes `cellucid_prepare()` as the single public preparation entry point.
 - `citation("cellucid")` now lists the Cellucid preprint first, followed by
   the package manual entry. The preprint is a placeholder until it is published
   on bioRxiv and says so; the entry is generated from the `preferred-citation`
   block that every Cellucid repository's `CITATION.cff` shares.
+
+# cellucid 0.9.2
+
+Version 0.9.2 is the CRAN submission release.
+
+It carries the changes prepared as 0.9.1, which was never published; the number
+moved to stay in step with the Python package.
+
+- Exposes `cellucid_prepare()` as the single public preparation entry point.
 - Publishes complete prepared generations transactionally and rejects mixed or
   stale output directories.
 - Serializes independent R and Python exporters with one persistent exact-target
@@ -83,8 +90,8 @@ regenerated with this one.
   in `cellucid-python`.
 - Names every payload by its integer position on its axis, so no exported
   filename carries dataset content and every dataset has the same directory
-  listing: `var/0.values.f32`, `obs/1.codes.u8`, `embeddings/0_2d.bin`,
-  `vectors/0_0.bin`, and the fixed neutral names under `connectivity/`. Each manifest entry declares its
+  listing: `var/0.values.f32`, `obs/1.codes.u8`, `vectors/0_2d.bin`, and the
+  fixed neutral names under `connectivity/`. Each manifest entry declares its
   own index as its first element -- `[index, name]` and
   `[index, name, minValue, maxValue]` for `fields`, `[index, key]` and
   `[index, key, minValue, maxValue]` for `_continuousFields`, and
@@ -96,15 +103,15 @@ regenerated with this one.
   declares, before the generation is published. `obs/` is written by both
   manifest arrays, so those two arrays share one index space. The `cellucid`
   Python package writes the identical layout.
-- Reconciles the export root and `embeddings/` against the generation as
-  well, so the embedding coordinate payloads are covered by the same guarantee
-  as every other payload. They are declared in `dataset_identity.json` rather than
+- Reconciles the export root against the generation as well, so the
+  `points_<n>d.bin` coordinate payloads are covered by the same guarantee as
+  every other payload. They are declared in `dataset_identity.json` rather than
   in an axis manifest, and their declared name and their written name are two
   independent spellings of the `compression` setting, so an export that
   published coordinates under a name the viewer is not told to fetch used to
   succeed and then fail in the browser with no points. The root must now hold
-  exactly the manifests and the directories the generation created, and
-  `embeddings/` exactly the declared embedding payloads, and nothing else.
+  exactly the manifests, the axis directories, and the declared point payloads
+  the generation created, and nothing else.
 - Writes `_obsSchemas` as a JSON object in every generation, including one that
   carries no observation field at all. `jsonlite` renders an empty *unnamed*
   list as `[]`, so an export prepared from an `obs` with no columns, or with
@@ -129,8 +136,9 @@ regenerated with this one.
   must still be is what it is for -- a non-empty string, distinct within its
   axis, and text the viewer can draw exactly as stored. `dataset_id` names the
   export directory, so it alone remains a portable filename component.
-- Accepts any vector field id, with no character restriction, matching the
-  `cellucid` Python package exactly. Vector fields are emitted in code-point order of their ids on both
+- Accepts any vector field key matching `<field>_umap_<1|2|3>d`, with no
+  character restriction on `<field>`, matching the `cellucid` Python package
+  exactly. Vector fields are emitted in code-point order of their ids on both
   writers, so the same input receives the same payload index in either
   language.
 - Requires every string the viewer prints verbatim to read on screen as the
@@ -230,8 +238,8 @@ regenerated with this one.
   still decompresses to exactly the payload that went in.
 - Adds `tests/testthat/test-writer-parity.R`, which holds this writer to the
   half of the two-writer contract it owns: a `vectors/` payload is the scaled
-  value rounded to float32 once and not the twice-rounded value, an
-  `embeddings/` payload is the normalized value rounded once, a
+  value rounded to float32 once and not the twice-rounded value, a
+  `points_<dim>d.bin` payload is the normalized value rounded once, a
   categorical centroid is measured from coordinates that were never rounded,
   and a `dataset_identity.json` vector field entry carries its keys in the
   documented order.

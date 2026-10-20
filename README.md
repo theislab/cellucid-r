@@ -13,9 +13,9 @@
 `cellucid` (repo: `cellucid-r`) writes your embeddings, metadata, gene expression, connectivities, and vector fields
 to the on-disk format consumed by the Cellucid web app.
 
-> **Active package version — 0.9.2** <!-- CELLUCID_VERSION -->
+> **Active package version — 0.9.3** <!-- CELLUCID_VERSION -->
 >
-> Version 0.9.2 is the active Cellucid for R source and documentation version,
+> Version 0.9.3 is the active Cellucid for R source and documentation version,
 > and it is the CRAN submission release. The CRAN package index is authoritative
 > for registry availability; the Installation guide below gives both exact
 > installation paths.
