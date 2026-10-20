@@ -1,8 +1,9 @@
 # cellucid 0.9.3 <!-- CELLUCID_VERSION -->
 
-Version 0.9.3 is the CRAN submission release. It carries every change of
-0.9.2, which was tagged but never published on CRAN, and stays in step with
-the Python package of the same version.
+Version 0.9.3 is the CRAN submission release.
+
+It carries every change of 0.9.2, which was tagged but never published on
+CRAN, and stays in step with the Python package of the same version.
 
 `cellucid_prepare()` writes export format v3, byte for byte the format
 `cellucid-python` 0.9.3 writes. Opening a v3 export needs the Cellucid web app
