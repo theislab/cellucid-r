@@ -220,7 +220,7 @@ test_that("an exported embedding carries the same bytes as the writer", {
     dataset_name = "Byte order",
     latent_space = coords,
     obs = data.frame(cluster = factor(c("A", "B", "A", "B"))),
-    X_umap_2d = coords,
+    embeddings = list(X_umap = coords),
     out_dir = out,
     centroid_min_points = 2L,
     force = TRUE,
@@ -231,7 +231,7 @@ test_that("an exported embedding carries the same bytes as the writer", {
   # [-1, 1] on the widest axis, so the published values are the input values:
   # centre 0, scale 2 / 2 = 1. Row major, x then y.
   expect_identical(
-    .byte_order_bytes(file.path(out, "points_2d.bin"), NULL, 32L),
+    .byte_order_bytes(file.path(out, "embeddings", "0_2d.bin"), NULL, 32L),
     as.raw(c(
       0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x80, 0xbf, # -1, -1
       0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80, 0x3f, #  1,  1

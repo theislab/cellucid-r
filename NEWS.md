@@ -1,6 +1,91 @@
-# cellucid 0.9.1 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.4 <!-- CELLUCID_VERSION -->
 
-Version 0.9.1 is the CRAN submission release.
+Version 0.9.4 is the CRAN submission release.
+
+It is a patch release on 0.9.3, which was tagged but never published on CRAN,
+stays in step with the Python package of the same version, and writes the same
+export format 3: an export written by 0.9.3 does not need to be prepared again.
+
+- `cellucid_prepare(obs_categorical_dtype = "uint32")` writes 32-bit
+  categorical codes (`obs/{index}.codes.u32`, missing marker 4,294,967,295)
+  for fields with more than 65,535 categories, such as barcodes, byte for byte
+  as the Python package does. The error for a field that does not fit the
+  declared width names the width that does, for example
+  "Pass obs_categorical_dtype='uint32'.".
+- `cellucid_prepare()` exports a categorical field where no category reaches
+  `centroid_min_points` with quantized outlier quantiles, publishing every
+  quantile as missing, instead of stopping partway through the export with
+  "it contains no finite values".
+
+# cellucid 0.9.3
+
+Version 0.9.3 is the CRAN submission release.
+
+It carries every change of 0.9.2, which was tagged but never published on
+CRAN, and stays in step with the Python package of the same version.
+
+`cellucid_prepare()` writes export format v3, byte for byte the format
+`cellucid-python` 0.9.3 writes. Opening a v3 export needs the Cellucid web app
+release that reads format 3, and an export written by an earlier version is
+regenerated with this one.
+
+- Exports any number of embeddings per dimension. `cellucid_prepare()` takes a
+  required named list `embeddings` in place of `X_umap_1d`, `X_umap_2d`, and
+  `X_umap_3d`, which are removed. A matrix of 1, 2, or 3 columns is plotted
+  whole; the new `cellucid_embedding(values, columns, label, source_key)`
+  names the 1-based columns of a wider array (published 0-based), a display
+  label, and the key the array came from. `embedding_defaults`, for example
+  `c("2d" = "X_umap")`, names the embedding each dimension shows first and is
+  required for every dimension with more than one.
+- Writes each embedding to `embeddings/{index}_{dimension}d.bin`, ordered by
+  dimension and then by id in code-point order, and declares it in
+  `dataset_identity.json` version 3 under `embeddings.items` with its label,
+  dimension, file, and `source` (`key` and 0-based `columns`). The export root
+  holds no payload files any more; `embeddings/` is reconciled against its
+  declaration as a sixth surface, beside `obs/`, `var/`, `connectivity/`,
+  `vectors/`, and the root itself.
+- Binds vector fields to embedding ids: `vector_fields = list(velocity =
+  list(X_umap = v2, X_umap_3d = v3))`. Each array is scaled by the factor of
+  the embedding it is bound to and written to
+  `vectors/{fieldIndex}_{embeddingIndex}.bin`; a field id no longer has to
+  follow the `<field>_umap_<n>d` grammar.
+- Writes `obs_manifest.json` and `var_manifest.json` as `compact_v2`. A
+  categorical entry's centroids are keyed by embedding id
+  (`centroidsByEmbedding`).
+- Names genes from an integer `var` column by its digits (`7157L` is
+  `"7157"`), as the Cellucid viewer and `cellucid serve` read the same column;
+  a double or logical column is refused with the reason ("floating-point
+  values cannot name genes").
+- Computes latent-space outlier quantiles in C with the rule `cellucid-python`
+  and the web app share, bit for bit: values rounded to float32 and widened to
+  double, centroid sums in cell order, squared distances in column order, the
+  share as float32. A shared conformance fixture
+  (`tests/testthat/fixtures/latent_outlier_conformance.json`) pins the bytes
+  in all three. Quantiles can differ from earlier releases only where two
+  distances tie within rounding.
+- Accepts repeated gene names. They are made unique the way anndata's
+  `var_names_make_unique()` does it -- the second `MATR3` becomes `MATR3-1` --
+  with the one rule `cellucid-python` and the web app also apply, and an empty
+  name (`NA` or `""`) takes the row's name from `rownames(var)`. What changed
+  is reported as a message and recorded in `var_manifest.json`.
+  `gene_identifiers` matches the names after they were made unique.
+- Adds `var_gene_name_columns`: further `var` columns the viewer offers as
+  alternative gene names. Each one is stored as metadata in the new
+  `gene_name_sets` list of `var_manifest.json`, which replaces the manifest's
+  `var_gene_id_column` key (the argument of that name is unchanged and selects
+  the default set); no expression payload is duplicated.
+
+- `citation("cellucid")` now lists the Cellucid preprint first, followed by
+  the package manual entry. The preprint is a placeholder until it is published
+  on bioRxiv and says so; the entry is generated from the `preferred-citation`
+  block that every Cellucid repository's `CITATION.cff` shares.
+
+# cellucid 0.9.2
+
+Version 0.9.2 is the CRAN submission release.
+
+It carries the changes prepared as 0.9.1, which was never published; the number
+moved to stay in step with the Python package.
 
 - Exposes `cellucid_prepare()` as the single public preparation entry point.
 - Publishes complete prepared generations transactionally and rejects mixed or

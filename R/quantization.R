@@ -49,7 +49,7 @@
   rounded
 }
 
-# Name compact_v1's constant-field case from one payload's bounds.
+# Name the compact format's constant-field case from one payload's bounds.
 #
 # A gene detected in no published cell, or an obs column a subset flattened, is
 # ordinary scientific data, so the format encodes it rather than rejecting it.
@@ -204,13 +204,20 @@
   }
 
   missing_mask <- is.nan(values)
+  missing_value <- if (bits == 8L) 255L else 65535L
+  quantized <- rep(missing_value, length(values))
+  if (all(missing_mask)) {
+    # No category reached `centroid_min_points`, so no cell has a quantile.
+    # Every code is the missing marker, and the bounds take the constant case
+    # (0, 0), which no code refers to: the payload decodes to all-missing,
+    # exactly as its float32 form does.
+    return(list(quantized = quantized, min_val = 0, max_val = 0, scale = 0))
+  }
   finite_quantized <- .quantize_continuous(
     values[!missing_mask],
     bits = bits,
     field_name = field_name
   )
-  missing_value <- if (bits == 8L) 255L else 65535L
-  quantized <- rep(missing_value, length(values))
   quantized[!missing_mask] <- finite_quantized$quantized
 
   list(

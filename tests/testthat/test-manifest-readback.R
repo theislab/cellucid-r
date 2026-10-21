@@ -24,7 +24,7 @@
     dataset_name = "Read back",
     latent_space = fixture$latent,
     obs = obs,
-    X_umap_2d = fixture$umap2,
+    embeddings = list(X_umap = fixture$umap2),
     out_dir = out,
     centroid_min_points = 2L,
     force = TRUE,
@@ -174,14 +174,32 @@ test_that("the read-back accepts every manifest the writer actually emits", {
     no_centroids = list(centroid_outlier_quantile = NULL),
     single_category = list(),
     one_dimension = list(
-      X_umap_2d = NULL,
-      X_umap_1d = matrix(seq_len(40L) / 40, ncol = 1L)
+      embeddings = list(X_line = seq_len(40L) / 40)
+    ),
+    several_embeddings = list(
+      embeddings = list(
+        X_umap = fixture$umap2,
+        X_tsne = cellucid_embedding(fixture$umap2[, 2:1], label = "t-SNE"),
+        X_pca = cellucid_embedding(
+          cbind(fixture$umap2, seq_len(40L) / 7, rev(seq_len(40L))),
+          columns = c(4, 3, 1)
+        )
+      ),
+      embedding_defaults = c("2d" = "X_umap")
+    ),
+    gene_name_sets = list(
+      gene_expression = expr,
+      var = data.frame(
+        symbol = c("S", "S", NA),
+        row.names = c("g1", "g2", "g3")
+      ),
+      var_gene_name_columns = "symbol"
     ),
     vectors = list(
       vector_fields = list(
-        velocity_umap_2d = matrix(seq_len(80L) / 40, ncol = 2L)
+        velocity = list(X_umap = matrix(seq_len(80L) / 40, ncol = 2L))
       ),
-      vector_field_default = "velocity_umap"
+      vector_field_default = "velocity"
     )
   )
 

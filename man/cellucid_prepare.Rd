@@ -12,6 +12,7 @@ cellucid_prepare(
   var = NULL,
   gene_expression = NULL,
   var_gene_id_column = NULL,
+  var_gene_name_columns = NULL,
   gene_identifiers = NULL,
   connectivities = NULL,
   out_dir = file.path(getwd(), "exports"),
@@ -29,34 +30,47 @@ cellucid_prepare(
   source_name = NULL,
   source_url = NULL,
   source_citation = NULL,
-  X_umap_1d = NULL,
-  X_umap_2d = NULL,
-  X_umap_3d = NULL,
+  embeddings,
+  embedding_defaults = NULL,
   vector_fields = NULL,
   vector_field_default = NULL,
   created_at = NULL
 )
 }
 \arguments{
-\item{latent_space}{Numeric matrix-like of shape \code{(n_cells, n_dims)}. Required for per-cell outlier quantile calculations for categorical fields.}
+\item{latent_space}{Numeric matrix-like of shape \code{(n_cells, n_dims)}. Required for per-cell outlier quantile calculations for categorical fields: a cell's quantile is the share of its category at its distance to the category's centre or closer. It is computed exactly as \code{cellucid-python} and the Cellucid viewer compute it, bit for bit: the values rounded to float32 and widened to double, centroid sums in cell order, squared distances in column order, the share as float32.}
 \item{obs}{A \code{data.frame} of cell metadata with \code{n_cells} rows.
 Every string category label must be text the viewer can show as written; see
 the note on displayed text below.}
 \item{var}{Optional \code{data.frame} of feature metadata with \code{n_genes} rows. Required if \code{gene_expression} is provided.}
 \item{gene_expression}{Optional numeric matrix-like of shape \code{(n_cells, n_genes)}. Every value must be finite and, for unquantized output, representable as a nonzero finite float32 value unless it is exactly zero. Rows are always interpreted as cells; Cellucid never transposes the matrix or infers its semantic orientation from \code{var}.}
-\item{var_gene_id_column}{Column name in \code{var} containing the gene names to
-record. Use \code{NULL} (default) to use \code{rownames(var)}; that requires
+\item{var_gene_id_column}{Column name in \code{var} containing the default gene
+names. Use \code{NULL} (default) to use \code{rownames(var)}; that requires
 row names a caller actually set, because a \code{data.frame} that never had any
 reports the automatic sequence \code{"1"} to \code{"n_genes"} and those are row
 numbers, not gene identifiers. Every string,
 including \code{"index"}, names that exact column. Whatever this selects is
 recorded faithfully: Cellucid performs no symbol lookup and ships no mapping, so
-the caller decides what a gene is called. Every identifier in the selected axis
-must be a non-empty string and must be distinct, because \code{gene_identifiers}
-addresses \code{var} rows by identifier and a repeated one names no single row.}
+the caller decides what a gene is called. A column of text or a factor names
+genes as it is, and an integer column by its digits (\code{7157L} is
+\code{"7157"}), the rule the Cellucid viewer, \code{cellucid serve} and
+\code{cellucid-python} apply to the same column; a double or logical column
+cannot name genes and is refused. An empty value (\code{NA} or
+\code{""}) takes the row's name from \code{rownames(var)}, and repeated names are
+made unique the way anndata's \code{var_names_make_unique()} does it: the second
+\code{"MATR3"} becomes \code{"MATR3-1"}. What was changed is reported as a
+message and recorded in \code{var_manifest.json}.}
+\item{var_gene_name_columns}{Optional character vector of further \code{var}
+columns the viewer offers as alternative gene names, such as
+\code{"gene_symbols"} beside Ensembl row names. Each column is resolved with the
+same rule as \code{var_gene_id_column} and stored as metadata in the
+\code{gene_name_sets} list of \code{var_manifest.json}; no expression payload is
+duplicated. A column may be listed once and may not repeat
+\code{var_gene_id_column}. Requires \code{gene_expression}.}
 \item{gene_identifiers}{Optional character vector specifying which genes to
 export. If \code{NULL}, all genes are exported. Identifiers must be distinct and
-must all be present in \code{var}. Payload files are named by integer index, so
+must all be present among the default gene names after repeated names were made
+unique. Payload files are named by integer index, so
 an identifier is never a path; the exported ones must additionally be text the
 viewer can draw exactly as stored, exactly as \code{obs_keys} narrows which
 observation keys are held to that rule. A \code{var} row this argument leaves
@@ -84,8 +98,12 @@ viewer; a native-double range that collapses to one float32 value is
 rejected. Individual source values may round to zero when the float32
 range remains non-collapsed.}
 \item{obs_categorical_dtype}{Required exact categorical code storage:
-\code{"uint8"} or \code{"uint16"}. It has no default, so omitting it is
-reported as a missing argument rather than as a value of the wrong type.}
+\code{"uint8"} (at most 255 categories per field), \code{"uint16"} (at most
+65,535) or \code{"uint32"} (at most 4,294,967,295, for fields such as barcodes
+with more than 65,535 distinct values). Every categorical field uses this
+width; a field that does not fit is rejected with the width that would hold
+it. It has no default, so omitting it is reported as a missing argument rather
+than as a value of the wrong type.}
 \item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use
 \code{NULL} to disable compression. Every compressed payload carries the same
 fixed gzip header on every platform: no filename, a Unix-epoch timestamp, and
@@ -108,17 +126,26 @@ wrong type.}
 \item{source_name}{Optional non-empty data source name. Required whenever \code{source_url} or \code{source_citation} is supplied.}
 \item{source_url}{Optional non-empty data source URL. May be supplied independently when \code{source_name} is present.}
 \item{source_citation}{Optional non-empty citation text. May be supplied independently when \code{source_name} is present.}
-\item{X_umap_1d}{Optional 1D embedding matrix of shape \code{(n_cells, 1)}. A
-plain length-\code{n_cells} numeric vector is also accepted as the single column
-it declares.}
-\item{X_umap_2d}{Optional 2D embedding matrix of shape \code{(n_cells, 2)}.}
-\item{X_umap_3d}{Optional 3D embedding matrix of shape \code{(n_cells, 3)}.}
-\item{vector_fields}{Optional named list of per-cell displacement vectors. Each
-name must exactly match \code{<field>_umap_<1|2|3>d}; the key declares the
-dimension and it is never inferred from the array. Each element must be a
-numeric matrix with \code{n_cells} rows and exactly the declared number of
-columns; a \code{_1d} key also accepts a plain length-\code{n_cells} numeric
-vector as the single column it declares.}
+\item{embeddings}{Required named list of every embedding the export carries,
+keyed by embedding id. Any number per dimension is allowed. Each element is a
+numeric matrix (or numeric \code{data.frame}, or \pkg{Matrix}) with
+\code{n_cells} rows and 1, 2, or 3 columns, a plain length-\code{n_cells}
+numeric vector for one column, or a \code{\link{cellucid_embedding}()} naming
+the 1-based columns of a wider array, a display label, and the key it came from.
+Each embedding is normalized on its own and written to
+\code{embeddings/\{index\}_\{dimension\}d.bin}, ordered by dimension and then
+by id in code-point order. It has no default, so omitting it is reported as a
+missing argument.}
+\item{embedding_defaults}{Optional named character vector (or named list) naming
+the embedding each dimension shows first, such as \code{c("2d" = "X_umap")}.
+Required for every dimension with more than one embedding; a dimension with
+exactly one uses it. The highest dimension is shown initially.}
+\item{vector_fields}{Optional named list of per-cell displacement vectors, keyed
+by field id and then by the id of the embedding each array is drawn over:
+\code{list(velocity = list(X_umap = v2, X_umap_3d = v3))}. Each array has
+\code{n_cells} rows and exactly as many columns as its embedding's dimension (a
+plain numeric vector for a 1D embedding) and is scaled by that embedding's
+normalization factor.}
 \item{vector_field_default}{Exact vector-field identifier to select by default. Required when \code{vector_fields} contains more than one field.}
 \item{created_at}{Optional exact UTC-seconds timestamp in
 \code{YYYY-MM-DDTHH:MM:SSZ} format. Defaults to the current UTC time. Supply
@@ -133,25 +160,25 @@ Invisibly returns \code{NULL}. Called for its side effects (file export).
 \details{
 The export directory includes:
 \itemize{
-  \item \code{points_1d.bin}, \code{points_2d.bin}, \code{points_3d.bin} (embedding coordinates; float32 row-major; optionally gzipped)
+  \item \code{embeddings/} binaries, one per exported embedding, named \code{\{index\}_\{dimension\}d.bin} (float32 row-major; optionally gzipped)
   \item \code{obs_manifest.json} and \code{obs/} binaries for continuous values, categorical codes, and per-cell outlier quantiles
   \item \code{var_manifest.json} and \code{var/} binaries for gene expression (one file per exported gene)
   \item \code{connectivity_manifest.json} and aligned \code{connectivity/edges.src.bin}, \code{edges.dst.bin}, and little-endian float64 \code{edges.weights.f64.bin} payloads for unique undirected edges
-  \item \code{vectors/} binaries for each exported vector field and dimension
-  \item \code{dataset_identity.json} describing the export and available embeddings
+  \item \code{vectors/} binaries, one per vector field and bound embedding, named \code{\{fieldIndex\}_\{embeddingIndex\}.bin}
+  \item \code{dataset_identity.json} (version 3) describing the export, its embedding items and their per-dimension defaults
 }
 
 Note on payload names: no exported filename carries dataset content. A payload
-on the \code{obs}, \code{var}, or \code{vectors} axis is named by the integer
-position of its field in the export -- \code{var/0.values.f32},
-\code{obs/1.codes.u8}, \code{vectors/0_2d.bin} -- and \code{connectivity/} uses
-fixed neutral names. Every dataset therefore has the same directory listing.
+on the \code{embeddings}, \code{obs}, \code{var}, or \code{vectors} axis is
+named by the integer position of its field in the export --
+\code{embeddings/0_2d.bin}, \code{var/0.values.f32}, \code{obs/1.codes.u8},
+\code{vectors/0_1.bin} -- and \code{connectivity/} uses fixed neutral names. Every dataset therefore has the same directory listing.
 Each manifest entry declares its own index as its first element, so
 \code{fields} entries read \code{[index, name]} or
 \code{[index, name, minValue, maxValue]}, \code{_continuousFields} entries read
 \code{[index, key]} or \code{[index, key, minValue, maxValue]}, and
 \code{_categoricalFields} entries read \code{[index, key, categories, dtype,
-sentinel, centroids]} with \code{outlierMinValue} and \code{outlierMaxValue}
+sentinel, centroidsByEmbedding]} with \code{outlierMinValue} and \code{outlierMaxValue}
 appended when the generated quantiles are quantized. The schema path patterns
 \code{pathPattern}, \code{codesPathPattern}, and \code{outlierPathPattern}
 substitute \code{\{index\}}. Within one axis directory the indices are exactly
@@ -183,13 +210,13 @@ generated internally; cells in categories smaller than
 marker only when those generated quantiles are quantized.
 
 Note on required arguments: \code{obs_categorical_dtype}, \code{dataset_name},
-and \code{dataset_id} carry no default, because no value of any of them is a
+\code{dataset_id}, and \code{embeddings} carry no default, because no value of any of them is a
 reasonable guess about someone else's dataset. Leaving one out is reported as
 what it is -- \code{cellucid_prepare() is missing 1 required argument:} --
 followed by the argument's name and what a valid value of it is, so a missing
 argument is never described as a value of the wrong type. Every argument that
 is left out is named in that one message. The \code{cellucid} Python package
-requires the same three and reports the same set in one \code{TypeError}.
+requires the same four and reports the same set in one \code{TypeError}.
 
 Note on displayed text: a category label, an exported gene name, an exported
 \code{obs} key, a vector-field id, \code{dataset_name},
@@ -217,10 +244,9 @@ viewer can draw exactly as it is stored, because a gene name and a category
 label appear in the same legend. The rule covers the identifiers that are
 exported: \code{obs_keys} and \code{gene_identifiers} narrow the export and
 narrow this rule with it, and a \code{var} row left out reaches no manifest.
-Gene IDs carry one further rule that spans the whole \code{var} and is
-therefore not narrowed -- every ID must be a non-empty string and must be
-distinct, because \code{gene_identifiers} addresses \code{var} rows by
-identifier. \code{dataset_id} is the one identifier that still names a
+Gene names are made unique over the whole \code{var}, not only the exported
+rows, so a gene keeps its name however the export is narrowed and
+\code{gene_identifiers} addresses exactly one row per name. \code{dataset_id} is the one identifier that still names a
 directory, so it must be a 1--180-byte portable ASCII filename component: it
 begins with a letter or digit, contains only letters, digits, \code{.},
 \code{_}, or \code{-}, does not end with \code{.}, and is not a Windows device
@@ -233,6 +259,7 @@ obs <- data.frame(
   score = c(0.1, 0.2, 0.3)
 )
 umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
+pca <- matrix(c(0, 3, 1, 2, 5, 1, 4, 0, 2), ncol = 3, byrow = TRUE)
 expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
 var <- data.frame(symbol = c("G1", "G2"))
 rownames(var) <- var$symbol
@@ -247,7 +274,11 @@ cellucid_prepare(
   obs = obs,
   var = var,
   gene_expression = expr,
-  X_umap_2d = umap2,
+  embeddings = list(
+    X_umap = umap2,
+    X_pca = cellucid_embedding(pca, columns = c(1, 2), label = "PCA")
+  ),
+  embedding_defaults = c("2d" = "X_umap"),
   out_dir = out,
   centroid_min_points = 1,
   force = TRUE,

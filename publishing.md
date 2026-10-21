@@ -316,7 +316,16 @@ Common issues and fixes:
 
 ### Need to update just the citation?
 
-Edit `CITATION.cff` directly and push. For changes that need a new version, follow the full release process.
+The Cellucid preprint citation is not edited here. It is written once, in the
+`preferred-citation` block of `theislab/cellucid`'s `CITATION.cff`; from the
+workspace, `python cellucid-private/scripts/sync_citation.py` copies that block
+into this repository's `CITATION.cff` and regenerates the citation in
+`README.md` and `inst/CITATION`, and `--check` verifies every repository.
+`tests/testthat/test-citation-contract.R` fails if a copy here drifts.
+
+This repository's own software metadata in `CITATION.cff` (title, `version:`,
+URLs) stays here: edit it directly and push. For changes that need a new
+version, follow the full release process.
 
 ---
 
@@ -352,7 +361,7 @@ R package names cannot contain `-`, so the package itself must stay `cellucid`.
 |----------|---------|---------|
 | R-CMD-check | Push, PR | Tests on Windows/macOS/Linux |
 | Build Release Tarball | Release, manual | Creates CRAN-ready `.tar.gz` |
-| pkgdown | Push to main, release | Deploys documentation website |
+| pkgdown | Push to main, manual | Deploys documentation website |
 
 ### Useful Links
 

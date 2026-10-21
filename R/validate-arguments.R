@@ -46,13 +46,17 @@
 # other way to learn it.
 .required_argument_guidance <- c(
   obs_categorical_dtype = paste0(
-    "exactly one of \"uint8\" or \"uint16\", the storage width of every ",
-    "categorical code"
+    "exactly one of \"uint8\", \"uint16\" or \"uint32\", the storage width ",
+    "of every categorical code"
   ),
   dataset_name = "one non-empty name for the dataset, shown to the reader verbatim",
   dataset_id = paste0(
     "one portable identifier of 1-180 ASCII letters, numbers, '.', '_', or ",
     "'-', beginning with a letter or number and not ending with '.'"
+  ),
+  embeddings = paste0(
+    "a named list mapping each embedding id to a matrix or a ",
+    "cellucid_embedding(), for example list(X_umap = umap)"
   )
 )
 
@@ -88,7 +92,7 @@
 }
 
 .validate_obs_categorical_dtype <- function(value) {
-  supported <- c("uint8", "uint16")
+  supported <- names(.categorical_code_widths)
   if (
     !is.character(value) ||
       length(value) != 1L ||
@@ -97,7 +101,7 @@
       !value %in% supported
   ) {
     stop(
-      "obs_categorical_dtype must be exactly one of \"uint8\" or \"uint16\".",
+      "obs_categorical_dtype must be exactly one of \"uint8\", \"uint16\" or \"uint32\".",
       call. = FALSE
     )
   }

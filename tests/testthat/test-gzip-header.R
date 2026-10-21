@@ -85,7 +85,7 @@ test_that("every compressed payload of an export carries the canonical header", 
     dataset_name = "Gzip header",
     latent_space = fixture$latent,
     obs = fixture$obs,
-    X_umap_2d = fixture$umap2,
+    embeddings = list(X_umap = fixture$umap2),
     out_dir = out,
     centroid_min_points = 4L,
     force = TRUE,
@@ -95,19 +95,18 @@ test_that("every compressed payload of an export carries the canonical header", 
 
   # The exact set, not its size. A payload family that stopped being
   # compressed drops out of a `.gz` listing entirely, so a count-based guard
-  # leaves the loop below asserting nothing whatever about it. points_%dd.bin
-  # is the case that matters: it sits at the export root, where the
-  # manifest-versus-disk check does not reach either, so nothing else in the
-  # suite would notice it losing its .gz while dataset_identity.json went on
-  # naming one.
+  # leaves the loop below asserting nothing whatever about it. The embedding
+  # payload is the case that matters: it is the one file the viewer cannot
+  # draw without, so it must not lose its .gz while dataset_identity.json goes
+  # on naming one.
   written <- list.files(out, pattern = "\\.gz$", recursive = TRUE)
   expect_identical(
     written,
     c(
+      "embeddings/0_2d.bin.gz",
       "obs/0.codes.u16.gz",
       "obs/0.outliers.f32.gz",
-      "obs/1.values.f32.gz",
-      "points_2d.bin.gz"
+      "obs/1.values.f32.gz"
     )
   )
   expected <- .gzip_expected_header(6L)

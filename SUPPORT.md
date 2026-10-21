@@ -4,7 +4,7 @@ Thanks for using `cellucid` (R).
 
 ## Getting help
 
-- Documentation: https://cellucid.readthedocs.io/en/latest/user_guide/r_package/index.html
+- Documentation: https://docs.cellucid.com/en/latest/user_guide/r_package/index.html
 - Issues: https://github.com/theislab/cellucid-r/issues
 - For security issues, see `SECURITY.md`.
 

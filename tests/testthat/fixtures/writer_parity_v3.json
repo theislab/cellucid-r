@@ -1,0 +1,561 @@
+{
+  "_about": "Cross-writer parity fixture for export format v3. cellucid-python (tests/fixtures/writer_parity_v3.json) and cellucid-r (tests/testthat/fixtures/writer_parity_v3.json) hold the same bytes and pin the same SHA-256. Both writers export 'inputs' uncompressed and must produce exactly 'expected.payloads' (hex of every binary file) and manifests that parse equal to 'expected.manifests'. dataset_identity.json additionally carries cellucid_data_version, the writing package's version, which is omitted here. Embedding 'columns' are 0-based; the R test converts them to its 1-based argument. A null var value and an empty string are both empty names.",
+  "inputs": {
+    "dataset_id": "writer-parity-v3",
+    "dataset_name": "Writer parity v3",
+    "created_at": "2026-01-01T00:00:00Z",
+    "obs_categorical_dtype": "uint8",
+    "centroid_min_points": 1,
+    "obs": {
+      "cluster": {
+        "kind": "category",
+        "values": [
+          "A",
+          "B"
+        ]
+      },
+      "score": {
+        "kind": "continuous",
+        "values": [
+          0.5,
+          1.5
+        ]
+      }
+    },
+    "latent_space": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        0.0
+      ]
+    ],
+    "var": {
+      "index": [
+        "g1",
+        "g2",
+        "g3",
+        "g4"
+      ],
+      "columns": {
+        "gene_name": [
+          "MATR3",
+          "MATR3",
+          null,
+          "CD4"
+        ],
+        "symbol": [
+          "S1",
+          "S1",
+          "",
+          "CD4"
+        ]
+      }
+    },
+    "var_gene_id_column": "gene_name",
+    "var_gene_name_columns": [
+      "symbol"
+    ],
+    "gene_expression": [
+      [
+        0.0,
+        1.0,
+        2.5,
+        0.125
+      ],
+      [
+        3.0,
+        0.0,
+        0.5,
+        8.0
+      ]
+    ],
+    "embeddings": {
+      "X_umap": {
+        "values": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            2.0,
+            1.0
+          ]
+        ],
+        "columns": null,
+        "label": "UMAP",
+        "source_key": "X_umap"
+      },
+      "X_tsne": {
+        "values": [
+          [
+            1.0,
+            1.0
+          ],
+          [
+            3.0,
+            5.0
+          ]
+        ],
+        "columns": null,
+        "label": "t-SNE",
+        "source_key": "X_tsne"
+      },
+      "X_pca": {
+        "values": [
+          [
+            9.0,
+            0.0,
+            9.0,
+            1.0,
+            9.0
+          ],
+          [
+            9.0,
+            2.0,
+            9.0,
+            5.0,
+            9.0
+          ]
+        ],
+        "columns": [
+          3,
+          1
+        ],
+        "label": null,
+        "source_key": "X_pca"
+      },
+      "X_umap_3d": {
+        "values": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            4.0,
+            2.0,
+            1.0
+          ]
+        ],
+        "columns": null,
+        "label": null,
+        "source_key": null
+      },
+      "X_line": {
+        "values": [
+          0.25,
+          0.75
+        ],
+        "columns": null,
+        "label": null,
+        "source_key": null
+      }
+    },
+    "embedding_defaults": {
+      "2d": "X_umap"
+    },
+    "vector_fields": {
+      "velocity": {
+        "X_umap": [
+          [
+            0.5,
+            -0.25
+          ],
+          [
+            1.0,
+            2.0
+          ]
+        ],
+        "X_umap_3d": [
+          [
+            1.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.25,
+            0.5,
+            2.0
+          ]
+        ]
+      },
+      "drift": {
+        "X_pca": [
+          [
+            0.125,
+            0.0
+          ],
+          [
+            -0.5,
+            1.0
+          ]
+        ]
+      }
+    },
+    "vector_field_default": "velocity",
+    "connectivities": [
+      [
+        0.0,
+        0.5
+      ],
+      [
+        0.5,
+        0.0
+      ]
+    ]
+  },
+  "expected": {
+    "payloads": {
+      "connectivity/edges.dst.bin": "0100",
+      "connectivity/edges.src.bin": "0000",
+      "connectivity/edges.weights.f64.bin": "000000000000e03f",
+      "embeddings/0_1d.bin": "000080bf0000803f",
+      "embeddings/1_2d.bin": "000080bf000000bf0000803f0000003f",
+      "embeddings/2_2d.bin": "000000bf000080bf0000003f0000803f",
+      "embeddings/3_2d.bin": "000080bf000000bf0000803f0000003f",
+      "embeddings/4_3d.bin": "000080bf000000bf000080be0000803f0000003f0000803e",
+      "obs/0.codes.u8": "0001",
+      "obs/0.outliers.f32": "0000803f0000803f",
+      "obs/1.values.f32": "0000003f0000c03f",
+      "var/0.values.f32": "0000000000004040",
+      "var/1.values.f32": "0000803f00000000",
+      "var/2.values.f32": "000020400000003f",
+      "var/3.values.f32": "0000003e00000041",
+      "vectors/0_1.bin": "0000803d00000000000080be0000003f",
+      "vectors/1_3.bin": "0000003f000080be0000803f00000040",
+      "vectors/1_4.bin": "0000003f00000000000000bf0000003e0000803e0000803f"
+    },
+    "manifests": {
+      "connectivity_manifest.json": {
+        "format": "edge_pairs",
+        "n_cells": 2,
+        "n_edges": 1,
+        "max_neighbors": 1,
+        "index_bytes": 2,
+        "index_dtype": "uint16",
+        "sourcesPath": "connectivity/edges.src.bin",
+        "destinationsPath": "connectivity/edges.dst.bin",
+        "weightsPath": "connectivity/edges.weights.f64.bin",
+        "weight_dtype": "float64",
+        "weight_bytes": 8,
+        "compression": null
+      },
+      "dataset_identity.json": {
+        "version": 3,
+        "id": "writer-parity-v3",
+        "name": "Writer parity v3",
+        "description": "",
+        "created_at": "2026-01-01T00:00:00Z",
+        "stats": {
+          "n_cells": 2,
+          "n_genes": 4,
+          "n_obs_fields": 2,
+          "n_categorical_fields": 1,
+          "n_continuous_fields": 1,
+          "has_connectivity": true,
+          "n_edges": 1
+        },
+        "embeddings": {
+          "default_dimension": 3,
+          "defaults": {
+            "1d": "X_line",
+            "2d": "X_umap",
+            "3d": "X_umap_3d"
+          },
+          "items": {
+            "X_line": {
+              "label": "X_line",
+              "dimension": 1,
+              "file": "embeddings/0_1d.bin",
+              "source": {
+                "key": null,
+                "columns": [
+                  0
+                ]
+              }
+            },
+            "X_pca": {
+              "label": "X_pca",
+              "dimension": 2,
+              "file": "embeddings/1_2d.bin",
+              "source": {
+                "key": "X_pca",
+                "columns": [
+                  3,
+                  1
+                ]
+              }
+            },
+            "X_tsne": {
+              "label": "t-SNE",
+              "dimension": 2,
+              "file": "embeddings/2_2d.bin",
+              "source": {
+                "key": "X_tsne",
+                "columns": [
+                  0,
+                  1
+                ]
+              }
+            },
+            "X_umap": {
+              "label": "UMAP",
+              "dimension": 2,
+              "file": "embeddings/3_2d.bin",
+              "source": {
+                "key": "X_umap",
+                "columns": [
+                  0,
+                  1
+                ]
+              }
+            },
+            "X_umap_3d": {
+              "label": "X_umap_3d",
+              "dimension": 3,
+              "file": "embeddings/4_3d.bin",
+              "source": {
+                "key": null,
+                "columns": [
+                  0,
+                  1,
+                  2
+                ]
+              }
+            }
+          }
+        },
+        "obs_fields": [
+          {
+            "key": "score",
+            "kind": "continuous"
+          },
+          {
+            "key": "cluster",
+            "kind": "category",
+            "n_categories": 2
+          }
+        ],
+        "export_settings": {
+          "compression": null,
+          "var_quantization": null,
+          "obs_continuous_quantization": null,
+          "obs_categorical_dtype": "uint8"
+        },
+        "vector_fields": {
+          "default_field": "velocity",
+          "fields": {
+            "drift": {
+              "label": "drift",
+              "files": {
+                "X_pca": "vectors/0_1.bin"
+              }
+            },
+            "velocity": {
+              "label": "velocity",
+              "files": {
+                "X_umap": "vectors/1_3.bin",
+                "X_umap_3d": "vectors/1_4.bin"
+              }
+            }
+          }
+        }
+      },
+      "obs_manifest.json": {
+        "_format": "compact_v2",
+        "n_points": 2,
+        "centroid_outlier_quantile": 0.95,
+        "latent_key": "latent_space",
+        "compression": null,
+        "_obsSchemas": {
+          "continuous": {
+            "pathPattern": "obs/{index}.values.f32",
+            "ext": "f32",
+            "dtype": "float32",
+            "quantized": false
+          },
+          "categorical": {
+            "codesPathPattern": "obs/{index}.codes.{ext}",
+            "outlierPathPattern": "obs/{index}.outliers.f32",
+            "outlierExt": "f32",
+            "outlierDtype": "float32",
+            "outlierQuantized": false
+          }
+        },
+        "_continuousFields": [
+          [
+            1,
+            "score"
+          ]
+        ],
+        "_categoricalFields": [
+          [
+            0,
+            "cluster",
+            [
+              "A",
+              "B"
+            ],
+            "uint8",
+            255,
+            {
+              "X_line": [
+                {
+                  "category": "A",
+                  "position": [
+                    -1.0
+                  ],
+                  "n_points": 1
+                },
+                {
+                  "category": "B",
+                  "position": [
+                    1.0
+                  ],
+                  "n_points": 1
+                }
+              ],
+              "X_pca": [
+                {
+                  "category": "A",
+                  "position": [
+                    -1.0,
+                    -0.5
+                  ],
+                  "n_points": 1
+                },
+                {
+                  "category": "B",
+                  "position": [
+                    1.0,
+                    0.5
+                  ],
+                  "n_points": 1
+                }
+              ],
+              "X_tsne": [
+                {
+                  "category": "A",
+                  "position": [
+                    -0.5,
+                    -1.0
+                  ],
+                  "n_points": 1
+                },
+                {
+                  "category": "B",
+                  "position": [
+                    0.5,
+                    1.0
+                  ],
+                  "n_points": 1
+                }
+              ],
+              "X_umap": [
+                {
+                  "category": "A",
+                  "position": [
+                    -1.0,
+                    -0.5
+                  ],
+                  "n_points": 1
+                },
+                {
+                  "category": "B",
+                  "position": [
+                    1.0,
+                    0.5
+                  ],
+                  "n_points": 1
+                }
+              ],
+              "X_umap_3d": [
+                {
+                  "category": "A",
+                  "position": [
+                    -1.0,
+                    -0.5,
+                    -0.25
+                  ],
+                  "n_points": 1
+                },
+                {
+                  "category": "B",
+                  "position": [
+                    1.0,
+                    0.5,
+                    0.25
+                  ],
+                  "n_points": 1
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "var_manifest.json": {
+        "_format": "compact_v2",
+        "n_points": 2,
+        "compression": null,
+        "quantization": null,
+        "_varSchema": {
+          "kind": "continuous",
+          "pathPattern": "var/{index}.values.f32",
+          "ext": "f32",
+          "dtype": "float32",
+          "quantized": false
+        },
+        "fields": [
+          [
+            0,
+            "MATR3"
+          ],
+          [
+            1,
+            "MATR3-1"
+          ],
+          [
+            2,
+            "g3"
+          ],
+          [
+            3,
+            "CD4"
+          ]
+        ],
+        "gene_name_sets": [
+          {
+            "source": "gene_name",
+            "filled_from_index": 1,
+            "renamed": [
+              [
+                "MATR3",
+                "MATR3-1"
+              ]
+            ],
+            "names": null
+          },
+          {
+            "source": "symbol",
+            "filled_from_index": 1,
+            "renamed": [
+              [
+                "S1",
+                "S1-1"
+              ]
+            ],
+            "names": [
+              "S1",
+              "S1-1",
+              null,
+              null
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

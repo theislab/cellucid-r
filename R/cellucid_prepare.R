@@ -1,5 +1,6 @@
-# The help page for cellucid_prepare() is hand-written in
-# man/cellucid_prepare.Rd and is the only source for it. Nothing in this
+# The help pages for cellucid_prepare() and cellucid_embedding() are
+# hand-written in man/cellucid_prepare.Rd and man/cellucid_embedding.Rd and
+# are the only source for them. Nothing in this
 # package is generated: NAMESPACE is hand-written too, because
 # useDynLib(cellucid, .registration = TRUE, .fixes = "C_") has no generator
 # input anywhere under R/ and no generator would emit it. Edit the .Rd file
@@ -12,6 +13,7 @@ cellucid_prepare <- function(
     var = NULL,
     gene_expression = NULL,
     var_gene_id_column = NULL,
+    var_gene_name_columns = NULL,
     gene_identifiers = NULL,
     connectivities = NULL,
     out_dir = file.path(getwd(), "exports"),
@@ -29,14 +31,15 @@ cellucid_prepare <- function(
     source_name = NULL,
     source_url = NULL,
     source_citation = NULL,
-    X_umap_1d = NULL,
-    X_umap_2d = NULL,
-    X_umap_3d = NULL,
+    embeddings,
+    embedding_defaults = NULL,
     vector_fields = NULL,
     vector_field_default = NULL,
     created_at = NULL
 ) {
-  manifest_format_version <- "compact_v1"
+  manifest_format_version <- .manifest_format_version
+  identity_version <- 3L
+  embeddings_dirname <- "embeddings"
   obs_binary_dirname <- "obs"
   var_binary_dirname <- "var"
   connectivity_binary_dirname <- "connectivity"
@@ -57,6 +60,9 @@ cellucid_prepare <- function(
   }
   if (missing(dataset_id)) {
     absent_required <- c(absent_required, "dataset_id")
+  }
+  if (missing(embeddings)) {
+    absent_required <- c(absent_required, "embeddings")
   }
   .require_supplied_arguments(absent_required)
 
@@ -133,13 +139,16 @@ cellucid_prepare <- function(
   obs_binary_dir <- file.path(out_dir, obs_binary_dirname)
   .dir_create(obs_binary_dir)
 
-  embeddings_in <- list(
-    `1` = X_umap_1d,
-    `2` = X_umap_2d,
-    `3` = X_umap_3d
-  )
-  embeddings <- .collect_embeddings(embeddings_in)
-  n_cells <- .validate_embeddings(embeddings)
+  # Every embedding and each dimension's default are validated, and each
+  # item is normalized on its own, before any embedding payload is written.
+  resolved_embeddings <- .resolve_embeddings(embeddings, embedding_defaults)
+  embedding_items <- resolved_embeddings$items
+  n_cells <- resolved_embeddings$n_cells
+  default_dimension <- max(vapply(
+    embedding_items,
+    function(item) item$dimension,
+    integer(1)
+  ))
   connectivity_edges <- NULL
   if (!is.null(connectivities)) {
     connectivity_edges <- .validate_connectivity_edges(
@@ -148,41 +157,16 @@ cellucid_prepare <- function(
     )
   }
 
-  normalization_info <- list()
-  for (dim in names(embeddings)) {
-    if (any(!is.finite(embeddings[[dim]]))) {
-      stop(
-        "X_umap_", dim, "d contains non-finite values (NA/NaN/Inf). ",
-        "Please filter or impute before export."
-      )
-    }
-    # Before normalization, because normalization hides it. Centring and
-    # scaling pull every coordinate into roughly [-1, 1], so a source
-    # coordinate of 1e300 or 1e-320 reaches the writer already inside the
-    # float32 range and would be published as a number the caller never
-    # supplied. cellucid-python gates the same values at the same point.
-    .require_finite_float32_source(
-      embeddings[[dim]],
-      paste0("X_umap_", dim, "d")
+  # Save embeddings: embeddings/{index}_{dimension}d.bin, rounded to float32
+  # exactly once, at the write.
+  embeddings_dir <- file.path(out_dir, embeddings_dirname)
+  .dir_create(embeddings_dir)
+  for (item in embedding_items) {
+    .write_float32_matrix_row_major(
+      file.path(embeddings_dir, sprintf("%d_%dd.bin", item$index, item$dimension)),
+      item$coords,
+      compression = compression
     )
-    normalized <- .normalize_embedding(embeddings[[dim]])
-    embeddings[[dim]] <- normalized$coords
-    normalization_info[[dim]] <- normalized$info
-  }
-
-  available_dimensions <- sort(as.integer(names(embeddings)))
-  default_dimension <- if (3L %in% available_dimensions) {
-    3L
-  } else if (2L %in% available_dimensions) {
-    2L
-  } else {
-    1L
-  }
-
-  # Save embeddings
-  for (dim in available_dimensions) {
-    file_base <- file.path(out_dir, sprintf("points_%dd.bin", dim))
-    .write_float32_matrix_row_major(file_base, embeddings[[as.character(dim)]], compression = compression)
   }
 
   if (is.null(latent_space)) {
@@ -234,25 +218,23 @@ cellucid_prepare <- function(
     )
   )
 
-  # Vector fields (optional)
+  # Vector fields (optional), each bound to exported embedding ids
   vector_fields_identity <- NULL
   vector_payload_indices <- list()
-  if (!is.null(vector_fields)) {
-    vector_result <- .export_vector_fields(
-      vector_fields = vector_fields,
-      embeddings = embeddings,
-      normalization_info = normalization_info,
+  resolved_vector_fields <- .resolve_vector_fields(
+    vector_fields = vector_fields,
+    items = embedding_items,
+    vector_field_default = vector_field_default
+  )
+  if (length(resolved_vector_fields$fields) > 0L) {
+    vector_result <- .write_vector_fields(
+      resolved_vector_fields,
+      items = embedding_items,
       out_dir = out_dir,
-      compression = compression,
-      vector_field_default = vector_field_default
+      compression = compression
     )
     vector_fields_identity <- vector_result$identity
     vector_payload_indices <- vector_result$payload_indices
-  } else if (!is.null(vector_field_default)) {
-    stop(
-      "vector_field_default requires vector_fields.",
-      call. = FALSE
-    )
   }
 
   # ===========================================================================
@@ -263,7 +245,7 @@ cellucid_prepare <- function(
     obs = obs,
     obs_keys = obs_keys,
     latent = latent,
-    embeddings = embeddings,
+    embedding_items = embedding_items,
     obs_binary_dir = obs_binary_dir,
     obs_binary_dirname = obs_binary_dirname,
     centroid_outlier_quantile = centroid_outlier_quantile,
@@ -380,7 +362,18 @@ cellucid_prepare <- function(
       stop("var has ", nrow(var), " rows, but gene_expression has ", ncol(gene_expression), " genes.")
     }
 
-    all_gene_ids <- .extract_gene_ids(var, var_gene_id_column)
+    if (!is.null(var_gene_id_column)) {
+      var_gene_id_column <- .validate_gene_name_source(
+        var_gene_id_column,
+        "var_gene_id_column"
+      )
+    }
+    default_names <- .resolve_gene_name_set(
+      var,
+      var_gene_id_column,
+      "var_gene_id_column"
+    )
+    all_gene_ids <- default_names$names
     gene_id_to_idx <- stats::setNames(seq_along(all_gene_ids), all_gene_ids)
 
     if (is.null(gene_identifiers)) {
@@ -404,17 +397,25 @@ cellucid_prepare <- function(
           "gene_identifiers contains identifiers not found in var: ",
           .format_value_list(shown),
           if (remainder > 0L) paste0(" and ", remainder, " more") else "",
-          ".",
+          ". Identifiers are matched against the default gene names after ",
+          "repeated names were made unique.",
           call. = FALSE
         )
       }
       genes_to_export <- gene_identifiers
     }
-    # Uniqueness spans the whole var, because every row is addressable through
-    # gene_identifiers=. Being drawable is a property of a name the viewer
-    # shows, so it is checked on the exported genes: a var row left out reaches
-    # no manifest, exactly as an obs column left out of obs_keys= does.
+    # Being drawable is a property of a name the viewer shows, so it is
+    # checked on the exported genes: a var row left out reaches no manifest,
+    # exactly as an obs column left out of obs_keys= does.
     .require_field_identities(genes_to_export, what = "Gene")
+    exported_positions <- unname(gene_id_to_idx[genes_to_export])
+    gene_name_sets <- .gene_name_sets(
+      var,
+      default_source = var_gene_id_column,
+      default_names = default_names,
+      alternative_columns = var_gene_name_columns,
+      exported_positions = exported_positions
+    )
 
     var_manifest_path <- file.path(out_dir, "var_manifest.json")
     var_binary_dir <- file.path(out_dir, var_binary_dirname)
@@ -486,11 +487,11 @@ cellucid_prepare <- function(
     var_manifest_payload <- list(
       `_format` = manifest_format_version,
       n_points = as.integer(n_cells),
-      var_gene_id_column = var_gene_id_column,
       compression = if (!is.null(compression)) compression else NULL,
       quantization = if (!is.null(var_quantization)) var_quantization else NULL,
       `_varSchema` = var_schema,
-      fields = var_manifest_fields
+      fields = var_manifest_fields,
+      gene_name_sets = gene_name_sets
     )
     .write_json(var_manifest_path, var_manifest_payload, pretty = FALSE)
 
@@ -510,6 +511,27 @@ cellucid_prepare <- function(
       directory_name = var_binary_dirname,
       declared = .declared_var_payload_paths(var_manifest_payload),
       axis = "Gene"
+    )
+    for (name_set in gene_name_sets) {
+      note <- .unique_names_note(
+        name_set$filled_from_index,
+        name_set$renamed,
+        name_set$source
+      )
+      if (!is.null(note)) {
+        source_label <- if (is.null(name_set$source)) {
+          "var index"
+        } else {
+          paste0("var column '", name_set$source, "'")
+        }
+        message("Gene names from ", source_label, ": ", note)
+      }
+    }
+  } else if (!is.null(var_gene_name_columns)) {
+    stop(
+      "var_gene_name_columns names alternative gene names, and no ",
+      "gene_expression was supplied, so the export has no genes to name.",
+      call. = FALSE
     )
   }
 
@@ -658,18 +680,35 @@ cellucid_prepare <- function(
     obs_categorical_dtype = obs_categorical_dtype
   )
 
+  # One item per exported embedding, in payload index order, each naming the
+  # exact file the format derives for it.
   gz_suffix <- .gz_suffix(compression)
-  embeddings_meta <- list(
-    available_dimensions = I(available_dimensions),
-    default_dimension = default_dimension,
-    files = list()
-  )
-  for (dim in available_dimensions) {
-    embeddings_meta$files[[sprintf("%dd", dim)]] <- sprintf("points_%dd.bin%s", dim, gz_suffix)
+  items_meta <- list()
+  for (item in embedding_items) {
+    items_meta[[item$id]] <- list(
+      label = item$label,
+      dimension = as.integer(item$dimension),
+      file = sprintf(
+        "%s/%d_%dd.bin%s",
+        embeddings_dirname,
+        item$index,
+        item$dimension,
+        gz_suffix
+      ),
+      source = list(
+        key = item$source_key,
+        columns = I(as.integer(item$columns))
+      )
+    )
   }
+  embeddings_meta <- list(
+    default_dimension = as.integer(default_dimension),
+    defaults = resolved_embeddings$defaults,
+    items = items_meta
+  )
 
   identity_payload <- list(
-    version = 2,
+    version = identity_version,
     id = dataset_id,
     name = dataset_name,
     description = dataset_description,
@@ -698,37 +737,28 @@ cellucid_prepare <- function(
 
   .write_json(identity_path, identity_payload, pretty = 2)
 
-  # Each axis directory has now been reconciled against the manifest that
-  # declares it, but the point payloads sit at the export root and are declared
-  # in dataset_identity.json, so nothing above compared the coordinate files
-  # the viewer is told to fetch against the files that were written. The
-  # declared name and the written name are two independent spellings of the
-  # compression setting -- the sprintf() above and .final_binary_path() at the
-  # write -- and a generation whose points disagree publishes successfully and
-  # then fails in the browser with no coordinates. The root is the last surface
-  # where a declaration and a file can disagree, so it is reconciled whole:
-  # the manifests and the axis directories this call created are named here
-  # too, and anything else that reached the root is refused rather than
-  # published.
+  # Every embedding item is declared by path in dataset_identity.json, so
+  # the embeddings directory is reconciled against that declaration -- the
+  # declared name and the written name are two expressions of one compression
+  # setting, and a generation whose coordinates disagree would publish and
+  # then fail in the browser with nothing to draw.
+  .require_dense_payload_indices(
+    lapply(embedding_items, function(item) item$index),
+    axis = "Embedding"
+  )
+  .require_declared_payloads_on_disk(
+    out_dir,
+    directory_name = embeddings_dirname,
+    declared = .declared_embedding_payload_paths(identity_payload),
+    axis = "Embedding"
+  )
+
+  # The root is the last surface where a declaration and a file can disagree,
+  # so it is reconciled whole: the manifests and the payload directories this
+  # call created are named, and anything else that reached the root is
+  # refused rather than published.
   declared_root_files <- c("dataset_identity.json", "obs_manifest.json")
-  declared_root_directories <- obs_binary_dirname
-  for (dimension_key in names(identity_payload$embeddings$files)) {
-    declared_point_path <- identity_payload$embeddings$files[[dimension_key]]
-    if (
-      !is.character(declared_point_path) ||
-        length(declared_point_path) != 1L ||
-        is.na(declared_point_path) ||
-        !nzchar(declared_point_path)
-    ) {
-      stop(
-        "dataset_identity.json embeddings.files ",
-        dimension_key,
-        " must be one payload path.",
-        call. = FALSE
-      )
-    }
-    declared_root_files <- c(declared_root_files, declared_point_path)
-  }
+  declared_root_directories <- c(obs_binary_dirname, embeddings_dirname)
   if (!is.null(gene_expression)) {
     declared_root_files <- c(declared_root_files, "var_manifest.json")
     declared_root_directories <- c(

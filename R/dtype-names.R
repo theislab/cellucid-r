@@ -13,4 +13,4 @@
   if (bits == 8L) "u8" else "u16"
 }
 
-.codes_extension_by_dtype <- c(uint8 = "u8", uint16 = "u16")
+.codes_extension_by_dtype <- c(uint8 = "u8", uint16 = "u16", uint32 = "u32")

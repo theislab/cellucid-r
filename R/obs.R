@@ -5,26 +5,35 @@
 # How wide a categorical field's codes are stored, and the code value that
 # stands for a missing one. The width the caller chose fixes both, and it also
 # fixes how many categories the field may carry: the top code of the domain is
-# reserved for "missing", so a uint8 field addresses 255 categories and a
-# uint16 field 65,535. Every place that needs a width asks here, so the limit
-# and the reserved code cannot come apart.
+# reserved for "missing", so a uint8 field addresses 255 categories, a uint16
+# field 65,535 and a uint32 field 4,294,967,295. Every place that needs a width
+# asks here, so the limit and the reserved code cannot come apart. The uint32
+# marker is a double, because it is past R's integer range; it is still exact.
+.categorical_code_widths <- list(
+  uint8 = list(dtype = "uint8", missing_value = 255L),
+  uint16 = list(dtype = "uint16", missing_value = 65535L),
+  uint32 = list(dtype = "uint32", missing_value = 4294967295)
+)
+
+.format_count <- function(n) {
+  format(n, big.mark = ",", scientific = FALSE, trim = TRUE)
+}
+
 .categorical_code_dtype <- function(n_categories, key, obs_categorical_dtype) {
-  if (identical(obs_categorical_dtype, "uint8")) {
-    if (n_categories > 255L) {
-      stop(
-        "Field '", key, "' has ", n_categories,
-        " categories, but uint8 supports at most 255."
-      )
-    }
-    return(list(dtype = "uint8", missing_value = 255L))
-  }
-  if (n_categories > 65535L) {
+  width <- .categorical_code_widths[[obs_categorical_dtype]]
+  if (n_categories > width$missing_value) {
+    fits <- Filter(
+      function(candidate) n_categories <= candidate$missing_value,
+      .categorical_code_widths
+    )
     stop(
-      "Field '", key, "' has ", n_categories,
-      " categories, but uint16 supports at most 65,535."
+      "Field '", key, "' has ", .format_count(n_categories),
+      " categories, but ", width$dtype, " supports at most ",
+      .format_count(width$missing_value), ". Pass obs_categorical_dtype='",
+      fits[[1L]]$dtype, "'."
     )
   }
-  list(dtype = "uint16", missing_value = 65535L)
+  width
 }
 
 .category_values_and_codes <- function(values, key) {
@@ -132,7 +141,7 @@
     obs,
     obs_keys,
     latent,
-    embeddings,
+    embedding_items,
     obs_binary_dir,
     obs_binary_dirname,
     centroid_outlier_quantile,
@@ -236,24 +245,28 @@
     valid_mask <- codes >= 0L
     codes_typed[valid_mask] <- codes[valid_mask]
 
-    if (identical(dtype_str, "uint8")) {
-      codes_fname <- sprintf("%d.codes.u8", payload_index)
-      codes_path <- file.path(obs_binary_dir, codes_fname)
-      .write_uint8(codes_path, codes_typed, compression = compression)
-    } else {
-      codes_fname <- sprintf("%d.codes.u16", payload_index)
-      codes_path <- file.path(obs_binary_dir, codes_fname)
-      .write_uint16(codes_path, codes_typed, compression = compression)
-    }
+    codes_fname <- sprintf(
+      "%d.codes.%s",
+      payload_index,
+      .codes_extension_by_dtype[[dtype_str]]
+    )
+    codes_path <- file.path(obs_binary_dir, codes_fname)
+    writer <- switch(
+      dtype_str,
+      uint8 = .write_uint8,
+      uint16 = .write_uint16,
+      uint32 = .write_uint32
+    )
+    writer(codes_path, codes_typed, compression = compression)
 
     if (is.null(centroid_outlier_quantile)) {
-      centroids_by_dim <- stats::setNames(
-        lapply(names(embeddings), function(...) list()),
-        names(embeddings)
+      centroids_by_embedding <- stats::setNames(
+        lapply(embedding_items, function(...) list()),
+        vapply(embedding_items, function(item) item$id, character(1))
       )
     } else {
-      centroids_by_dim <- .compute_centroids_for_all_dimensions(
-        embeddings = embeddings,
+      centroids_by_embedding <- .compute_centroids_for_all_embeddings(
+        items = embedding_items,
         codes = codes,
         categories = categories,
         outlier_quantile = centroid_outlier_quantile,
@@ -290,8 +303,8 @@
         key,
         I(categories),
         dtype_str,
-        as.integer(missing_value),
-        centroids_by_dim,
+        missing_value,
+        centroids_by_embedding,
         oq$min_val,
         oq$max_val
       )
@@ -319,8 +332,8 @@
         key,
         I(categories),
         dtype_str,
-        as.integer(missing_value),
-        centroids_by_dim
+        missing_value,
+        centroids_by_embedding
       )
 
       if (length(categorical_dtype_info) == 0L) {

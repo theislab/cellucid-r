@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
 Title: Export Single-Cell Data to the Cellucid Viewer Format
-Version: 0.9.1
+Version: 0.9.4
 Config/cellucid/version-marker: CELLUCID_VERSION
 Authors@R: c(
     person(

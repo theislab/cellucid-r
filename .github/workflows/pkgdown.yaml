@@ -1,13 +1,13 @@
 name: pkgdown
 
 # Builds the pkgdown documentation website and publishes it through the
-# repository's GitHub Pages deployment environment.
+# repository's GitHub Pages deployment environment. A release commit is already
+# on main, so its push deploys the site; a release-triggered run would deploy
+# from the tag ref, which the environment's protection rules refuse.
 
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:

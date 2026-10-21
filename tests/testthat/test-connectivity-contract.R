@@ -12,7 +12,7 @@ connectivity_prepare_args <- function(out_dir, connectivities) {
     latent_space = matrix(seq_len(10), nrow = 5, ncol = 2),
     obs = data.frame(score = seq_len(5)),
     connectivities = connectivities,
-    X_umap_2d = matrix(seq_len(10), nrow = 5, ncol = 2),
+    embeddings = list(X_umap = matrix(seq_len(10), nrow = 5, ncol = 2)),
     out_dir = out_dir,
     centroid_min_points = 1,
     obs_categorical_dtype = "uint16",
