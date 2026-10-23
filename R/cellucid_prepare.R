@@ -1,799 +1,412 @@
-# The help pages for cellucid_prepare() and cellucid_embedding() are
-# hand-written in man/cellucid_prepare.Rd and man/cellucid_embedding.Rd and
-# are the only source for them. Nothing in this
+# The help page for cellucid_prepare() is hand-written in
+# man/cellucid_prepare.Rd and is the only source for it. Nothing in this
 # package is generated: NAMESPACE is hand-written too, because
 # useDynLib(cellucid, .registration = TRUE, .fixes = "C_") has no generator
-# input anywhere under R/ and no generator would emit it. Edit the .Rd file
-# directly when this signature changes; tests/testthat/test-current-contract.R
-# rebuilds the documented \usage block into a function and compares it to
-# these formals, so the two cannot drift apart.
+# input anywhere under R/. Edit the .Rd file directly when this signature
+# changes; tests/testthat/test-current-contract.R rebuilds the documented
+# \usage block into a function and compares it to these formals, so the two
+# cannot drift apart.
 cellucid_prepare <- function(
-    latent_space = NULL,
+    out_path,
+    format,
+    embeddings,
+    dataset_id,
+    dataset_name,
     obs = NULL,
     var = NULL,
     gene_expression = NULL,
-    var_gene_id_column = NULL,
-    var_gene_name_columns = NULL,
-    gene_identifiers = NULL,
     connectivities = NULL,
-    out_dir = file.path(getwd(), "exports"),
-    obs_keys = NULL,
-    centroid_outlier_quantile = 0.95,
-    centroid_min_points = 10,
-    force = FALSE,
-    var_quantization = NULL,
-    obs_continuous_quantization = NULL,
-    obs_categorical_dtype,
-    compression = NULL,
-    dataset_name,
+    vector_fields = NULL,
+    gene_identifiers = NULL,
     dataset_description = NULL,
-    dataset_id,
+    citation_text = NULL,
+    citation_url = NULL,
     source_name = NULL,
     source_url = NULL,
-    source_citation = NULL,
-    embeddings,
     embedding_defaults = NULL,
-    vector_fields = NULL,
+    latent_key = NULL,
+    obs_keys = NULL,
+    var_gene_id_column = NULL,
     vector_field_default = NULL,
-    created_at = NULL
+    normalize_embeddings = NULL,
+    centroid_min_points = NULL,
+    zarr_format = NULL,
+    force = FALSE
 ) {
-  manifest_format_version <- .manifest_format_version
-  identity_version <- 3L
-  embeddings_dirname <- "embeddings"
-  obs_binary_dirname <- "obs"
-  var_binary_dirname <- "var"
-  connectivity_binary_dirname <- "connectivity"
-
   # An argument that was never supplied and an argument supplied with the wrong
   # value are two different mistakes, and only the message tells the caller
   # which one they made. Every required argument is therefore reported here,
-  # before any value is inspected, so a missing one is never described as a
-  # value of the wrong type. Each `missing()` sits directly in an `if`
+  # before any value is inspected. Each `missing()` sits directly in an `if`
   # condition in this body, which is the one place R guarantees it reads the
   # argument's own supplied-ness.
   absent_required <- character()
-  if (missing(obs_categorical_dtype)) {
-    absent_required <- c(absent_required, "obs_categorical_dtype")
+  if (missing(out_path)) {
+    absent_required <- c(absent_required, "out_path")
   }
-  if (missing(dataset_name)) {
-    absent_required <- c(absent_required, "dataset_name")
-  }
-  if (missing(dataset_id)) {
-    absent_required <- c(absent_required, "dataset_id")
+  if (missing(format)) {
+    absent_required <- c(absent_required, "format")
   }
   if (missing(embeddings)) {
     absent_required <- c(absent_required, "embeddings")
   }
+  if (missing(dataset_id)) {
+    absent_required <- c(absent_required, "dataset_id")
+  }
+  if (missing(dataset_name)) {
+    absent_required <- c(absent_required, "dataset_name")
+  }
   .require_supplied_arguments(absent_required)
 
-  force <- .validate_force(force)
-  compression <- .normalize_compression(compression)
-  obs_categorical_dtype <- .validate_obs_categorical_dtype(
-    obs_categorical_dtype
-  )
+  # --- Scalars: everything the caller can get wrong in one value ------------
+  format <- .validate_format(format)
+  zarr_format <- .validate_zarr_format(zarr_format)
+  force <- .validate_flag(force, "force")
+  target <- .resolve_output_path(out_path, format = format, force = force)
+  target$zarr_format <- zarr_format
   dataset_id <- .validate_dataset_id(dataset_id)
   dataset_name <- .validate_dataset_name(dataset_name)
-  dataset_description <- .validate_dataset_description(dataset_description)
-  created_at <- .resolve_created_at(created_at)
-  source_info <- .validate_source_identity(
-    source_name,
-    source_url,
-    source_citation
+  dataset_description <- .validate_optional_text(
+    dataset_description, "dataset_description", allow_empty = TRUE
+  )
+  citation <- .validate_linked_text(
+    citation_text, citation_url, "citation_text", "citation_url", "text"
+  )
+  source <- .validate_linked_text(
+    source_name, source_url, "source_name", "source_url", "name"
   )
 
-  if (!is.null(var_quantization)) {
-    var_quantization <- .validate_quantization_bits(
-      var_quantization,
-      arg = "var_quantization"
-    )
-  }
-  if (!is.null(obs_continuous_quantization)) {
-    obs_continuous_quantization <- .validate_quantization_bits(
-      obs_continuous_quantization,
-      arg = "obs_continuous_quantization"
-    )
-  }
-  centroid_outlier_quantile <- .validate_centroid_outlier_quantile(
-    centroid_outlier_quantile
-  )
-  centroid_min_points <- .validate_positive_integer(
-    centroid_min_points,
-    "centroid_min_points"
-  )
+  # --- obsm: the embeddings and the vector fields ---------------------------
+  resolved <- .resolve_embeddings(embeddings)
+  matrices <- resolved$matrices
+  n_cells <- resolved$n_cells
+  vectors <- .resolve_vector_fields(vector_fields, matrices, n_cells)
 
-  final_out_dir <- .validate_output_path(out_dir)
-  .dir_create(dirname(final_out_dir))
-  out_dir <- NULL
-  transaction_cleanup_armed <- FALSE
-  export_lock <- .acquire_export_generation_lock(final_out_dir)
-  on.exit(
-    .release_export_generation_lock(export_lock),
-    add = TRUE
-  )
-  on.exit({
-    if (transaction_cleanup_armed) {
-      recovery_error <- tryCatch(
-        {
-          .recover_export_transaction(final_out_dir)
-          NULL
-        },
-        error = identity
-      )
-      if (inherits(recovery_error, "error")) {
-        stop(
-          "Failed to recover rejected export transaction for ",
-          final_out_dir,
-          ": ",
-          conditionMessage(recovery_error),
-          call. = FALSE
-        )
-      }
-    }
-  }, add = TRUE, after = FALSE)
-  .recover_export_transaction(final_out_dir)
-  transaction_cleanup_armed <- TRUE
-  transaction <- .begin_export_transaction(final_out_dir, force)
-  out_dir <- transaction$stage
-  .dir_create(out_dir)
-
-  obs_binary_dir <- file.path(out_dir, obs_binary_dirname)
-  .dir_create(obs_binary_dir)
-
-  # Every embedding and each dimension's default are validated, and each
-  # item is normalized on its own, before any embedding payload is written.
-  resolved_embeddings <- .resolve_embeddings(embeddings, embedding_defaults)
-  embedding_items <- resolved_embeddings$items
-  n_cells <- resolved_embeddings$n_cells
-  default_dimension <- max(vapply(
-    embedding_items,
-    function(item) item$dimension,
-    integer(1)
-  ))
-  connectivity_edges <- NULL
-  if (!is.null(connectivities)) {
-    connectivity_edges <- .validate_connectivity_edges(
-      connectivities = connectivities,
-      n_cells = n_cells
-    )
-  }
-
-  # Save embeddings: embeddings/{index}_{dimension}d.bin, rounded to float32
-  # exactly once, at the write.
-  embeddings_dir <- file.path(out_dir, embeddings_dirname)
-  .dir_create(embeddings_dir)
-  for (item in embedding_items) {
-    .write_float32_matrix_row_major(
-      file.path(embeddings_dir, sprintf("%d_%dd.bin", item$index, item$dimension)),
-      item$coords,
-      compression = compression
-    )
-  }
-
-  if (is.null(latent_space)) {
-    stop("latent_space is required for outlier quantile calculation.")
-  }
-  latent <- .as_dense_matrix(latent_space, name = "latent_space")
-  # The latent space is never written, only measured: the outlier quantiles
-  # come from distances computed in it. Those distances are published as
-  # float32, so a latent coordinate that cannot survive the conversion cannot
-  # produce a quantile that means anything, and cellucid-python refuses it for
-  # the same reason.
-  .require_finite_float32_source(latent, "latent_space")
-  if (nrow(latent) != n_cells) {
-    stop(
-      "Latent space has ", nrow(latent), " cells, but embeddings have ", n_cells, " cells."
-    )
-  }
-
-  if (!is.data.frame(obs)) {
-    stop("obs must be a data.frame.", call. = FALSE)
+  # --- obs ------------------------------------------------------------------
+  if (is.null(obs)) {
+    obs <- data.frame(row = seq_len(n_cells))[, 0L, drop = FALSE]
+  } else if (!is.data.frame(obs)) {
+    stop("obs must be a data.frame with one row per cell.", call. = FALSE)
   }
   if (nrow(obs) != n_cells) {
-    stop("obs has ", nrow(obs), " rows, but embeddings have ", n_cells, " cells.")
-  }
-
-  if (is.null(obs_keys)) {
-    obs_keys <- names(obs)
-  }
-  .validate_character_vector(obs_keys, what = "obs_keys")
-  missing <- setdiff(obs_keys, names(obs))
-  if (length(missing) > 0) {
     stop(
-      "obs_keys contain columns not in obs: ",
-      .format_value_list(missing),
-      ". Available columns: ",
-      .format_value_list(names(obs))
-    )
-  }
-  .require_field_identities(obs_keys, what = "Observation field")
-
-  # Collect lightweight metadata for obs fields (used in dataset identity)
-  obs_field_summaries <- lapply(
-    obs_keys,
-    function(key) .summarize_obs_field(
-      obs[[key]],
-      key = key,
-      obs_continuous_quantization = obs_continuous_quantization,
-      obs_categorical_dtype = obs_categorical_dtype
-    )
-  )
-
-  # Vector fields (optional), each bound to exported embedding ids
-  vector_fields_identity <- NULL
-  vector_payload_indices <- list()
-  resolved_vector_fields <- .resolve_vector_fields(
-    vector_fields = vector_fields,
-    items = embedding_items,
-    vector_field_default = vector_field_default
-  )
-  if (length(resolved_vector_fields$fields) > 0L) {
-    vector_result <- .write_vector_fields(
-      resolved_vector_fields,
-      items = embedding_items,
-      out_dir = out_dir,
-      compression = compression
-    )
-    vector_fields_identity <- vector_result$identity
-    vector_payload_indices <- vector_result$payload_indices
-  }
-
-  # ===========================================================================
-  # OBS EXPORT
-  # ===========================================================================
-  obs_manifest_path <- file.path(out_dir, "obs_manifest.json")
-  obs_export <- .export_obs(
-    obs = obs,
-    obs_keys = obs_keys,
-    latent = latent,
-    embedding_items = embedding_items,
-    obs_binary_dir = obs_binary_dir,
-    obs_binary_dirname = obs_binary_dirname,
-    centroid_outlier_quantile = centroid_outlier_quantile,
-    centroid_min_points = centroid_min_points,
-    obs_continuous_quantization = obs_continuous_quantization,
-    obs_categorical_dtype = obs_categorical_dtype,
-    compression = compression
-  )
-
-  obs_manifest_payload <- list(
-    `_format` = manifest_format_version,
-    n_points = as.integer(n_cells),
-    centroid_outlier_quantile = if (!is.null(centroid_outlier_quantile)) {
-      centroid_outlier_quantile
-    } else {
-      NULL
-    },
-    latent_key = "latent_space",
-    compression = if (!is.null(compression)) compression else NULL,
-    `_obsSchemas` = obs_export$schemas,
-    `_continuousFields` = obs_export$continuous_fields,
-    `_categoricalFields` = obs_export$categorical_fields
-  )
-  .write_json(obs_manifest_path, obs_manifest_payload, pretty = FALSE)
-
-  identity_obs_fields <- .identity_obs_fields_from_compact_manifest(
-    obs_manifest_payload
-  )
-  centroid_quantile_matches <- if (is.null(centroid_outlier_quantile)) {
-    is.null(obs_manifest_payload$centroid_outlier_quantile)
-  } else {
-    is.numeric(obs_manifest_payload$centroid_outlier_quantile) &&
-      length(obs_manifest_payload$centroid_outlier_quantile) == 1L &&
-      !is.na(obs_manifest_payload$centroid_outlier_quantile) &&
-      obs_manifest_payload$centroid_outlier_quantile ==
-        centroid_outlier_quantile
-  }
-  compression_matches <- if (is.null(compression)) {
-    is.null(obs_manifest_payload$compression)
-  } else {
-    is.numeric(obs_manifest_payload$compression) &&
-      length(obs_manifest_payload$compression) == 1L &&
-      !is.na(obs_manifest_payload$compression) &&
-      obs_manifest_payload$compression == compression
-  }
-  if (
-    !is.numeric(obs_manifest_payload$n_points) ||
-      length(obs_manifest_payload$n_points) != 1L ||
-      is.na(obs_manifest_payload$n_points) ||
-      obs_manifest_payload$n_points != n_cells ||
-      !centroid_quantile_matches ||
-      !identical(obs_manifest_payload$latent_key, "latent_space") ||
-      !compression_matches
-  ) {
-    stop(
-      "Observation manifest ",
-      obs_manifest_path,
-      " does not match the staged export settings.",
+      "obs has ", nrow(obs), " ", .plural(nrow(obs), "row", "rows"),
+      ", but the embeddings have ", n_cells, " ", .plural(n_cells, "cell", "cells"), ".",
       call. = FALSE
     )
   }
-  ordered_obs_field_summaries <- c(
-    Filter(
-      function(field_info) identical(field_info$kind, "continuous"),
-      obs_field_summaries
-    ),
-    Filter(
-      function(field_info) identical(field_info$kind, "category"),
-      obs_field_summaries
-    )
-  )
-  expected_identity_obs_fields <- lapply(
-    ordered_obs_field_summaries,
-    function(field_info) {
-      entry <- list(key = field_info$key, kind = field_info$kind)
-      if (identical(field_info$kind, "category")) {
-        entry$n_categories <- as.integer(field_info$category_count)
-      }
-      entry
-    }
-  )
-  if (!identical(identity_obs_fields, expected_identity_obs_fields)) {
-    stop(
-      "Observation manifest ",
-      obs_manifest_path,
-      " fields do not match the staged observation fields.",
-      call. = FALSE
-    )
-  }
-  .require_declared_payloads_on_disk(
-    out_dir,
-    directory_name = obs_binary_dirname,
-    declared = .declared_obs_payload_paths(obs_manifest_payload),
-    axis = "Observation"
-  )
+  .validate_frame_columns(obs, "obs column")
 
-  # ===========================================================================
-  # VAR (GENE EXPRESSION) EXPORT
-  # ===========================================================================
-  genes_to_export <- character(0)
-  if (!is.null(gene_expression)) {
-    if (!is.data.frame(var)) {
+  # --- X and var ------------------------------------------------------------
+  if (is.null(gene_expression)) {
+    supplied <- c(
+      var = !is.null(var),
+      gene_identifiers = !is.null(gene_identifiers),
+      var_gene_id_column = !is.null(var_gene_id_column)
+    )
+    if (any(supplied)) {
       stop(
-        "var must be a data.frame when gene_expression is supplied.",
+        names(supplied)[supplied][[1L]], " describes the genes of ",
+        "gene_expression, and no gene_expression was supplied.",
         call. = FALSE
       )
     }
-
-    gene_expression <- .as_matrix_like(gene_expression, name = "gene_expression")
-    if (nrow(gene_expression) != n_cells) {
-      stop("gene_expression has ", nrow(gene_expression), " cells, but embeddings have ", n_cells, " cells.")
-    }
-    if (nrow(var) != ncol(gene_expression)) {
-      stop("var has ", nrow(var), " rows, but gene_expression has ", ncol(gene_expression), " genes.")
-    }
-
-    if (!is.null(var_gene_id_column)) {
-      var_gene_id_column <- .validate_gene_name_source(
-        var_gene_id_column,
-        "var_gene_id_column"
+    expression <- NULL
+    var <- data.frame(row = integer(0))[, 0L, drop = FALSE]
+    var_index <- character(0)
+  } else {
+    expression <- .as_expression_matrix(gene_expression, "gene_expression")
+    if (nrow(expression) != n_cells) {
+      stop(
+        "gene_expression has ", nrow(expression), " ",
+        .plural(nrow(expression), "row", "rows"), ", but the embeddings have ",
+        n_cells, " ", .plural(n_cells, "cell", "cells"), ". gene_expression is ",
+        "cells x genes; transpose a genes x cells matrix with t().",
+        call. = FALSE
       )
     }
-    default_names <- .resolve_gene_name_set(
-      var,
-      var_gene_id_column,
-      "var_gene_id_column"
+    genes <- .resolve_genes(expression, var, var_gene_id_column, gene_identifiers)
+    expression <- genes$expression
+    var <- genes$var
+    var_index <- genes$index
+    # The dtype is decided on the genes stored, after gene_identifiers chose
+    # them, as the Python writer decides it.
+    expression_dtype <- .expression_dtype(
+      if (inherits(expression, "sparseMatrix")) expression@x else expression
     )
-    all_gene_ids <- default_names$names
-    gene_id_to_idx <- stats::setNames(seq_along(all_gene_ids), all_gene_ids)
+  }
 
-    if (is.null(gene_identifiers)) {
-      genes_to_export <- all_gene_ids
-    } else {
-      .validate_character_vector(
-        gene_identifiers,
-        what = "gene_identifiers"
-      )
-      if (anyDuplicated(gene_identifiers)) {
-        stop(
-          "gene_identifiers must not contain duplicate identifiers.",
-          call. = FALSE
-        )
-      }
-      missing_genes <- setdiff(gene_identifiers, names(gene_id_to_idx))
-      if (length(missing_genes) > 0) {
-        shown <- utils::head(missing_genes, 5L)
-        remainder <- length(missing_genes) - length(shown)
-        stop(
-          "gene_identifiers contains identifiers not found in var: ",
-          .format_value_list(shown),
-          if (remainder > 0L) paste0(" and ", remainder, " more") else "",
-          ". Identifiers are matched against the default gene names after ",
-          "repeated names were made unique.",
-          call. = FALSE
-        )
-      }
-      genes_to_export <- gene_identifiers
-    }
-    # Being drawable is a property of a name the viewer shows, so it is
-    # checked on the exported genes: a var row left out reaches no manifest,
-    # exactly as an obs column left out of obs_keys= does.
-    .require_field_identities(genes_to_export, what = "Gene")
-    exported_positions <- unname(gene_id_to_idx[genes_to_export])
-    gene_name_sets <- .gene_name_sets(
-      var,
-      default_source = var_gene_id_column,
-      default_names = default_names,
-      alternative_columns = var_gene_name_columns,
-      exported_positions = exported_positions
+  cell_sources <- c(
+    list(obs = .supplied_row_names(obs)),
+    if (!is.null(expression)) list(gene_expression = rownames(expression)),
+    `names<-`(
+      lapply(matrices, rownames),
+      paste0("embedding '", names(matrices), "'")
     )
+  )
+  obs_index <- .resolve_cell_names(cell_sources, n_cells)
 
-    var_manifest_path <- file.path(out_dir, "var_manifest.json")
-    var_binary_dir <- file.path(out_dir, var_binary_dirname)
-    .dir_create(var_binary_dir)
+  # --- obsp -----------------------------------------------------------------
+  graph <- NULL
+  if (!is.null(connectivities)) {
+    graph <- .resolve_connectivities(connectivities, n_cells)
+  }
 
-    var_manifest_fields <- vector("list", length(genes_to_export))
+  # --- uns['cellucid'] ------------------------------------------------------
+  defaults <- .resolve_defaults(
+    matrices = matrices,
+    obs = obs,
+    vectors = vectors,
+    embedding_defaults = embedding_defaults,
+    latent_key = latent_key,
+    obs_keys = obs_keys,
+    var_gene_id_column = var_gene_id_column,
+    vector_field_default = vector_field_default,
+    normalize_embeddings = normalize_embeddings,
+    centroid_min_points = centroid_min_points
+  )
+  cellucid <- list(schema = .uns_integer(1L), id = .uns_string(dataset_id), name = .uns_string(dataset_name))
+  if (!is.null(dataset_description)) cellucid$description <- .uns_string(dataset_description)
+  if (!is.null(citation)) cellucid$citation <- citation
+  if (!is.null(source)) cellucid$source <- source
+  if (length(defaults) > 0L) cellucid$defaults <- defaults
+  if (!is.null(defaults[["latentKey"]])) {
+    latent <- defaults[["latentKey"]]$value
+    min_points <- defaults[["centroidMinPoints"]]$value
+    if (is.null(min_points)) min_points <- .default_outlier_min_points
+    cellucid$outlierQuantiles <- .stored_outlier_quantiles(obs, latent, matrices[[latent]], min_points)
+  }
 
-    for (idx in seq_along(genes_to_export)) {
-      gene_id <- genes_to_export[[idx]]
-      gene_idx <- unname(gene_id_to_idx[[gene_id]])
-      payload_index <- .payload_index(idx)
-
-      values <- .get_gene_column(gene_expression, gene_idx, n_cells = n_cells)
-
-      if (!is.null(var_quantization)) {
-        q <- .quantize_continuous(
-          values,
-          bits = var_quantization,
-          field_name = gene_id
-        )
-        ext <- .quantization_ext(var_quantization)
-        value_path <- file.path(
-          var_binary_dir,
-          sprintf("%d.values.%s", payload_index, ext)
-        )
-        if (var_quantization == 8L) {
-          .write_uint8(value_path, q$quantized, compression = compression)
-        } else {
-          .write_uint16(value_path, q$quantized, compression = compression)
-        }
-        var_manifest_fields[[idx]] <- list(
-          payload_index,
-          gene_id,
-          q$min_val,
-          q$max_val
+  # --- Write the store, then move it into place ------------------------------
+  .write_output(target, write = function(store) {
+    .zarr_group(store, "", .encoding("anndata", "0.1.0"))
+    if (!is.null(expression)) {
+      if (inherits(expression, "sparseMatrix")) {
+        .ad_sparse(
+          store, "X", "csc_matrix", dim(expression),
+          pointers = expression@p, indices = expression@i, values = expression@x,
+          dtype = expression_dtype, sliced = TRUE
         )
       } else {
-        value_path <- file.path(
-          var_binary_dir,
-          sprintf("%d.values.f32", payload_index)
-        )
-        .write_float32_vector(value_path, values, compression = compression)
-        var_manifest_fields[[idx]] <- list(payload_index, gene_id)
+        .ad_dense(store, "X", expression, gene_major = TRUE, dtype = expression_dtype)
       }
     }
-
-    gz_suffix <- .gz_suffix(compression)
-    var_schema <- if (!is.null(var_quantization)) {
-      ext <- .quantization_ext(var_quantization)
-      dtype_str <- .quantization_dtype(var_quantization)
-      list(
-        kind = "continuous",
-        pathPattern = sprintf("%s/{index}.values.%s%s", var_binary_dirname, ext, gz_suffix),
-        ext = ext,
-        dtype = dtype_str,
-        quantized = TRUE,
-        quantizationBits = var_quantization
-      )
-    } else {
-      list(
-        kind = "continuous",
-        pathPattern = sprintf("%s/{index}.values.f32%s", var_binary_dirname, gz_suffix),
-        ext = "f32",
-        dtype = "float32",
-        quantized = FALSE
+    .ad_dataframe(store, "obs", obs, obs_index, "obs")
+    .ad_dataframe(store, "var", var, var_index, "var")
+    .ad_dict(store, "obsm")
+    for (key in names(matrices)) {
+      .ad_dense(store, .zarr_key("obsm", key), matrices[[key]])
+    }
+    for (key in names(vectors$arrays)) {
+      .ad_dense(store, .zarr_key("obsm", key), vectors$arrays[[key]])
+    }
+    .ad_dict(store, "obsp")
+    if (!is.null(graph)) {
+      .ad_sparse(
+        store, "obsp/connectivities", "csr_matrix", dim(graph),
+        pointers = graph@p, indices = graph@i, values = graph@x
       )
     }
+    .ad_dict(store, "varm")
+    .ad_dict(store, "varp")
+    .ad_dict(store, "layers")
+    .ad_uns_value(store, "uns", list(title = .uns_string(dataset_name), cellucid = cellucid))
+  })
+  invisible(target$path)
+}
 
-    var_manifest_payload <- list(
-      `_format` = manifest_format_version,
-      n_points = as.integer(n_cells),
-      compression = if (!is.null(compression)) compression else NULL,
-      quantization = if (!is.null(var_quantization)) var_quantization else NULL,
-      `_varSchema` = var_schema,
-      fields = var_manifest_fields,
-      gene_name_sets = gene_name_sets
-    )
-    .write_json(var_manifest_path, var_manifest_payload, pretty = FALSE)
-
-    exported_gene_names <- .gene_names_from_compact_manifest(
-      var_manifest_payload
-    )
-    if (!identical(exported_gene_names, unname(genes_to_export))) {
-      stop(
-        "Gene manifest ",
-        var_manifest_path,
-        " names do not match the staged genes.",
-        call. = FALSE
-      )
-    }
-    .require_declared_payloads_on_disk(
-      out_dir,
-      directory_name = var_binary_dirname,
-      declared = .declared_var_payload_paths(var_manifest_payload),
-      axis = "Gene"
-    )
-    for (name_set in gene_name_sets) {
-      note <- .unique_names_note(
-        name_set$filled_from_index,
-        name_set$renamed,
-        name_set$source
-      )
-      if (!is.null(note)) {
-        source_label <- if (is.null(name_set$source)) {
-          "var index"
-        } else {
-          paste0("var column '", name_set$source, "'")
-        }
-        message("Gene names from ", source_label, ": ", note)
-      }
-    }
-  } else if (!is.null(var_gene_name_columns)) {
+# The genes: the expression matrix narrowed to gene_identifiers, and the var
+# data frame and index that describe its columns.
+.resolve_genes <- function(expression, var, var_gene_id_column, gene_identifiers) {
+  n_genes <- ncol(expression)
+  if (is.null(var)) {
+    var <- data.frame(row = seq_len(n_genes))[, 0L, drop = FALSE]
+  } else if (!is.data.frame(var)) {
+    stop("var must be a data.frame with one row per gene.", call. = FALSE)
+  }
+  if (nrow(var) != n_genes) {
     stop(
-      "var_gene_name_columns names alternative gene names, and no ",
-      "gene_expression was supplied, so the export has no genes to name.",
+      "var has ", nrow(var), " ", .plural(nrow(var), "row", "rows"),
+      ", but gene_expression has ", n_genes, " ", .plural(n_genes, "gene", "genes"),
+      " (columns).",
       call. = FALSE
     )
   }
+  .validate_frame_columns(var, "var column")
+  if (!is.null(var_gene_id_column)) {
+    var_gene_id_column <- .validate_gene_name_source(var_gene_id_column, "var_gene_id_column")
+  }
 
-  # ===========================================================================
-  # CONNECTIVITY EXPORT
-  # ===========================================================================
-  connectivity_meta <- list(
-    n_edges = NULL,
-    max_neighbors = NULL,
-    index_dtype = NULL
-  )
-
-  if (!is.null(connectivities)) {
-    if (is.null(connectivity_edges)) {
-      stop("Validated connectivity edge pairs are unavailable.", call. = FALSE)
-    }
-    connectivity_manifest_path <- file.path(
-      out_dir,
-      "connectivity_manifest.json"
+  row_names <- .supplied_row_names(var)
+  column_names <- colnames(expression)
+  if (!is.null(row_names) && !is.null(column_names) && !identical(row_names, column_names)) {
+    differs <- which(row_names != column_names)[[1L]]
+    stop(
+      "rownames(var) and colnames(gene_expression) disagree at gene ", differs,
+      " ('", row_names[[differs]], "' and '", column_names[[differs]], "'). ",
+      "var must describe the columns of gene_expression in their order.",
+      call. = FALSE
     )
-    connectivity_meta$n_edges <- connectivity_edges$n_edges
-    connectivity_meta$max_neighbors <- connectivity_edges$max_neighbors
-    connectivity_meta$index_dtype <- connectivity_edges$index_dtype
-    connectivity_binary_dir <- file.path(out_dir, connectivity_binary_dirname)
-    .dir_create(connectivity_binary_dir)
-
-    .write_connectivity_edges(
-      connectivity_edges = connectivity_edges,
-      out_dir = connectivity_binary_dir,
-      compression = compression
-    )
-
-    sources_fname <- "edges.src.bin"
-    dests_fname <- "edges.dst.bin"
-    weights_fname <- "edges.weights.f64.bin"
-    manifest_sources <- paste0(connectivity_binary_dirname, "/", sources_fname)
-    manifest_dests <- paste0(connectivity_binary_dirname, "/", dests_fname)
-    manifest_weights <- paste0(connectivity_binary_dirname, "/", weights_fname)
-    if (!is.null(compression)) {
-      manifest_sources <- paste0(manifest_sources, ".gz")
-      manifest_dests <- paste0(manifest_dests, ".gz")
-      manifest_weights <- paste0(manifest_weights, ".gz")
-    }
-
-    connectivity_manifest_payload <- list(
-      format = "edge_pairs",
-      n_cells = as.integer(n_cells),
-      n_edges = connectivity_edges$n_edges,
-      max_neighbors = connectivity_edges$max_neighbors,
-      index_bytes = connectivity_edges$index_bytes,
-      index_dtype = connectivity_edges$index_dtype,
-      sourcesPath = manifest_sources,
-      destinationsPath = manifest_dests,
-      weightsPath = manifest_weights,
-      weight_dtype = "float64",
-      weight_bytes = 8L,
-      compression = if (!is.null(compression)) compression else NULL
-    )
-    .write_json(connectivity_manifest_path, connectivity_manifest_payload, pretty = FALSE)
-
-    declared_connectivity_paths <- character(0)
-    for (path_key in c("sourcesPath", "destinationsPath", "weightsPath")) {
-      declared_path <- connectivity_manifest_payload[[path_key]]
-      if (
-        !is.character(declared_path) ||
-          length(declared_path) != 1L ||
-          is.na(declared_path) ||
-          !nzchar(declared_path)
-      ) {
-        stop(
-          "connectivity_manifest.json ",
-          path_key,
-          " must be one payload path.",
-          call. = FALSE
-        )
-      }
-      declared_connectivity_paths <- c(
-        declared_connectivity_paths,
-        declared_path
+  }
+  index <- if (!is.null(row_names)) row_names else column_names
+  if (is.null(index)) {
+    if (is.null(var_gene_id_column)) {
+      stop(
+        "The genes have no names: set rownames(var) or ",
+        "colnames(gene_expression) to the gene identifiers, or pass ",
+        "var_gene_id_column.",
+        call. = FALSE
       )
     }
-    .require_declared_payloads_on_disk(
-      out_dir,
-      directory_name = connectivity_binary_dirname,
-      declared = unique(declared_connectivity_paths),
-      axis = "Connectivity"
-    )
+    index <- .resolve_gene_name_set(var, var_gene_id_column, "var_gene_id_column")$names
   }
-
-  if (!is.null(vector_fields_identity)) {
-    declared_vector_paths <- unlist(
-      lapply(
-        vector_fields_identity$fields,
-        function(field_metadata) unlist(field_metadata$files, use.names = FALSE)
-      ),
-      use.names = FALSE
-    )
-    .require_dense_payload_indices(
-      vector_payload_indices,
-      axis = "Vector field"
-    )
-    .require_declared_payloads_on_disk(
-      out_dir,
-      directory_name = "vectors",
-      declared = unique(declared_vector_paths),
-      axis = "Vector field"
-    )
+  if (anyNA(index) || any(!nzchar(index))) {
+    stop("Gene names must not be missing or empty.", call. = FALSE)
   }
-
-  # ===========================================================================
-  # DATASET IDENTITY
-  # ===========================================================================
-  identity_path <- file.path(out_dir, "dataset_identity.json")
-  cellucid_version <- as.character(utils::packageVersion("cellucid"))
-
-  n_genes <- if (!is.null(gene_expression)) {
-    as.integer(length(genes_to_export))
-  } else {
-    0L
+  unique_index <- .make_unique_names(as.character(index))
+  if (length(unique_index$renamed) > 0L) {
+    message("Gene names: ", .unique_names_note(0, unique_index$renamed, NULL))
   }
+  index <- unique_index$names
+  rownames(var) <- index
 
-  n_obs_fields <- length(identity_obs_fields)
-  n_categorical_fields <- sum(
-    vapply(
-      identity_obs_fields,
-      function(field_info) identical(field_info$kind, "category"),
-      logical(1)
-    )
-  )
-  n_continuous_fields <- sum(
-    vapply(
-      identity_obs_fields,
-      function(field_info) identical(field_info$kind, "continuous"),
-      logical(1)
-    )
-  )
-
-  export_settings <- list(
-    compression = if (!is.null(compression)) compression else NULL,
-    var_quantization = if (!is.null(var_quantization)) var_quantization else NULL,
-    obs_continuous_quantization = if (!is.null(obs_continuous_quantization)) {
-      obs_continuous_quantization
+  if (!is.null(gene_identifiers)) {
+    default_names <- if (is.null(var_gene_id_column)) {
+      index
     } else {
-      NULL
-    },
-    obs_categorical_dtype = obs_categorical_dtype
-  )
-
-  # One item per exported embedding, in payload index order, each naming the
-  # exact file the format derives for it.
-  gz_suffix <- .gz_suffix(compression)
-  items_meta <- list()
-  for (item in embedding_items) {
-    items_meta[[item$id]] <- list(
-      label = item$label,
-      dimension = as.integer(item$dimension),
-      file = sprintf(
-        "%s/%d_%dd.bin%s",
-        embeddings_dirname,
-        item$index,
-        item$dimension,
-        gz_suffix
-      ),
-      source = list(
-        key = item$source_key,
-        columns = I(as.integer(item$columns))
+      .resolve_gene_name_set(var, var_gene_id_column, "var_gene_id_column")$names
+    }
+    .validate_character_vector(gene_identifiers, "gene_identifiers")
+    if (anyDuplicated(gene_identifiers)) {
+      stop("gene_identifiers must not contain duplicate identifiers.", call. = FALSE)
+    }
+    positions <- match(gene_identifiers, default_names)
+    missing_genes <- gene_identifiers[is.na(positions)]
+    if (length(missing_genes) > 0L) {
+      shown <- utils::head(missing_genes, 5L)
+      remainder <- length(missing_genes) - length(shown)
+      stop(
+        "gene_identifiers contains identifiers not found in var: ",
+        .format_value_list(shown),
+        if (remainder > 0L) paste0(" and ", remainder, " more") else "",
+        ". Identifiers are matched against the gene names the viewer shows ",
+        "(var_gene_id_column, or the var row names), after repeated names ",
+        "were made unique.",
+        call. = FALSE
       )
+    }
+    expression <- expression[, positions, drop = FALSE]
+    var <- var[positions, , drop = FALSE]
+    index <- index[positions]
+  }
+  if (!is.null(var_gene_id_column)) {
+    # The column is stored as it is; the viewer fills its empty values from
+    # the index and makes repeated names unique when it reads it, and this
+    # says ahead of time what that will change.
+    shown <- .resolve_gene_name_set(var, var_gene_id_column, "var_gene_id_column")
+    note <- .unique_names_note(shown$filled_from_index, shown$renamed, var_gene_id_column)
+    if (!is.null(note)) {
+      message("Gene names from var column '", var_gene_id_column, "': ", note)
+    }
+  }
+  rownames(var) <- NULL
+  list(expression = expression, var = var, index = index)
+}
+
+# The launch defaults of uns['cellucid']['defaults']: only what the caller
+# set, so every other choice stays the viewer's own.
+.resolve_defaults <- function(
+    matrices,
+    obs,
+    vectors,
+    embedding_defaults,
+    latent_key,
+    obs_keys,
+    var_gene_id_column,
+    vector_field_default,
+    normalize_embeddings,
+    centroid_min_points
+) {
+  defaults <- .resolve_embedding_defaults(embedding_defaults, matrices)
+  if (!is.null(var_gene_id_column)) {
+    defaults$geneIdColumn <- .uns_string(var_gene_id_column)
+  }
+  if (!is.null(latent_key)) {
+    latent_key <- .validate_string(latent_key, "latent_key")
+    if (!latent_key %in% names(matrices)) {
+      stop(
+        "latent_key must name one of the embeddings: ",
+        .format_value_list(names(matrices)), ".",
+        call. = FALSE
+      )
+    }
+    defaults$latentKey <- .uns_string(latent_key)
+  }
+  if (!is.null(vector_field_default)) {
+    vector_field_default <- .validate_string(vector_field_default, "vector_field_default")
+    if (length(vectors$fields) == 0L) {
+      stop("vector_field_default names a field, and no vector_fields were supplied.", call. = FALSE)
+    }
+    if (!vector_field_default %in% vectors$fields) {
+      stop(
+        "vector_field_default must name one of vector_fields: ",
+        .format_value_list(vectors$fields), ".",
+        call. = FALSE
+      )
+    }
+    # The overlay opens on a field only where the viewer shows one of its
+    # embeddings as the file opens (the web app's defaultVectorBindings).
+    named_slots <- lapply(
+      defaults[startsWith(names(defaults), "embedding")],
+      function(ref) if (is.null(ref$key)) ref$value else ref$key$value
+    )
+    shown <- .shown_embedding_keys(matrices, named_slots, latent_key)
+    drawn <- unique(vapply(
+      Filter(function(binding) binding$embedding %in% shown, vectors$bound),
+      function(binding) binding$field,
+      character(1L)
+    ))
+    if (!vector_field_default %in% drawn) {
+      stop(
+        "vector_field_default names '", vector_field_default, "', and the viewer ",
+        "shows none of its embeddings when the file opens, so it is not drawn. ",
+        "Show one of them (embedding_defaults), or choose a field drawn on a ",
+        "shown embedding: ", .format_value_list(sort(drawn)), ".",
+        call. = FALSE
+      )
+    }
+    defaults$vectorFieldDefault <- .uns_string(vector_field_default)
+  }
+  if (!is.null(obs_keys)) {
+    .validate_character_vector(obs_keys, "obs_keys")
+    if (length(obs_keys) == 0L) {
+      stop("obs_keys must name at least one obs column.", call. = FALSE)
+    }
+    if (anyDuplicated(obs_keys)) {
+      stop("obs_keys names '", obs_keys[duplicated(obs_keys)][[1L]], "' twice.", call. = FALSE)
+    }
+    absent <- setdiff(obs_keys, names(obs))
+    if (length(absent) > 0L) {
+      stop(
+        "obs_keys contain columns not in obs: ", .format_value_list(absent),
+        ". Available columns: ", .format_value_list(names(obs)), ".",
+        call. = FALSE
+      )
+    }
+    defaults$obsKeys <- .uns_strings(obs_keys)
+  }
+  if (!is.null(normalize_embeddings)) {
+    defaults$normalizeEmbeddings <- .uns_boolean(
+      .validate_flag(normalize_embeddings, "normalize_embeddings")
     )
   }
-  embeddings_meta <- list(
-    default_dimension = as.integer(default_dimension),
-    defaults = resolved_embeddings$defaults,
-    items = items_meta
-  )
-
-  identity_payload <- list(
-    version = identity_version,
-    id = dataset_id,
-    name = dataset_name,
-    description = dataset_description,
-    created_at = created_at,
-    cellucid_data_version = cellucid_version,
-    stats = list(
-      n_cells = as.integer(n_cells),
-      n_genes = as.integer(n_genes),
-      n_obs_fields = as.integer(n_obs_fields),
-      n_categorical_fields = as.integer(n_categorical_fields),
-      n_continuous_fields = as.integer(n_continuous_fields),
-      has_connectivity = !is.null(connectivity_meta$n_edges),
-      n_edges = connectivity_meta$n_edges
-    ),
-    embeddings = embeddings_meta,
-    obs_fields = identity_obs_fields,
-    export_settings = export_settings
-  )
-
-  if (!is.null(source_info)) {
-    identity_payload$source <- source_info
-  }
-  if (!is.null(vector_fields_identity)) {
-    identity_payload$vector_fields <- vector_fields_identity
-  }
-
-  .write_json(identity_path, identity_payload, pretty = 2)
-
-  # Every embedding item is declared by path in dataset_identity.json, so
-  # the embeddings directory is reconciled against that declaration -- the
-  # declared name and the written name are two expressions of one compression
-  # setting, and a generation whose coordinates disagree would publish and
-  # then fail in the browser with nothing to draw.
-  .require_dense_payload_indices(
-    lapply(embedding_items, function(item) item$index),
-    axis = "Embedding"
-  )
-  .require_declared_payloads_on_disk(
-    out_dir,
-    directory_name = embeddings_dirname,
-    declared = .declared_embedding_payload_paths(identity_payload),
-    axis = "Embedding"
-  )
-
-  # The root is the last surface where a declaration and a file can disagree,
-  # so it is reconciled whole: the manifests and the payload directories this
-  # call created are named, and anything else that reached the root is
-  # refused rather than published.
-  declared_root_files <- c("dataset_identity.json", "obs_manifest.json")
-  declared_root_directories <- c(obs_binary_dirname, embeddings_dirname)
-  if (!is.null(gene_expression)) {
-    declared_root_files <- c(declared_root_files, "var_manifest.json")
-    declared_root_directories <- c(
-      declared_root_directories,
-      var_binary_dirname
+  if (!is.null(centroid_min_points)) {
+    defaults$centroidMinPoints <- .uns_integer(
+      .validate_positive_integer(centroid_min_points, "centroid_min_points")
     )
   }
-  if (!is.null(connectivities)) {
-    declared_root_files <- c(
-      declared_root_files,
-      "connectivity_manifest.json"
-    )
-    declared_root_directories <- c(
-      declared_root_directories,
-      connectivity_binary_dirname
-    )
-  }
-  if (!is.null(vector_fields_identity)) {
-    declared_root_directories <- c(declared_root_directories, "vectors")
-  }
-  .require_declared_payloads_on_disk(
-    out_dir,
-    directory_name = NULL,
-    declared = unique(declared_root_files),
-    axis = "Export",
-    declared_directories = unique(declared_root_directories)
+  order <- c(
+    "embedding1d", "embedding2d", "embedding3d", "geneIdColumn", "latentKey",
+    "vectorFieldDefault", "obsKeys", "normalizeEmbeddings", "centroidMinPoints"
   )
-
-  .publish_export_generation(
-    out_dir,
-    final_out_dir,
-    transaction_id = transaction$transaction_id,
-    had_target = transaction$had_target
-  )
-  transaction_cleanup_armed <- FALSE
-
-  invisible(NULL)
+  defaults[intersect(order, names(defaults))]
 }

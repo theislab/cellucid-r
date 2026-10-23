@@ -1,4 +1,87 @@
-# cellucid 0.9.4 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.5 <!-- CELLUCID_VERSION -->
+
+Version 0.9.5 is the CRAN submission release.
+
+It is a patch release on 0.9.4 and stays in step with the Python package of
+the same version. It breaks with every earlier release: the prepared export
+format is removed, and `cellucid_prepare()` writes a Cellucid-ready AnnData
+instead, a standard AnnData Zarr store that Python's anndata reads and the
+Cellucid web app opens directly. The contract is the documentation's
+"Cellucid-ready AnnData specification" page. An export written by 0.9.4 is not
+read by the matching web app; prepare the data again with this release.
+
+- `cellucid_prepare(out_path, format, embeddings, dataset_id, dataset_name,
+  ...)` takes a required `format` right after `out_path`: `"zarr"` (a `.zarr`
+  folder of small files, the way to publish on GitHub: no file over 100 MB, no
+  LFS) or `"zarr.zip"` (the same store as one `.zarr.zip` file, for hosts that
+  serve single files or a local file). It has no default: a missing `format`
+  is reported with the other missing required arguments, naming both choices.
+  A value is matched as `match.arg()` matches, anything else is refused with
+  the choices, and `out_path` must end in the suffix of `format`.
+  `zarr_format = 3` writes Zarr v3 (`zarr.json` documents, `c/...` chunk keys,
+  consolidated metadata in the root `zarr.json`); Zarr v2 is the default.
+  There is no `"h5ad"`: the package writes no HDF5 and depends on no HDF5
+  library; Python's `cellucid.prepare(format = "h5ad")` writes `.h5ad`.
+- The store holds `X` gene-major (CSC from a sparse matrix, stored zeros
+  dropped) in float32, or float64 when the genes kept hold integer counts
+  above 2^24; `obs` and `var` with anndata's own encodings and pandas' category
+  code widths (int8 below 127 categories, int16 below 32,767, int32 beyond);
+  every embedding whole in `obsm` (float32, unnormalized);
+  `obsp/connectivities` as symmetric float32 CSR; and `uns[["cellucid"]]`
+  (`schema`, `id`, `name`, `description`, `citation`, `source`, and only the
+  launch `defaults` that were set) with `uns[["title"]]`. Chunks hold 2^16
+  values for `X` and 2^18 for arrays read whole, deflated at level 6 (zlib in
+  Zarr v2, gzip in v3) after a byte shuffle on every multi-byte array except
+  the expression values. A `.zarr.zip` stores chunks first in grid order and
+  the consolidated metadata last, with fixed timestamps and permissions. The
+  store is written beside its target and moved into place when complete.
+- R and Python write identical Zarr v2 and v3 stores from the same input:
+  every metadata document (encodings, dtypes, shapes, chunks, codecs, fill
+  values) and every value, checked by `tests/testthat/test-cross-writer.R`.
+  Every `NaN` and `NA` in a float array is written as numpy's canonical quiet
+  NaN on every platform (R's `NaN` has its sign bit set on x86-64).
+- New arguments: `out_path`, `format`, `zarr_format`, `citation_text`,
+  `citation_url`, `latent_key` (the `embeddings` entry the outlier filter
+  measures in) and `normalize_embeddings`. Choose the columns an embedding
+  opens on with `embedding_defaults = list("3d" = list(key = "X_pca", columns
+  = 1:3))`.
+- With `latent_key`, `cellucid_prepare()` stores the latent-space outlier
+  quantiles of every factor, character or logical `obs` column in
+  `uns[["cellucid"]][["outlierQuantiles"]]` (`latentKey`, `minPoints` =
+  `centroid_min_points` or 10, and one float32 array per field, `NaN` where a
+  cell has none), so the viewer filters outliers without reading the latent
+  space. They are computed in C (`src/latent_outliers.c`), byte for byte what
+  Python's `prepare()` stores and what the web app computes, pinned by the
+  shared conformance fixture
+  (`tests/testthat/fixtures/latent_outlier_conformance.json`).
+- Vector fields follow scVelo's naming on any embedding: `vector_fields =
+  list(velocity = list(X_umap = v))` writes `obsm[["velocity_umap"]]`, with as
+  many columns as the embedding. An embedding whose key does not start with
+  `X_`, an array of another width, two fields that would share a key, and a
+  key the viewer would read as another field or as an embedding are refused
+  before anything is written. `vector_field_default` names the field
+  (`"velocity"`) and must be drawn on an embedding the viewer shows when the
+  store opens.
+- New `cellucid_transition_drift(transition_matrix, embedding,
+  normalize_rows)` computes each cell's drift in an embedding's coordinates
+  from a cell-cell transition matrix (CellRank's, for example): `T %*% E - E`,
+  with the rows of `T` divided by their sums first when `normalize_rows =
+  TRUE` (required; a zero row sum is refused). It is Python's
+  `compute_transition_drift()` operation for operation, held to the same
+  results by a shared conformance fixture
+  (`tests/testthat/fixtures/transition_drift_conformance.json`). Store the
+  result with `cellucid_prepare(vector_fields = list(T_fwd = list(X_umap =
+  drift)))`.
+- A sparse neighbour graph's stored zeros are dropped (`Matrix::drop0()`)
+  instead of refusing the graph; duplicate coordinates are still refused.
+- Removed with the export format: the `latent_space` (name an embedding with
+  `latent_key`), `out_dir`, `obs_categorical_dtype`, `var_quantization`,
+  `obs_continuous_quantization`, `compression`, `var_gene_name_columns`,
+  `source_citation` (now `citation_text` and `citation_url`), `created_at` and
+  `centroid_outlier_quantile` arguments, `cellucid_embedding()` (store the
+  whole array), and the cross-process export lock and transaction journal.
+
+# cellucid 0.9.4
 
 Version 0.9.4 is the CRAN submission release.
 

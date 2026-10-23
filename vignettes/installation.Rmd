@@ -15,11 +15,11 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Current version and availability
 
-**The active Cellucid for R source and documentation version is 0.9.4.** It is <!-- CELLUCID_VERSION -->
+**The active Cellucid for R source and documentation version is 0.9.5.** It is <!-- CELLUCID_VERSION -->
 the CRAN submission release. The
 [CRAN package index](https://cran.r-project.org/web/packages/available_packages_by_name.html)
 is authoritative for registry availability. Use the CRAN command below when
-the index lists `cellucid` 0.9.4; otherwise use the GitHub command.
+the index lists `cellucid` 0.9.5; otherwise use the GitHub command.
 
 ## Requirements
 
@@ -27,12 +27,12 @@ the index lists `cellucid` 0.9.4; otherwise use the GitHub command.
 - An internet connection while installing the package
 - The `remotes` package only when installation from GitHub is needed
 
-Cellucid compiles a small native lock primitive so independent Python and R
-exporters cannot publish to the same target concurrently. Installing from
-source needs Rtools on Windows, the Xcode Command Line Tools on macOS, or a C
-toolchain plus R development headers on Linux. A platform CRAN binary, when
-available, does not require a local compiler. The optional `Matrix` package is
-recommended when exporting sparse expression matrices or connectivity graphs.
+Cellucid compiles one small C routine (the CRC-32 checksum of the
+`.zarr.zip` writer). Installing from source needs Rtools on Windows, the Xcode
+Command Line Tools on macOS, or a C toolchain plus R development headers on
+Linux. A platform CRAN binary, when available, does not require a local
+compiler. The optional `Matrix` package is recommended for sparse expression
+matrices and neighbour graphs.
 
 Check your R version with:
 
@@ -40,15 +40,15 @@ Check your R version with:
 R.version.string
 ```
 
-## Install version 0.9.4 from CRAN
+## Install version 0.9.5 from CRAN
 
-When the CRAN package index lists `cellucid` 0.9.4, install it with:
+When the CRAN package index lists `cellucid` 0.9.5, install it with:
 
 ```{r, eval=FALSE}
 install.packages("cellucid")
 ```
 
-If the index does not list version 0.9.4 yet, install the active source from
+If the index does not list version 0.9.5 yet, install the active source from
 the official GitHub repository:
 
 ```{r, eval=FALSE}
@@ -69,7 +69,7 @@ current session.
 ## Update an existing installation
 
 Install again from the source currently available to you. Use CRAN when its
-package index lists version 0.9.4:
+package index lists version 0.9.5:
 
 ```{r, eval=FALSE}
 install.packages("cellucid")
@@ -91,7 +91,7 @@ Load Cellucid and confirm that R reports the active version:
 ```{r, eval=FALSE}
 library(cellucid)
 packageVersion("cellucid")
-#> [1] '0.9.4'
+#> [1] '0.9.5'
 ```
 
 You can then open the preparation function reference:
@@ -100,15 +100,15 @@ You can then open the preparation function reference:
 ?cellucid_prepare
 ```
 
-Continue with [Exporting data for Cellucid](cellucid.html) for a complete
+Continue with [Preparing data for Cellucid](cellucid.html) for a complete
 example, or use the
 [R package guide](https://docs.cellucid.com/en/latest/user_guide/r_package/index.html)
 for Seurat and SingleCellExperiment recipes.
 
 ## Next step
 
-Once the package is installed, prepare an export with `cellucid_prepare()` and
-open the resulting directory in the
+Once the package is installed, write a Cellucid-ready AnnData store with
+`cellucid_prepare()` and open it in the
 [Cellucid web app](https://www.cellucid.com). The
 [function reference](https://theislab.github.io/cellucid-r/reference/cellucid_prepare.html) documents every input
 and validation rule.

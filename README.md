@@ -8,41 +8,38 @@
 
 # Cellucid (R)
 
-**Export single-cell data from R to Cellucid — interactive, GPU-accelerated visualization in the browser.**
+**Prepare single-cell data in R for Cellucid — interactive, GPU-accelerated visualization in the browser.**
 
-`cellucid` (repo: `cellucid-r`) writes your embeddings, metadata, gene expression, connectivities, and vector fields
-to the on-disk format consumed by the Cellucid web app.
+`cellucid` (repo: `cellucid-r`) writes your embeddings, metadata, gene expression, neighbour graph, and vector fields
+as a **Cellucid-ready AnnData**: a standard AnnData Zarr store that the Cellucid web app opens directly and Python's
+`anndata` reads like any other.
 
-> **Active package version — 0.9.4** <!-- CELLUCID_VERSION -->
+> **Active package version — 0.9.5** <!-- CELLUCID_VERSION -->
 >
-> Version 0.9.4 is the active Cellucid for R source and documentation version,
+> Version 0.9.5 is the active Cellucid for R source and documentation version,
 > and it is the CRAN submission release. The CRAN package index is authoritative
 > for registry availability; the Installation guide below gives both exact
 > installation paths.
 
 ## Highlights
 
-- **Exporter-only**: generate a shareable “export folder” and open it in the web app
+- **One standard format**: an AnnData Zarr store (format 2, or 3 with `zarr_format = 3`) with consolidated
+  metadata — a `.zarr` folder for GitHub (`format = "zarr"`), or one `.zarr.zip` file (`format = "zarr.zip"`) for
+  everywhere else: single-file hosts (Zenodo, Figshare, Hugging Face, S3, a lab server), local files,
+  `cellucid serve` and Jupyter
+- **Fast in the browser**: gene-major expression (CSC), chunked for range reads, byte-shuffled where that helps
+  and compressed with deflate, which browsers decompress natively; a `.zarr.zip` keeps its metadata at the end
+  of the archive, so it opens with one read
+- **Self-describing**: the dataset's id, name, citation, source, and launch defaults live in `uns['cellucid']`,
+  with each categorical `obs` column's outlier quantiles in the latent space named by `latent_key`, so the
+  viewer's outlier filter works as soon as the file opens
 - **Minimal dependencies**: hard dependency `jsonlite` (optional/recommended: `Matrix`)
-- **Flexible inputs**: works with raw matrices/data.frames, with docs recipes for Seurat and SingleCellExperiment
-- **Optional extras**: gene expression, connectivity graphs, and vector fields for overlays like velocity/drift
+- **Flexible inputs**: raw matrices and data frames, with recipes for Seurat and SingleCellExperiment
 
-Connectivity matrices may carry positive edge weights. They must be exactly
-symmetric in topology and weight, have a zero diagonal, and contain no negative,
-missing, or infinite values. Sparse inputs must omit stored zero entries.
-
-Continuous observation fields, gene-expression matrices, and vector fields
-must contain only finite values. For unquantized float32 output, every nonzero
-value after required vector scaling must have magnitude from `2^-149` through
-`(2 - 2^-23) * 2^127`; values that would encode as zero or infinity reject the
-complete candidate. Quantized continuous fields and their manifest bounds use
-the viewer's exact float32 values; a native-double range that collapses to one
-float32 value rejects the complete candidate. Individual nonzero source values
-may round to zero when the resulting float32 range remains non-collapsed. The
-reserved quantized missing
-marker is used only for
-categorical outlier quantiles that Cellucid generates as `NaN` when a category
-has fewer than `centroid_min_points` cells.
+Every value is stored as float32 (embeddings, expression, vector fields, the
+graph) and must be finite. A neighbour graph must be exactly symmetric, with a
+zero diagonal and non-negative weights; a stored zero in a sparse input is not
+an edge and is dropped.
 
 `gene_expression` is always interpreted as cells × genes. Cellucid validates
 its row and column counts but never guesses or transposes orientation; for a
@@ -59,12 +56,12 @@ install.packages("remotes")
 remotes::install_github("theislab/cellucid-r")
 ```
 
-Source installation compiles a small native lock primitive and therefore needs
-Rtools on Windows, the Xcode Command Line Tools on macOS, or a C toolchain plus
-R development headers on Linux. A platform CRAN binary, when available, does
-not require a local compiler.
+Source installation compiles one small C routine (the CRC-32 checksum of the
+`.zarr.zip` writer) and therefore needs Rtools on Windows, the Xcode Command
+Line Tools on macOS, or a C toolchain plus R development headers on Linux. A
+platform CRAN binary, when available, does not require a local compiler.
 
-Optional but recommended (sparse matrices + connectivity export):
+Optional but recommended (sparse expression matrices and neighbour graphs):
 
 ```r
 install.packages("Matrix")
@@ -73,46 +70,44 @@ install.packages("Matrix")
 See the dedicated [Installation guide](https://theislab.github.io/cellucid-r/articles/installation.html)
 for requirements, verification, upgrades, and the CRAN availability status.
 
-Each export target has a persistent hidden sibling lock file. Cellucid never
-places it inside the published dataset or removes it after success: keeping the
-same filesystem identity is what lets independent Python and R exporters
-reject concurrent writers safely.
-
 ## Quickstart
 
 ```r
 library(cellucid)
 
 cellucid_prepare(
+  out_path = "my_dataset.zarr",       # or "my_dataset.zarr.zip" with format = "zarr.zip"
+  format = "zarr",
+  embeddings = list(                  # obsm: any number, every column kept
+    X_umap = umap,
+    X_pca = pca
+  ),
   dataset_id = "my-dataset",
   dataset_name = "My dataset",
-  latent_space = latent,   # cells × dims
-  obs = obs,               # data.frame (cells × fields)
-  var = var,               # data.frame (genes × fields)
-  gene_expression = expr,  # optional: cells × genes
-  embeddings = list(       # required: any number per dimension
-    X_umap = umap2,
-    X_pca = cellucid_embedding(pca, columns = c(1, 2), label = "PCA")
-  ),
-  embedding_defaults = c("2d" = "X_umap"),  # which 2D embedding shows first
-  out_dir = "exports/my_dataset",
-  force = TRUE,
-  obs_categorical_dtype = "uint16"
+  obs = obs,                          # data.frame, one row per cell
+  var = var,                          # data.frame, one row per gene
+  gene_expression = expr,             # cells × genes, sparse or dense
+  connectivities = knn,               # optional cells × cells graph
+  embedding_defaults = c("2d" = "X_umap"),
+  latent_key = "X_pca"
 )
 ```
 
-`embeddings` names every embedding the export carries; `cellucid_embedding()`
-reads chosen 1-based columns of a wider array. Vector fields are bound to
-embedding ids, as in `vector_fields = list(velocity = list(X_umap = v2))`.
-Repeated gene names are made unique the way anndata does it (`MATR3`,
-`MATR3-1`), and `var_gene_name_columns` adds alternative gene-name sets, such
-as gene symbols beside Ensembl row names, that the viewer can switch between.
+Open a `.zarr.zip` file from your computer in the web app at
+<https://www.cellucid.com>, or a `.zarr` folder or `.zarr.zip` file published at
+a web address with **Open from link**; read either in Python with
+`anndata.read_zarr()`.
 
-For reproducible identity metadata, pass an exact UTC-seconds value such as
-`created_at = "2026-07-29T12:34:56Z"`; otherwise the exporter records the
-current UTC time. Optional provenance starts with `source_name`.
-`source_url` and `source_citation` may then be supplied independently, but
-neither is accepted without `source_name`.
+The store is written beside `out_path` under a temporary name and moved into
+place only when it is complete; `force = TRUE` replaces an existing store.
+Vector fields are stored under scVelo's names and drawn over the embedding they
+are named for: `vector_fields = list(velocity = list(X_umap = v))` stores
+`obsm['velocity_umap']`, and `X_branches = vb` stores `obsm['velocity_branches']`,
+both listed by the viewer as the field `velocity`. `cellucid_transition_drift()` computes such a field
+from a cell-cell transition matrix (CellRank's, for example), the computation of Python's
+`compute_transition_drift()`. Repeated cell or gene names are made unique the way
+anndata does it (`MATR3`, `MATR3-1`), and `var_gene_id_column` names the `var`
+column, such as gene symbols beside Ensembl row names, that the viewer shows.
 
 ## Documentation and ecosystem
 

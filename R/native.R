@@ -1,37 +1,15 @@
-# The complete surface of src/. Every .Call() in this package
-# is one of these, so the R side of the native contract is readable in one
-# screen and the callers never spell a symbol name themselves.
+# The complete surface of src/ (registered in src/init.c): every .Call() of
+# the package, so the R side of the native contract is readable in one screen.
 
-.native_export_lock_acquire <- function(lock_path) {
-  .Call(C_cellucid_export_lock_acquire, lock_path)
+# src/crc32.c: the CRC-32 of a raw vector, continuing from `previous` (the CRC
+# of the bytes before it, 0 for none). The ZIP writer in zip.R needs it, and
+# so does the gzip framing of a Zarr format 3 chunk (zarr-store.R).
+.native_crc32 <- function(bytes, previous = 0) {
+  .Call(C_cellucid_crc32, bytes, as.double(previous))
 }
 
-.native_export_lock_release <- function(lock_handle) {
-  .Call(C_cellucid_export_lock_release, lock_handle)
-}
-
-.native_process_handle_count <- function() {
-  .Call(C_cellucid_process_handle_count)
-}
-
-.native_export_path_info <- function(path) {
-  .Call(C_cellucid_export_path_info, path)
-}
-
-.native_export_transaction_id <- function() {
-  .Call(C_cellucid_export_transaction_id)
-}
-
-.native_export_write_journal <- function(path, contents) {
-  .Call(C_cellucid_export_write_journal, path, contents)
-}
-
-.native_export_sync_directory <- function(path) {
-  .Call(C_cellucid_export_sync_directory, path)
-}
-
-# src/latent_outliers.c: the outlier-quantile rule cellucid-python and the web
-# app share (see .compute_latent_space_quantiles).
+# src/latent_outliers.c: one categorical obs column's outlier quantiles in the
+# latent space (R/outlier-quantiles.R).
 .native_latent_outlier_quantiles <- function(latent, codes, n_categories, min_points) {
   .Call(C_cellucid_latent_outlier_quantiles, latent, codes, n_categories, min_points)
 }

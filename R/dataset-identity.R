@@ -1,5 +1,5 @@
-# The identity a dataset publishes about itself: its name, its portable
-# identifier, its description, when it was created, and where it came from.
+# What a dataset says about itself, stored in uns['cellucid']: its name,
+# its portable identifier, its description, its citation and its source.
 
 .validate_dataset_name <- function(value) {
   .validate_display_text(value, "dataset_name")
@@ -9,126 +9,40 @@
   .safe_filename_component(value, what = "dataset_id")
 }
 
-# dataset_description is the one identity string whose empty value carries
-# meaning: a dataset with nothing to say about itself and a dataset described
-# as "" are the same dataset, and both are published as "". NULL is what an R
-# caller writes for an argument they are not supplying -- every other optional
-# identity argument in this signature already defaults to it -- so NULL and ""
-# are both accepted and both normalize to the "" that reaches the manifest.
-# The cellucid Python package accepts None and "" for it in the same way.
-.validate_dataset_description <- function(value) {
+.validate_optional_text <- function(value, arg, allow_empty = FALSE) {
   if (is.null(value)) {
-    return("")
+    return(NULL)
   }
-  .validate_display_text(value, "dataset_description", allow_empty = TRUE)
+  .validate_display_text(value, arg, allow_empty = allow_empty)
 }
 
-.resolve_created_at <- function(value) {
-  if (is.null(value)) {
-    return(format(
-      Sys.time(),
-      "%Y-%m-%dT%H:%M:%SZ",
-      tz = "UTC",
-      usetz = FALSE
-    ))
-  }
-  if (
-    !is.character(value) ||
-      length(value) != 1L ||
-      is.na(value) ||
-      is.object(value)
-  ) {
+# The viewer links to it, so it must be an absolute web address.
+.validate_url <- function(value, arg) {
+  value <- .validate_optional_text(value, arg)
+  if (!is.null(value) && !grepl("^https?://[^/?#[:space:]]+", value, ignore.case = TRUE)) {
     stop(
-      "created_at must be NULL or exactly one string in ",
-      "'YYYY-MM-DDTHH:MM:SSZ' UTC format.",
-      call. = FALSE
-    )
-  }
-  if (!grepl(
-    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
-    value,
-    perl = TRUE,
-    useBytes = TRUE
-  )) {
-    stop(
-      "created_at must use exact 'YYYY-MM-DDTHH:MM:SSZ' UTC format.",
-      call. = FALSE
-    )
-  }
-
-  year <- as.integer(substr(value, 1L, 4L))
-  month <- as.integer(substr(value, 6L, 7L))
-  day <- as.integer(substr(value, 9L, 10L))
-  hour <- as.integer(substr(value, 12L, 13L))
-  minute <- as.integer(substr(value, 15L, 16L))
-  second <- as.integer(substr(value, 18L, 19L))
-  leap_year <- year %% 400L == 0L ||
-    (year %% 4L == 0L && year %% 100L != 0L)
-  days_in_month <- c(
-    31L,
-    if (leap_year) 29L else 28L,
-    31L,
-    30L,
-    31L,
-    30L,
-    31L,
-    31L,
-    30L,
-    31L,
-    30L,
-    31L
-  )
-  if (
-    year < 1L ||
-      month < 1L ||
-      month > 12L ||
-      day < 1L ||
-      day > days_in_month[[month]] ||
-      hour < 0L ||
-      hour > 23L ||
-      minute < 0L ||
-      minute > 59L ||
-      second < 0L ||
-      second > 59L
-  ) {
-    stop(
-      "created_at must be a valid UTC calendar timestamp in ",
-      "'YYYY-MM-DDTHH:MM:SSZ' format.",
+      arg, " must be an absolute http:// or https:// address; got '", value, "'.",
       call. = FALSE
     )
   }
   value
 }
 
-.validate_source_identity <- function(name, url, citation) {
-  if (!is.null(name)) {
-    name <- .validate_display_text(name, "source_name")
-  }
-  if (!is.null(url)) {
-    url <- .validate_display_text(url, "source_url")
-  }
-  if (!is.null(citation)) {
-    citation <- .validate_display_text(
-      citation,
-      "source_citation"
-    )
-  }
-  if (is.null(name) && is.null(url) && is.null(citation)) {
+# A link is stored only beside the text it belongs to: a source URL needs
+# the source's name, a citation URL needs the citation's text.
+.validate_linked_text <- function(text, url, text_arg, url_arg, text_key) {
+  text <- .validate_optional_text(text, text_arg)
+  url <- .validate_url(url, url_arg)
+  if (is.null(text)) {
+    if (!is.null(url)) {
+      stop(text_arg, " is required whenever ", url_arg, " is supplied.", call. = FALSE)
+    }
     return(NULL)
   }
-  if (is.null(name)) {
-    stop(
-      "source_name is required whenever source_url or source_citation ",
-      "is supplied.",
-      call. = FALSE
-    )
-  }
-  source <- list(name = name)
+  entry <- list()
+  entry[[text_key]] <- .uns_string(text)
   if (!is.null(url)) {
-    source$url <- url
+    entry$url <- .uns_string(url)
   }
-  if (!is.null(citation)) {
-    source$citation <- citation
-  }
-  source
+  entry
 }

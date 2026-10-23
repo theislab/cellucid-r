@@ -20,18 +20,16 @@
   paste0("c(", paste(items, collapse = ", "), ")")
 }
 
-# Why one continuous payload cannot be published, counted rather than named.
+# Why one numeric input cannot be stored, counted rather than named.
 #
 # `x must contain only finite values.` is true and stops there. One NaN in
 # eighteen million cells and every value NaN produce that same sentence, and
 # they want opposite responses: the first is a cell to look at, the second is
-# the wrong matrix. cellucid-python's `continuous_payload_diagnosis` module
-# counts the offenders and names the first few positions; this is the same
-# report in R, so a dataset refused by either writer is refused with the same
-# information.
+# the wrong matrix. So the offenders are counted and the first few positions
+# named.
 #
 # Counting is only reached once the cheap `anyNA(x) || any(!is.finite(x))` scan
-# has already decided the payload is unusable, so a healthy column pays nothing
+# has already decided the input is unusable, so a healthy one pays nothing
 # and the working set is one the caller already had in memory.
 .non_finite_example_limit <- 5L
 
@@ -137,9 +135,10 @@
     ""
   }
   paste0(
-    subject, " cannot be published: of ", .format_count(scan$length), " ",
+    subject, " cannot be stored: of ", .format_count(scan$length), " ",
     scope, ", ", paste(counted, collapse = ", "), ".", where,
-    " Cellucid publishes finite values only, because a colour scale has no",
-    " position for an infinity and no value for a missing one."
+    " Coordinates, expression values, vectors and graph weights must be",
+    " finite numbers: a missing value or an infinity has no position on a",
+    " plot and no place on a colour scale."
   )
 }

@@ -2,7 +2,7 @@
 
 Contributions are welcome — code, docs, bug reports, and reproducible examples all help.
 
-This file focuses on `cellucid-r` (the R package that exports data to the Cellucid viewer format), and also helps route issues/PRs to the correct repo in the Cellucid ecosystem.
+This file focuses on `cellucid-r` (the R package that writes Cellucid-ready AnnData stores for the Cellucid viewer), and also helps route issues/PRs to the correct repo in the Cellucid ecosystem.
 
 By participating, you agree to follow the project’s Code of Conduct:
 - `CODE_OF_CONDUCT.md`
@@ -19,14 +19,14 @@ Cellucid is split by responsibility:
 | Repo | What it is | Contribute here when you… |
 |---|---|---|
 | `cellucid` | Web app (UI + state + WebGL rendering) | are fixing UI bugs, rendering/performance, figure export, sessions, or community annotation frontend |
-| `cellucid-python` | Python package + CLI (`prepare`, `serve`, `show_anndata`, hooks) + Sphinx docs | are fixing Python/CLI bugs, data prep/export, server endpoints, Jupyter hooks, or docs on ReadTheDocs |
-| `cellucid-r` (this repo) | R package for exporting data to the Cellucid viewer format | are changing the R exporter (`cellucid_prepare()`), adding R-side tests/docs, or preparing for CRAN |
+| `cellucid-python` | Python package + CLI (`prepare`, `serve`, `show_anndata`, hooks) + Sphinx docs | are fixing Python/CLI bugs, data preparation, server endpoints, Jupyter hooks, or docs on ReadTheDocs |
+| `cellucid-r` (this repo) | R package that writes Cellucid-ready AnnData stores | are changing the R writer (`cellucid_prepare()`), adding R-side tests/docs, or preparing for CRAN |
 | `cellucid-annotation` | GitHub repo template for community annotation | are changing the repo schema/validation/workflows |
 | `cellucid-datasets` | The published demo catalog | are correcting a published generation or its catalog entry |
 | `cellucid-demo-custom-datasets` | Worked example of publishing your own datasets | are changing that guide or its synthetic examples |
 
 If you’re not sure where a bug belongs, open an issue in the repo you’re currently using and include:
-- how you loaded data (exports vs h5ad/zarr vs remote server vs Jupyter),
+- how you loaded data (a local `.zarr`/`.zarr.zip`/`.h5ad` file, a link, a server, or Jupyter),
 - the UI environment (hosted app vs local app vs Jupyter iframe),
 - and the smallest reproduction you can share.
 
@@ -39,7 +39,7 @@ If you’re not sure where a bug belongs, open an issue in the repo you’re cur
 Please include:
 - R version (`R.version.string`)
 - OS (macOS/Windows/Linux)
-- how you generated exports (which function call, which inputs)
+- how you wrote the store (which function call, which inputs)
 - expected vs actual behavior
 - the smallest dataset you can share (prefer synthetic/reproducible)
 - any `R CMD check` output if relevant
@@ -47,7 +47,7 @@ Please include:
 If the bug is “the viewer looks wrong”, also include:
 - which viewer environment you used (hosted app vs local app vs Jupyter iframe)
 - browser + version
-- whether you loaded the export via browser file picker vs remote server vs GitHub exports
+- whether you opened the store with the browser file picker, from a link, or from a server
 
 ### I want to contribute docs only
 
@@ -154,10 +154,10 @@ hand-written. Do not run `devtools::document()` or `roxygen2::roxygenise()`
 here — this package has no roxygen source. Two things depend on that:
 
 - `NAMESPACE` carries `useDynLib(cellucid, .registration = TRUE, .fixes = "C_")`,
-  which no generator would emit, so a regenerated `NAMESPACE` would break every
-  `.Call()` into the native export lock.
+  which no generator would emit, so a regenerated `NAMESPACE` would break the
+  `.Call()` into the CRC-32 routine of the `.zarr.zip` writer.
 - `man/cellucid_prepare.Rd` carries the runnable `\examples{}` block and the
-  export-directory and orientation notes that the help page needs.
+  store-layout and orientation notes that the help page needs.
 
 If you change the public API (especially `cellucid_prepare()`), update
 `cellucid-r/man/cellucid_prepare.Rd` in the same commit.
@@ -188,31 +188,35 @@ pkgdown::build_site(dest_dir = "docs/site")
 This package is intentionally:
 
 - **minimal-dependency** (only `jsonlite` is a hard dependency)
-- **format-first** (exports must match what the web app expects)
+- **format-first** (every store is a standard AnnData store that Python's
+  `anndata` reads without a warning and the web app opens directly)
 - **CRAN-ready** (checks, documentation, and package structure matter)
 
 If you propose adding a new dependency:
 - prefer `Suggests` over `Imports` unless strictly required
-- keep the core exporter usable on minimal installations
+- keep the core writer usable on minimal installations
 
-If you change the export format or schema:
+If you change what a store holds (its layout or `uns['cellucid']`):
 - coordinate with `cellucid-python` and the web app (`cellucid`) so every repository implements the same exact current contract
-- add tests that validate the new behavior
+- add tests that validate the new behavior, and keep
+  `tests/testthat/test-anndata-interop.R` passing: it reads the store back with
+  Python's `anndata` (set `CELLUCID_ANNDATA_PYTHON` to a Python with `anndata`
+  and `zarr`, or have one as `python3`)
 
 ---
 
-## How to validate exports end-to-end
+## How to validate a store end-to-end
 
-The most reliable validation is to export a tiny dataset and load it in the viewer.
+The most reliable validation is to write a tiny dataset and open it in the viewer.
 
 Recommended workflow:
-1) Run `cellucid_prepare()` on a tiny synthetic dataset.
+1) Run `cellucid_prepare()` on a tiny synthetic dataset with `format = "zarr.zip"`.
 2) Open the Cellucid web app (hosted or local).
-3) Use “Browse local data…” and select the export folder.
+3) Open the `.zarr.zip` file from the data panel.
 4) Confirm:
    - the correct number of cells render
    - categorical and continuous fields appear
-   - gene expression search works (if exported)
+   - gene expression search works (if written)
 
 This catches many “format is technically written but semantically wrong” issues.
 

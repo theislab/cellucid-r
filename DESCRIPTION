@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
-Title: Export Single-Cell Data to the Cellucid Viewer Format
-Version: 0.9.4
+Title: Prepare Single-Cell Data for the Cellucid Viewer
+Version: 0.9.5
 Config/cellucid/version-marker: CELLUCID_VERSION
 Authors@R: c(
     person(
@@ -10,10 +10,14 @@ Authors@R: c(
       role = c("aut", "cre")
     )
   )
-Description: Exports single-cell embeddings, metadata, gene expression, and
-    graph connectivity to the binary/JSON interchange format consumed by the
-    Cellucid WebGL viewer. The primary entry point is cellucid_prepare(),
-    which mirrors the prepare() function in the cellucid Python package.
+Description: Writes single-cell embeddings, cell and gene metadata, gene
+    expression, neighbour graphs, and vector fields as a 'Cellucid'-ready
+    'AnnData' store: a standard 'AnnData' 'Zarr' store, as a folder or as one
+    ZIP file, with gene-major expression and the dataset's name, citation and
+    launch defaults, which the 'Cellucid' web viewer opens directly and the
+    Python 'anndata' package reads. The primary entry point is
+    cellucid_prepare(); cellucid_transition_drift() computes a vector field
+    from a cell-cell transition matrix.
 License: BSD_3_clause + file LICENSE
 Encoding: UTF-8
 Depends:

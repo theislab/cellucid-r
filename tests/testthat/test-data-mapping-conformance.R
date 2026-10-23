@@ -4,34 +4,34 @@
 # copy of cellucid-python's tests/fixtures/data_mapping_conformance.json, which
 # the web app also carries; all three repositories pin the same SHA-256.
 #
-# A writer applies two of its rules: making gene names unique
-# (makeUniqueNames) and the one-line note that reports what that changed
-# (uniqueNamesNote). Both are run here case for case. The other sections pin
-# rules this package has no counterpart for: the best-guess embedding and
-# expression choices, the representations enabled when a file opens, the
-# default vector bindings, the "nothing to plot" text, and DataMapping
-# validation are what a reader does with an AnnData file; exportDataMapping is
-# what the web app shows an export with, and its cases include an export
-# declared the way cellucid_prepare() declares it (caller-chosen ids, one 2D
-# default), which the reader treats exactly like a Python export; and
-# embeddingColumns and canonicalEmbeddingId describe the 0-based, typed column
-# selection of cellucid-python's guessing API. cellucid_prepare() takes
-# caller-named embedding ids and 1-based columns instead.
+# A writer applies three of its rules: making gene names unique
+# (makeUniqueNames), the one-line note that reports what that changed
+# (uniqueNamesNote), and the vector-field key rule (vectorFieldKeys), by which
+# cellucid_prepare() names each vector field '<field>_<basis>' and checks that
+# the viewer reads it back as that field on 'X_<basis>'. All three are run here
+# case for case. The other sections pin rules this package has no counterpart
+# for: the best-guess embedding and expression choices, the representations
+# enabled when a file opens, the default vector bindings, the "nothing to
+# plot" text, and DataMapping validation are what a reader does with an
+# AnnData file; and embeddingColumns and canonicalEmbeddingId describe the
+# 0-based, typed column selection of cellucid-python's guessing API.
+# cellucid_prepare() takes caller-named embedding ids and 1-based columns
+# instead.
 
-.conformance_sha256 <- "dd08f84297c179b37e21a09dd820781cbfa21bf33f063bd79f925ec44a026660"
+.conformance_sha256 <- "9e7e7b443fcdcb4f8891165951459d1cae2c4e198041ddb2ffc3a82577ecb4f6"
 
 test_that("both repositories hold the same pinned conformance fixture", {
   expect_pinned_fixture("data_mapping_conformance.json", .conformance_sha256)
   fixture <- cellucid_read_fixture("data_mapping_conformance.json")
-  expect_identical(fixture$version, 2L)
+  expect_identical(fixture$version, 3L)
   expect_identical(
     names(fixture),
     c(
       "_about", "version", "makeUniqueNames", "uniqueNamesNote",
       "bestGuessTier", "embeddingSlots", "enabledEmbeddings",
       "embeddingColumns", "canonicalEmbeddingId", "defaultExpression",
-      "defaultVectorBindings", "nothingPlottable", "dataMapping",
-      "exportDataMapping"
+      "vectorFieldKeys", "defaultVectorBindings", "nothingPlottable",
+      "dataMapping"
     )
   )
 })
@@ -79,5 +79,24 @@ test_that("the make-unique note matches the shared conformance fixture word for 
     } else {
       expect_identical(note, enc2utf8(case$expected))
     }
+  }
+})
+
+test_that("the vector-field key rule matches every case of the shared conformance fixture", {
+  fixture <- cellucid_read_fixture("data_mapping_conformance.json")
+  for (case in fixture$vectorFieldKeys) {
+    keys <- vapply(case$keys, enc2utf8, character(1))
+    found <- list()
+    for (key in keys) {
+      parsed <- cellucid:::.parse_vector_field_key(key, keys)
+      if (!is.null(parsed)) {
+        expect_identical(paste0(parsed$field, "_", parsed$basis), key, info = case$name)
+        found[[length(found) + 1L]] <- list(key = key, field = parsed$field, basis = parsed$basis)
+      }
+    }
+    expected <- lapply(case$expected, function(entry) {
+      list(key = enc2utf8(entry$key), field = enc2utf8(entry$field), basis = enc2utf8(entry$basis))
+    })
+    expect_identical(found, expected, info = case$name)
   }
 })

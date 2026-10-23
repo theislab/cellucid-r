@@ -1,10 +1,10 @@
 ---
-title: "Exporting data for Cellucid"
+title: "Preparing data for Cellucid"
 output:
   rmarkdown::html_vignette:
     toc: true
 vignette: >
-  %\VignetteIndexEntry{Exporting data for Cellucid}
+  %\VignetteIndexEntry{Preparing data for Cellucid}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -15,194 +15,200 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Overview
 
-The `cellucid` package exports single-cell data (embeddings, metadata, gene
-expression, and connectivity) to the binary/JSON format consumed by the
-Cellucid WebGL viewer.
+`cellucid_prepare()` writes single-cell data -- embeddings, cell and gene
+metadata, gene expression, a neighbour graph, and vector fields -- as a
+**Cellucid-ready AnnData**: a standard AnnData store, written as AnnData Zarr,
+that Python's anndata reads like any other and the Cellucid web app opens
+directly. Gene expression is stored gene-major, so the viewer reads one gene
+with one small range of the file, and `uns['cellucid']` carries the dataset's
+name, citation, source, and launch defaults.
 
-The sole export entry point is `cellucid_prepare()`.
+`format` chooses the output, and has no default because only you know where
+the store goes: `format = "zarr"` writes a `.zarr` folder of small files, the
+way to publish on GitHub (no file over 100 MB, no LFS); `format = "zarr.zip"`
+writes the same store as one `.zarr.zip` file. `out_path` ends in the matching
+suffix. (An `.h5ad` file is written by Python's
+`cellucid.prepare(format = "h5ad")`; this package writes no HDF5, so it needs no
+HDF5 library.)
 
 ## Minimal example
 
 ```{r}
 library(cellucid)
 
-latent <- matrix(c(0, 0,
-                   1, 1,
-                   2, 2),
-                 ncol = 2, byrow = TRUE)
+umap <- matrix(c(0, 0,
+                 1, 0,
+                 0, 1,
+                 1, 1),
+               ncol = 2, byrow = TRUE)
+pca <- matrix(c(0, 3, 1,
+                2, 5, 1,
+                4, 0, 2,
+                1, 1, 1),
+              ncol = 3, byrow = TRUE)
 
 obs <- data.frame(
-  cluster = factor(c("A", "A", "B")),
-  score = c(0.1, 0.2, 0.3)
+  cluster = factor(c("A", "A", "B", "B")),
+  score = c(0.1, 0.2, 0.3, 0.4),
+  row.names = paste0("cell", 1:4)
 )
-
-umap2 <- matrix(c(0, 0,
-                  1, 0,
-                  0, 1),
-                ncol = 2, byrow = TRUE)
 
 expr <- matrix(c(0, 1,
                  2, 3,
-                 4, 5),
-               nrow = 3, ncol = 2, byrow = TRUE)
+                 4, 5,
+                 0, 0),
+               nrow = 4, byrow = TRUE,
+               dimnames = list(rownames(obs), c("ENSG01", "ENSG02")))
 
-var <- data.frame(symbol = c("G1", "G2"))
-rownames(var) <- var$symbol
+var <- data.frame(symbol = c("CD3E", "MS4A1"), row.names = colnames(expr))
 
-out_dir <- file.path(tempdir(), "cellucid_vignette_export")
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-cellucid_prepare(
-  dataset_id = "vignette-export",
-  dataset_name = "Vignette export",
-  latent_space = latent,
+store <- cellucid_prepare(
+  out_path = file.path(tempdir(), "vignette.zarr"),
+  format = "zarr",
+  embeddings = list(X_umap = umap, X_pca = pca),
+  dataset_id = "vignette",
+  dataset_name = "Vignette dataset",
   obs = obs,
   var = var,
   gene_expression = expr,
-  embeddings = list(
-    X_umap = umap2,
-    X_flipped = cellucid_embedding(umap2, columns = c(2, 1), label = "Flipped")
-  ),
   embedding_defaults = c("2d" = "X_umap"),
-  out_dir = out_dir,
-  centroid_min_points = 1,
-  force = TRUE,
-  obs_categorical_dtype = "uint16"
+  latent_key = "X_pca",
+  var_gene_id_column = "symbol",
+  force = TRUE
 )
 
-list.files(out_dir, recursive = TRUE)
+list.files(store, all.files = TRUE, no.. = TRUE)
 ```
 
-`embeddings` is a named list of every embedding the export carries, any number
-per dimension. A matrix of 1, 2, or 3 columns is plotted whole;
-`cellucid_embedding()` names the 1-based columns of a wider array, a display
-label, and the key it came from. `embedding_defaults` names the embedding each
-dimension shows first and is required for any dimension with more than one.
-Each embedding is normalized on its own and written to
-`embeddings/{index}_{dimension}d.bin`.
+In the web app at <https://www.cellucid.com>, open a `.zarr.zip` file from your
+computer (see below), or a `.zarr` folder or `.zarr.zip` file published at a web
+address with **Open from link**. In Python:
 
-Vector fields are bound to embedding ids:
-`vector_fields = list(velocity = list(X_umap = velocity_2d))`, where each array
-has one column per dimension of its embedding.
+```python
+import anndata
+adata = anndata.read_zarr("vignette.zarr")
+```
 
-Gene names come from `rownames(var)` or `var_gene_id_column`. An empty name
-(`NA` or `""`) takes the row's name from `rownames(var)`, and repeated names are
-made unique the way anndata's `var_names_make_unique()` does it -- the second
+## What goes where
+
+| Argument | In the store |
+| --- | --- |
+| `embeddings` | `obsm[<key>]`, float32, every column |
+| `obs` | `obs`, every column |
+| `var` | `var`, every column |
+| `gene_expression` | `X`, gene-major float32 (`csc_matrix` for a sparse matrix) |
+| `connectivities` | `obsp['connectivities']`, float32 `csr_matrix` |
+| `vector_fields` | `obsm['<field>_<basis>']` for the embedding `X_<basis>` |
+| `dataset_id`, `dataset_name`, `dataset_description` | `uns['cellucid']` `id`, `name`, `description`; `uns['title']` |
+| `citation_text`, `citation_url` | `uns['cellucid']['citation']` |
+| `source_name`, `source_url` | `uns['cellucid']['source']` |
+| `embedding_defaults`, `latent_key`, `obs_keys`, `var_gene_id_column`, `vector_field_default`, `normalize_embeddings`, `centroid_min_points` | `uns['cellucid']['defaults']`, only the ones you set |
+| `latent_key` (with `centroid_min_points`) | `uns['cellucid']['outlierQuantiles']`: each categorical `obs` column's outlier quantiles in that latent space |
+
+Embeddings are stored at their own coordinates; the viewer chooses the columns
+it plots and scales them to its view. `embedding_defaults` names the embedding
+each view dimension shows first, by `obsm` key (its first columns) or as
+`list(key = "X_pca", columns = 1:3)`.
+
+`latent_key` names the latent space the viewer's outlier filter measures in,
+such as PCA or scVI, never a 2D or 3D layout. `cellucid_prepare()` computes the
+outlier quantiles of every categorical `obs` column there (each cell's
+distance to its category's centre, as the share of its category at that
+distance or closer) and stores them, so the filter works as soon as the file
+opens. A category needs `centroid_min_points` cells (10 when not set);
+`?cellucid_prepare` states the rule.
+
+Vector fields are stored under scVelo's names and drawn over the embedding they
+are named for: `vector_fields = list(velocity = list(X_umap = velocity_umap,
+X_branches = velocity_branches))` stores `obsm['velocity_umap']` and
+`obsm['velocity_branches']`, which the viewer lists as the one field `velocity`
+and draws whenever a view shows `X_umap` or `X_branches`. Each array has one
+column per column of its embedding, and the embedding's key starts with `X_`.
+`cellucid_transition_drift(transition_matrix, umap, normalize_rows = TRUE)`
+computes such a field from a cell-cell transition matrix (CellRank's, for
+example): each cell's transition-weighted mean successor position minus its
+own, ready for `vector_fields = list(T_fwd = list(X_umap = drift))`.
+
+Cell names are the row names your inputs agree on, and gene names the `var`
+row names (else the column names of `gene_expression`). Repeated names are made
+unique the way anndata's `var_names_make_unique()` does it -- the second
 `MATR3` becomes `MATR3-1` -- with a message saying what changed.
-`var_gene_name_columns` adds further `var` columns as alternative gene-name sets
-the viewer can switch to, stored as metadata in `var_manifest.json`.
-
-Set `created_at` to an exact `YYYY-MM-DDTHH:MM:SSZ` UTC value when the identity
-metadata itself must be reproducible; the default is the current UTC time.
-Dataset provenance may contain `source_name` alone, or add `source_url`,
-`source_citation`, or both. A URL or citation always requires `source_name`.
 
 ## Using Seurat
 
-Seurat objects typically store expression as **genes × cells**, but
-`cellucid_prepare()` expects **cells × genes**, so transpose before passing.
-The exporter validates dimensions but never guesses orientation; a square
-matrix can have the wrong semantic orientation while still matching both axes.
+Seurat stores expression as **genes x cells**, and `cellucid_prepare()` expects
+**cells x genes**, so transpose before passing. The function checks the
+dimensions but never guesses the orientation.
 
 ```{r, eval=FALSE}
-if (requireNamespace("Seurat", quietly = TRUE) &&
-    requireNamespace("Matrix", quietly = TRUE)) {
+seu <- your_seurat_object
 
-  seu <- your_seurat_object
+expr_genes_by_cells <- Seurat::GetAssayData(seu, layer = "data")
+# The shared-nearest-neighbour graph links each cell to itself; the stored
+# graph has a zero diagonal.
+graph <- seu@graphs[["RNA_snn"]]
+Matrix::diag(graph) <- 0
 
-  umap2 <- Seurat::Embeddings(seu, "umap")[, 1:2, drop = FALSE]
-  latent <- Seurat::Embeddings(seu, "pca")
-  pca <- cellucid_embedding(latent, columns = c(1, 2), label = "PCA")
-
-  obs <- seu@meta.data
-
-  expr_genes_by_cells <- Seurat::GetAssayData(seu, slot = "data")
-  expr_cells_by_genes <- Matrix::t(expr_genes_by_cells)
-
-  var <- data.frame(symbol = rownames(expr_genes_by_cells))
-  rownames(var) <- var$symbol
-
-  cellucid_prepare(
-    dataset_id = "seurat-export",
-    dataset_name = "Seurat export",
-    latent_space = latent,
-    obs = obs,
-    var = var,
-    gene_expression = expr_cells_by_genes,
-    embeddings = list(X_umap = umap2, X_pca = pca),
-    embedding_defaults = c("2d" = "X_umap"),
-    out_dir = "exports/seurat_export",
-    force = TRUE,
-    obs_categorical_dtype = "uint16"
-  )
-}
+cellucid_prepare(
+  out_path = "seurat.zarr",
+  format = "zarr",
+  embeddings = list(
+    X_umap = Seurat::Embeddings(seu, "umap"),
+    X_pca = Seurat::Embeddings(seu, "pca")
+  ),
+  dataset_id = "seurat-dataset",
+  dataset_name = "Seurat dataset",
+  obs = seu[[]],
+  gene_expression = Matrix::t(expr_genes_by_cells),
+  connectivities = graph,
+  embedding_defaults = c("2d" = "X_umap"),
+  latent_key = "X_pca"
+)
 ```
 
 ## Using SingleCellExperiment
 
-SingleCellExperiment assays are also typically **genes × cells**, so transpose
-before passing.
-Orientation remains caller-owned rather than inferred from shape or `var`.
+SingleCellExperiment assays are also **genes x cells**, so transpose them too.
 
 ```{r, eval=FALSE}
-if (requireNamespace("SingleCellExperiment", quietly = TRUE) &&
-    requireNamespace("SummarizedExperiment", quietly = TRUE) &&
-    requireNamespace("Matrix", quietly = TRUE)) {
+sce <- your_sce_object
 
-  sce <- your_sce_object
-
-  umap2 <- SingleCellExperiment::reducedDim(sce, "UMAP")
-  latent <- SingleCellExperiment::reducedDim(sce, "PCA")
-
-  obs <- as.data.frame(SummarizedExperiment::colData(sce))
-
-  expr_genes_by_cells <- SummarizedExperiment::assay(sce, "logcounts")
-  expr_cells_by_genes <- Matrix::t(expr_genes_by_cells)
-
-  var <- as.data.frame(SummarizedExperiment::rowData(sce))
-  rownames(var) <- rownames(sce)
-
-  cellucid_prepare(
-    dataset_id = "sce-export",
-    dataset_name = "SingleCellExperiment export",
-    latent_space = latent,
-    obs = obs,
-    var = var,
-    gene_expression = expr_cells_by_genes,
-    embeddings = list(X_umap = umap2),
-    out_dir = "exports/sce_export",
-    force = TRUE,
-    obs_categorical_dtype = "uint16"
-  )
-}
+cellucid_prepare(
+  out_path = "sce.zarr",
+  format = "zarr",
+  embeddings = list(
+    X_umap = SingleCellExperiment::reducedDim(sce, "UMAP"),
+    X_pca = SingleCellExperiment::reducedDim(sce, "PCA")
+  ),
+  dataset_id = "sce-dataset",
+  dataset_name = "SingleCellExperiment dataset",
+  obs = as.data.frame(SummarizedExperiment::colData(sce)),
+  var = as.data.frame(SummarizedExperiment::rowData(sce)),
+  gene_expression = Matrix::t(SummarizedExperiment::assay(sce, "logcounts")),
+  embedding_defaults = c("2d" = "X_umap"),
+  latent_key = "X_pca"
+)
 ```
 
-## Output format (high level)
+## One file instead of a folder
 
-The export directory contains:
+`format = "zarr.zip"` writes the same store as one `.zarr.zip` file: the
+format for everywhere but GitHub -- single-file hosts (a Zenodo record, a
+Figshare or Hugging Face file, a bucket URL, a lab server), local files,
+`cellucid serve` and Jupyter. A `.zarr` folder is the format for GitHub, which
+refuses files over 100 MB and answers many small files at once over HTTP/2.
+The archive's entries are stored uncompressed (each chunk is compressed
+already), so the web app reads any part of it with one range request, and its
+metadata comes last, so it opens with one read of the archive's end.
 
-- Embeddings: `embeddings/{index}_{dimension}d.bin` (float32), one per
-  exported embedding, declared in `dataset_identity.json`
-- Cell metadata: `obs_manifest.json` + `obs/` binaries
-- Gene expression: `var_manifest.json` + `var/` binaries (one file per gene),
-  with every gene-name set in `var_manifest.json`
-- Vector fields (optional): `vectors/{fieldIndex}_{embeddingIndex}.bin`
-- Connectivity (optional): `connectivity_manifest.json` plus aligned
-  `connectivity/edges.src.bin`, `edges.dst.bin`, and
-  `edges.weights.f64.bin` payloads. Weights are exact little-endian float64
-  values; the input must be non-negative, exactly symmetric in topology and
-  weight, and have a zero diagonal. Sparse inputs must omit stored zeros.
-- Dataset metadata: `dataset_identity.json`
-
-Continuous observation fields, gene-expression matrices, and vector fields
-must contain only finite values. For unquantized float32 output, every nonzero
-value after required vector scaling must have magnitude from `2^-149` through
-`(2 - 2^-23) * 2^127`; values that would encode as zero or infinity reject the
-complete candidate. Quantized continuous fields and their manifest bounds use
-the viewer's exact float32 values; a native-double range that collapses to one
-float32 value rejects the complete candidate. Individual nonzero source values
-may round to zero when the resulting float32 range remains non-collapsed. The
-quantized missing code is
-reserved for categorical
-outlier quantiles generated as `NaN` when a category contains fewer than
-`centroid_min_points` cells.
+```{r}
+archive <- cellucid_prepare(
+  out_path = file.path(tempdir(), "vignette.zarr.zip"),
+  format = "zarr.zip",
+  embeddings = list(X_umap = umap),
+  dataset_id = "vignette",
+  dataset_name = "Vignette dataset",
+  force = TRUE
+)
+file.size(archive)
+```

@@ -23,8 +23,5 @@ vignettes/*.pdf
 # pkgdown (local builds; CI deploys separately)
 docs/site/
 
-# Common exports folder name from examples
-exports/
-
 # macOS
 .DS_Store

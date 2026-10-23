@@ -9,17 +9,25 @@
 # message quotes); a limit made up for convenience has no class to take.
 
 size_limit_allowlist <- list(
-  "R/binary-payloads.R:.float32_max_magnitude" = c(
+  "R/matrix-input.R:.float32_max_magnitude" = c(
     "FORMAT",
     "The largest finite IEEE 754 binary32 value; a larger one is not a float32."
+  ),
+  "R/matrix-input.R:.float32_exact_integer_limit" = c(
+    "FORMAT",
+    "The largest integer float32 holds exactly (2^24); counts above it are stored as float64."
+  ),
+  "R/zip.R:.zip_u16_max" = c(
+    "FORMAT",
+    "The largest classic ZIP entry count; above it the archive carries ZIP64 records."
+  ),
+  "R/zip.R:.zip_u32_max" = c(
+    "FORMAT",
+    "The largest classic ZIP size or offset; above it the archive carries ZIP64 fields."
   ),
   "R/error-messages.R:.non_finite_example_limit" = c(
     "MSG",
     "How many offending values an error message quotes; every value is checked."
-  ),
-  "src/export_lock.c:INT_MAX" = c(
-    "PLAT",
-    "The lock's reentry count is a C int; a third of INT_MAX keeps its arithmetic from overflowing."
   )
 )
 

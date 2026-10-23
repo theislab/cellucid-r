@@ -32,7 +32,7 @@ bibentry(
 
 bibentry(
   bibtype = "Manual",
-  title = "cellucid: Export Single-Cell Data to the Cellucid Viewer Format",
+  title = "cellucid: Prepare Single-Cell Data for the Cellucid Viewer",
   author = person("Kemal", "Inecik"),
   year = citation_year,
   note = paste0("R package version ", package_version),
