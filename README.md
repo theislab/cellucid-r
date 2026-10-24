@@ -95,7 +95,7 @@ cellucid_prepare(
 
 Open a `.zarr.zip` file from your computer in the web app at
 <https://www.cellucid.com>, or a `.zarr` folder or `.zarr.zip` file published at
-a web address with **Open from link**; read either in Python with
+a web address with the **Link or server** address bar; read either in Python with
 `anndata.read_zarr()`.
 
 The store is written beside `out_path` under a temporary name and moved into

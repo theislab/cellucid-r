@@ -308,6 +308,52 @@ test_that("chunks are padded to the full chunk shape at the edges, in both Zarr 
     list(name = "vlen-utf8", configuration = structure(list(), names = character())),
     list(name = "gzip", configuration = list(level = 6L))
   ))
+  expect_identical(store_json(root, "v/zarr.json")$codecs, list(
+    list(name = "bytes", configuration = list(endian = "little")),
+    list(name = "blosc", configuration = list(
+      typesize = 4L, cname = "zlib", clevel = 6L, shuffle = "shuffle", blocksize = 0L
+    ))
+  ))
+})
+
+test_that("format 3 shuffles with the blosc codec, in the frames c-blosc writes", {
+  # Each case: the value size, the bytes, and the header c-blosc writes for
+  # them -- flags, then the block size -- and how many blocks follow.
+  header <- function(frame) {
+    word <- function(at) readBin(frame[at + 0:3], "integer", size = 4L, endian = "little")
+    list(
+      version = as.integer(frame[1:2]), flags = as.integer(frame[[3L]]), item_size = as.integer(frame[[4L]]),
+      n_bytes = word(5L), block = word(9L), total = word(13L)
+    )
+  }
+  set.seed(1L)
+  cases <- list(
+    # Under 128 bytes: copied whole (0x02), no split (0x10).
+    list(size = 4L, bytes = writeBin(1:25, raw(), size = 4L, endian = "little"), flags = 0x73L, block = 100L),
+    # Under 128 values: one stream (no split).
+    list(size = 2L, bytes = writeBin(1:100, raw(), size = 2L, endian = "little"), flags = 0x71L, block = 200L),
+    # One block, one stream per byte of a value.
+    list(size = 4L, bytes = writeBin(1:1000 %% 7L, raw(), size = 4L, endian = "little"), flags = 0x61L, block = 4000L),
+    # A float64 chunk of 2^18 values: two blocks of 1 MiB.
+    list(size = 8L, bytes = writeBin(seq_len(262144) / 8, raw(), size = 8L, endian = "little"), flags = 0x61L, block = 1048576L),
+    # A last, shorter block: one stream.
+    list(size = 4L, bytes = writeBin(seq_len(300000) %% 977L, raw(), size = 4L, endian = "little"), flags = 0x61L, block = 1048576L),
+    # Nothing to gain: copied whole.
+    list(size = 4L, bytes = as.raw(sample.int(256L, 4096L, replace = TRUE) - 1L), flags = 0x63L, block = 4096L)
+  )
+  for (case in cases) {
+    frame <- cellucid:::.blosc_frame(case$bytes, case$size)
+    got <- header(frame)
+    expect_identical(got$version, c(2L, 1L))
+    expect_identical(got$flags, case$flags)
+    expect_identical(got$item_size, case$size)
+    expect_identical(got$n_bytes, length(case$bytes))
+    expect_identical(got$block, case$block)
+    expect_identical(got$total, length(frame))
+    expect_identical(blosc_decode(frame), case$bytes)
+  }
+  # The same bytes on every run.
+  expect_identical(cellucid:::.blosc_frame(cases[[4L]]$bytes, 8L), cellucid:::.blosc_frame(cases[[4L]]$bytes, 8L))
 })
 
 test_that("dense expression is stored gene-major in tall strips", {

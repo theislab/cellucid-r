@@ -8,18 +8,25 @@
 # level is the store, which is what a .zarr.zip is.
 #
 # Every chunk of a multi-byte array is byte-shuffled before it is compressed
-# -- the first byte of every value, then every second byte, and so on, which
-# is numcodecs' Shuffle filter -- so the similar high bytes of neighbouring
-# values compress together; the expression values (X's data, a dense X) are
-# not, because deflate finds their repeated values only unshuffled (shuffled,
-# real expression data grew 14-45%). Every chunk is then compressed with DEFLATE level
-# 6 (zlib's default): base R's memCompress(type = "gzip") produces a zlib
-# stream (RFC 1950: a 0x78 header, deflate data, an Adler-32 trailer), byte
-# for byte what numcodecs' Zlib codec writes, so format 2 declares the
-# compressor {"id": "zlib", "level": 6}. Format 3's gzip codec wants the gzip
-# framing (RFC 1952) around the same deflate data: a ten-byte header, then
-# the CRC-32 and length of the uncompressed bytes. Browsers inflate both
-# natively (DecompressionStream). These are the Python writer's choices
+# -- the first byte of every value, then every second byte, and so on -- so
+# the similar high bytes of neighbouring values compress together; the
+# expression values (X's data, a dense X) are not, because deflate finds their
+# repeated values only unshuffled (shuffled, real expression data grew
+# 14-45%). Every chunk is compressed with DEFLATE level 6 (zlib's default):
+# base R's memCompress(type = "gzip") produces a zlib stream (RFC 1950: a 0x78
+# header, deflate data, an Adler-32 trailer), what numcodecs' Zlib codec
+# writes (the same bytes wherever R and Python link a zlib that deflates
+# alike; zlib 1.3.2 deflates some inputs differently from 1.2.12, so the
+# writers are compared by metadata and values). Format 2 declares numcodecs'
+# Shuffle filter {"id": "shuffle", "elementsize": n} (a format 2 filter is
+# any numcodecs codec) and the compressor {"id": "zlib", "level": 6}. Format
+# 3 has no shuffle codec of its own (numcodecs.shuffle is outside its
+# specification), so a shuffled array is compressed with the
+# specification's blosc codec -- byte shuffle and zlib in a Blosc frame
+# (.blosc_frame()) -- and every other array with its gzip codec, the gzip framing (RFC 1952) around the same
+# deflate data: a ten-byte header, then the CRC-32 and length of the
+# uncompressed bytes. Browsers inflate all of these natively
+# (DecompressionStream). These are the Python writer's choices
 # (prepare_data/_store.py), so both writers produce the same store.
 
 .deflate_level <- 6L
@@ -282,11 +289,14 @@
   } else {
     list(name = "bytes", configuration = list(endian = "little"))
   }
-  codecs <- list(serializer)
-  if (item_size > 0L) {
-    codecs <- c(codecs, list(list(name = "numcodecs.shuffle", configuration = list(elementsize = item_size))))
+  compressor <- if (item_size > 0L) {
+    list(name = "blosc", configuration = list(
+      typesize = item_size, cname = "zlib", clevel = .deflate_level, shuffle = "shuffle", blocksize = 0L
+    ))
+  } else {
+    list(name = "gzip", configuration = list(level = .deflate_level))
   }
-  codecs <- c(codecs, list(list(name = "gzip", configuration = list(level = .deflate_level))))
+  codecs <- list(serializer, compressor)
   text <- .json_text(list(
     shape = I(as.numeric(shape)),
     data_type = .zarr_v3_data_type(dtype),
@@ -313,7 +323,8 @@
   }
 }
 
-# numcodecs' Shuffle: the first byte of every value, then the second, ...
+# A byte shuffle (numcodecs' Shuffle, Blosc's within a block): the first byte
+# of every value, then the second, ...
 .shuffle_bytes <- function(bytes, item_size) {
   if (item_size <= 1L || length(bytes) == 0L) return(bytes)
   as.vector(t(matrix(bytes, nrow = item_size)))
@@ -334,9 +345,97 @@
   )
 }
 
+# Whether c-blosc splits a block of `block` bytes into one stream per byte of
+# a value, as it does for zlib: values of at most 16 bytes, at least 128 per
+# block.
+.blosc_splits <- function(item_size, block) {
+  item_size <= 16 && block %/% item_size >= 128
+}
+
+# c-blosc's automatic block size (compute_blocksize()) for zlib at level 6:
+# the whole buffer below 32 KiB, otherwise 512 KiB (32 KiB, doubled for
+# zlib, times 8 at level 6), which a split block replaces with 256 KiB values
+# held between 64 KiB and 1 MiB; never more than the buffer, and a multiple of
+# the value size.
+.blosc_block_size <- function(n_bytes, item_size) {
+  block <- n_bytes
+  if (n_bytes >= 32768) block <- 524288
+  if (.blosc_splits(item_size, block)) {
+    block <- min(max(min(block, 262144) * item_size, 65536), 1048576)
+  }
+  block <- min(block, n_bytes)
+  if (block > item_size) block <- block %/% item_size * item_size
+  block
+}
+
+# The Blosc 1 frame of Zarr format 3's blosc codec as the writers declare it
+# (cname zlib, clevel 6, byte shuffle, automatic block size), the frame
+# c-blosc writes compressing in one thread, as numcodecs does under
+# zarr-python -- the same header, blocks and streams, each stream deflated by
+# the zlib R links: a 16-byte header (format 2, zlib format 1, flags, value size,
+# then the byte size, block size and frame size as little-endian uint32), the
+# start of every block, and each block shuffled and cut into one stream per
+# byte of a value (a single stream for a last, shorter block), each stream a
+# 4-byte length and its zlib data, or the stream as it is when zlib gains
+# nothing. A buffer under 128 bytes, or one whose streams would outgrow it,
+# is copied whole after the header instead. The flags: byte shuffle (0x01),
+# a whole copy (0x02), no split (0x10), zlib (3 << 5).
+.blosc_frame <- function(bytes, item_size) {
+  n_bytes <- length(bytes)
+  block <- .blosc_block_size(n_bytes, item_size)
+  split <- .blosc_splits(item_size, block)
+  flags <- 0x01 + (if (split) 0 else 0x10) + 0x60
+  header <- function(flags, total) {
+    c(
+      as.raw(c(2L, 1L, flags, item_size)),
+      .zip_le(n_bytes, 4), .zip_le(block, 4), .zip_le(total, 4)
+    )
+  }
+  whole_copy <- function() c(header(flags + 0x02, n_bytes + 16), bytes)
+  if (n_bytes < 128) return(whole_copy())
+  n_blocks <- ceiling(n_bytes / block)
+  limit <- n_bytes + 16
+  written <- 16 + 4 * n_blocks
+  starts <- numeric(n_blocks)
+  body <- vector("list", n_blocks)
+  for (index in seq_len(n_blocks)) {
+    starts[[index]] <- written
+    first <- (index - 1) * block
+    size <- min(block, n_bytes - first)
+    shuffled <- .shuffle_bytes(bytes[first + seq_len(size)], item_size)
+    n_streams <- if (split && size == block) item_size else 1L
+    each <- size / n_streams
+    streams <- vector("list", n_streams)
+    for (stream in seq_len(n_streams)) {
+      written <- written + 4
+      room <- min(each, limit - written)
+      if (room <= 0) return(whole_copy())
+      plane <- shuffled[(stream - 1) * each + seq_len(each)]
+      packed <- memCompress(plane, type = "gzip")
+      if (length(packed) > room || length(packed) == each) {
+        if (written + each > limit) return(whole_copy())
+        packed <- plane
+      }
+      streams[[stream]] <- c(.zip_le(length(packed), 4), packed)
+      written <- written + length(packed)
+    }
+    body[[index]] <- unlist(streams, use.names = FALSE)
+  }
+  c(
+    header(flags, written),
+    unlist(lapply(starts, .zip_le, bytes = 4), use.names = FALSE),
+    unlist(body, use.names = FALSE)
+  )
+}
+
 .zarr_put_chunk <- function(store, path, position, bytes, dtype, shuffle = TRUE) {
-  bytes <- .shuffle_bytes(bytes, .zarr_shuffle_size(dtype, shuffle))
-  .store_put(store, .zarr_key(path, .zarr_chunk_key(store, position)), .deflate_chunk(store, bytes))
+  item_size <- .zarr_shuffle_size(dtype, shuffle)
+  encoded <- if (store$zarr_format == 3L && item_size > 0L) {
+    .blosc_frame(bytes, item_size)
+  } else {
+    .deflate_chunk(store, .shuffle_bytes(bytes, item_size))
+  }
+  .store_put(store, .zarr_key(path, .zarr_chunk_key(store, position)), encoded)
 }
 
 # --- Element encodings ------------------------------------------------------

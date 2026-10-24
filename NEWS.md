@@ -30,9 +30,11 @@ read by the matching web app; prepare the data again with this release.
   `obsp/connectivities` as symmetric float32 CSR; and `uns[["cellucid"]]`
   (`schema`, `id`, `name`, `description`, `citation`, `source`, and only the
   launch `defaults` that were set) with `uns[["title"]]`. Chunks hold 2^16
-  values for `X` and 2^18 for arrays read whole, deflated at level 6 (zlib in
-  Zarr v2, gzip in v3) after a byte shuffle on every multi-byte array except
-  the expression values. A `.zarr.zip` stores chunks first in grid order and
+  values for `X` and 2^18 for arrays read whole, deflated at level 6 after a
+  byte shuffle on every multi-byte array except the expression values: in
+  Zarr v2 numcodecs' `shuffle` filter and zlib; in Zarr v3 only codecs of the
+  v3 specification, the `blosc` codec (byte shuffle, zlib level 6, the frames
+  c-blosc writes) on shuffled arrays and gzip on the others. A `.zarr.zip` stores chunks first in grid order and
   the consolidated metadata last, with fixed timestamps and permissions. The
   store is written beside its target and moved into place when complete.
 - R and Python write identical Zarr v2 and v3 stores from the same input:

@@ -18,12 +18,12 @@
 # cellucid_prepare() takes caller-named embedding ids and 1-based columns
 # instead.
 
-.conformance_sha256 <- "9e7e7b443fcdcb4f8891165951459d1cae2c4e198041ddb2ffc3a82577ecb4f6"
+.conformance_sha256 <- "a84646cb66451a4ef86d965c9d65ef1dab41276592274fc9fa5f343344640241"
 
 test_that("both repositories hold the same pinned conformance fixture", {
   expect_pinned_fixture("data_mapping_conformance.json", .conformance_sha256)
   fixture <- cellucid_read_fixture("data_mapping_conformance.json")
-  expect_identical(fixture$version, 3L)
+  expect_identical(fixture$version, 4L)
   expect_identical(
     names(fixture),
     c(

@@ -40,8 +40,9 @@ decode_chunk <- function(bytes, dtype, count) {
 }
 
 # What one array's metadata says, in either Zarr format: its dtype (as the
-# Zarr format 2 name), shape, chunk shape, the byte size a shuffle filter
-# declares (0 for none) and where its chunks are.
+# Zarr format 2 name), shape, chunk shape, the byte size its values are
+# shuffled by (0 for none: format 2's shuffle filter, format 3's blosc codec),
+# whether its chunks are Blosc frames, and where its chunks are.
 array_meta <- function(store, key) {
   if (file.exists(file.path(store, key, ".zarray"))) {
     meta <- store_json(store, file.path(key, ".zarray"))
@@ -51,6 +52,7 @@ array_meta <- function(store, key) {
       shape = unlist(meta$shape),
       chunks = unlist(meta$chunks),
       shuffle = if (length(shuffle)) shuffle[[1L]]$elementsize else 0L,
+      blosc = FALSE,
       key = function(position) if (length(position)) paste(position, collapse = ".") else "0"
     ))
   }
@@ -59,21 +61,69 @@ array_meta <- function(store, key) {
     float32 = "<f4", float64 = "<f8", int8 = "|i1", int16 = "<i2", int32 = "<i4",
     int64 = "<i8", bool = "|b1", string = "|O"
   )
-  shuffle <- Filter(function(codec) identical(codec$name, "numcodecs.shuffle"), meta$codecs)
+  blosc <- Filter(function(codec) identical(codec$name, "blosc"), meta$codecs)
   list(
     dtype = types[[meta$data_type]],
     shape = unlist(meta$shape),
     chunks = unlist(meta$chunk_grid$configuration$chunk_shape),
-    shuffle = if (length(shuffle)) shuffle[[1L]]$configuration$elementsize else 0L,
+    shuffle = if (length(blosc)) blosc[[1L]]$configuration$typesize else 0L,
+    blosc = length(blosc) > 0L,
     key = function(position) paste(c("c", position), collapse = "/")
   )
 }
 
+# The bytes of a Blosc 1 frame of byte-shuffled, zlib-compressed blocks
+# (format 3's blosc codec): the 16-byte header (version, codec version,
+# flags, value size, then the byte size, block size and frame size as
+# little-endian uint32), the start of every block, and in each block one
+# stream per byte of a value (one for a last, shorter block, or with the
+# no-split flag 0x10), each a 4-byte length and its zlib data, or the stream
+# as it is when the length is the stream's size. A whole copy (flag 0x02)
+# holds the bytes after the header, unshuffled.
+blosc_decode <- function(frame) {
+  word <- function(at) readBin(frame[at + 0:3], "integer", size = 4L, endian = "little")
+  flags <- as.integer(frame[[3L]])
+  item_size <- as.integer(frame[[4L]])
+  n_bytes <- word(5L)
+  block <- word(9L)
+  stopifnot(as.integer(frame[[1L]]) == 2L, word(13L) == length(frame), bitwAnd(flags, 0x01L) == 1L)
+  if (bitwAnd(flags, 0x02L) != 0L) {
+    stopifnot(length(frame) == n_bytes + 16L)
+    return(frame[16L + seq_len(n_bytes)])
+  }
+  split <- bitwAnd(flags, 0x10L) == 0L && item_size <= 16L && block %/% item_size >= 128L
+  n_blocks <- ceiling(n_bytes / block)
+  at <- 17L + 4L * n_blocks
+  out <- raw(0)
+  for (index in seq_len(n_blocks)) {
+    stopifnot(word(17L + 4L * (index - 1L)) == at - 1L)
+    size <- min(block, n_bytes - (index - 1L) * block)
+    n_streams <- if (split && size == block) item_size else 1L
+    shuffled <- raw(0)
+    for (stream in seq_len(n_streams)) {
+      length <- word(at)
+      data <- frame[at + 3L + seq_len(length)]
+      at <- at + 4L + length
+      plane <- if (length == size / n_streams) data else memDecompress(data, type = "gzip")
+      stopifnot(length(plane) == size / n_streams)
+      shuffled <- c(shuffled, plane)
+    }
+    out <- c(out, as.vector(t(matrix(shuffled, ncol = item_size))))
+  }
+  stopifnot(at == length(frame) + 1L)
+  out
+}
+
 read_chunk <- function(store, key, meta, position, count) {
   path <- file.path(store, key, meta$key(position))
-  bytes <- memDecompress(readBin(path, "raw", file.size(path)), type = "gzip")
-  if (meta$shuffle > 1L) {
-    bytes <- as.vector(t(matrix(bytes, ncol = meta$shuffle)))
+  bytes <- readBin(path, "raw", file.size(path))
+  if (meta$blosc) {
+    bytes <- blosc_decode(bytes)
+  } else {
+    bytes <- memDecompress(bytes, type = "gzip")
+    if (meta$shuffle > 1L) {
+      bytes <- as.vector(t(matrix(bytes, ncol = meta$shuffle)))
+    }
   }
   decode_chunk(bytes, meta$dtype, count)
 }

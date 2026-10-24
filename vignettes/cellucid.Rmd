@@ -82,7 +82,7 @@ list.files(store, all.files = TRUE, no.. = TRUE)
 
 In the web app at <https://www.cellucid.com>, open a `.zarr.zip` file from your
 computer (see below), or a `.zarr` folder or `.zarr.zip` file published at a web
-address with **Open from link**. In Python:
+address with the **Link or server** address bar. In Python:
 
 ```python
 import anndata

@@ -192,12 +192,14 @@ The store is an AnnData Zarr group (Zarr format 2 unless \code{zarr_format = 3})
 }
 Every element carries the \code{encoding-type} and \code{encoding-version}
 attributes \pkg{anndata} 0.8 and later write. Every chunk of values wider
-than one byte is byte-shuffled (numcodecs' \code{Shuffle} filter; format 3:
-the \code{numcodecs.shuffle} codec), so the similar high bytes of neighbouring
+than one byte is byte-shuffled, so the similar high bytes of neighbouring
 values compress together -- except the expression values themselves, which
-compress best as they are -- and every chunk is compressed with DEFLATE level 6
-(the Zarr compressor \code{\{"id": "zlib", "level": 6\}}; format 3: the
-\code{gzip} codec), which browsers decompress natively. A chunk is the unit of every read: arrays read whole (data
+compress best as they are -- and every chunk is compressed with DEFLATE level 6,
+which browsers decompress natively: in format 2 numcodecs' \code{Shuffle}
+filter and the compressor \code{\{"id": "zlib", "level": 6\}}; in format 3
+the \code{blosc} codec (byte shuffle, zlib level 6) for a shuffled array and
+the \code{gzip} codec for every other, only codecs of the Zarr v3
+specification (\code{numcodecs.shuffle} is not one). A chunk is the unit of every read: arrays read whole (data
 frame columns, embeddings as a chunk of rows with every column, the neighbour
 graph) hold up to 262,144 (\code{2^18}) values per chunk, and the data and
 indices of the expression matrix, which the viewer reads one gene at a time,
