@@ -1,20 +1,15 @@
-# The rule for text the viewer draws verbatim: dataset names, descriptions,
-# source lines, category labels, and every field identifier. It is a
-# cross-writer contract -- the cellucid Python package enforces the same
-# classes in _display_text_defect() -- so the character classes, the
+# The rule for text the viewer draws verbatim: the dataset's name, its
+# description, and its source and citation lines. The character classes, the
 # character names, and the escaping all live in one place.
 
-# Text the viewer prints verbatim -- a category label, a dataset name, a
-# description, a source line -- is drawn with the browser's default white-space
-# handling, in the legend, the field selector, and every exported figure.
-# Characters that carry no glyph therefore change the value without changing
-# the picture: "Liver " and "Liver" are two distinct categories that look
-# identical on screen and in an exported SVG.
+# The dataset's name, description, source and citation are drawn with the
+# browser's default white-space handling, in the dataset picker and the
+# dataset information panel. Characters that carry no glyph therefore change
+# the value without changing the picture: "Atlas " and "Atlas" look identical
+# on screen.
 #
-# All three classes below are rejected rather than repaired. Trimming would
-# rewrite a scientific label the caller never asked to change, and would merge
-# two distinct categories into one, silently moving cells between them. The
-# Python exporter enforces the identical rule in _display_text_defect().
+# All three classes below are rejected rather than repaired: trimming would
+# rewrite text the caller never asked to change.
 #
 # R character vectors cannot hold U+0000, so the control class starts at U+0001.
 .control_character_pattern <- "[\u0001-\u001f\u007f-\u009f]"
@@ -32,9 +27,8 @@
   .edge_whitespace_class,
   "$"
 )
-.whitespace_run_pattern <- paste0(.edge_whitespace_class, "+")
 # Every character the two non-control rejected classes can hold, so an
-# invisible defect is named on screen exactly as the Python exporter names it.
+# invisible defect is named on screen by its Unicode name.
 .display_character_names <- c(
   "0020" = "U+0020 SPACE",
   "00A0" = "U+00A0 NO-BREAK SPACE",
@@ -61,7 +55,7 @@
 )
 
 .describe_character <- function(character) {
-  key <- sprintf("%04X", utf8ToInt(character))
+  key <- sprintf("%04X", .code_points(character))
   named <- unname(.display_character_names[key])
   if (!is.na(named)) {
     return(named)
@@ -107,7 +101,7 @@
 }
 
 .escape_display_text <- function(text) {
-  codepoints <- utf8ToInt(text)
+  codepoints <- .code_points(text)
   if (length(codepoints) == 0L) {
     return("''")
   }
@@ -156,11 +150,11 @@
     if (allow_empty) {
       return(value)
     }
-    stop(arg, " must be a non-empty string.", call. = FALSE)
+    .abort(arg, " must be a non-empty string.")
   }
   defect <- .display_text_defect(value)
   if (!is.null(defect)) {
-    stop(
+    .abort(
       arg,
       " is displayed verbatim, so it must not carry characters that have no ",
       "glyph: ",
@@ -168,87 +162,8 @@
       " ",
       defect,
       ". Cellucid does not remove them for you, because that would change ",
-      "text you did not ask to change. Pass the exact text you want shown.",
-      call. = FALSE
+      "text you did not ask to change. Pass the exact text you want shown."
     )
   }
   value
-}
-
-.validate_category_labels <- function(categories, key) {
-  # Logical and numeric category labels carry no display text to inspect.
-  if (!is.character(categories) || length(categories) == 0L) {
-    return(invisible(categories))
-  }
-  suspect <- !nzchar(categories) |
-    grepl(.control_character_pattern, categories, perl = TRUE) |
-    grepl(.invisible_character_pattern, categories, perl = TRUE) |
-    grepl(.edge_whitespace_pattern, categories, perl = TRUE)
-  if (any(suspect)) {
-    defects <- vapply(
-      categories[suspect],
-      function(label) {
-        if (!nzchar(label)) {
-          return("'' is empty")
-        }
-        paste0(.escape_display_text(label), " ", .display_text_defect(label))
-      },
-      character(1),
-      USE.NAMES = FALSE
-    )
-    shown <- utils::head(defects, 10L)
-    listed <- paste0("  - ", shown, collapse = "\n")
-    remainder <- length(defects) - length(shown)
-    if (remainder > 0L) {
-      listed <- paste0(listed, "\n  - ... and ", remainder, " more")
-    }
-    counted <- if (length(defects) == 1L) {
-      "1 label"
-    } else {
-      paste0(length(defects), " labels")
-    }
-    stop(
-      "Categorical field '",
-      key,
-      "' has ",
-      counted,
-      " the viewer cannot show as written:\n",
-      listed,
-      "\nLabels are drawn verbatim in the legend, the field selector, and ",
-      "exported figures, so these characters are invisible on screen while ",
-      "still making the label a different value from the one it looks like. ",
-      "Cellucid does not clean them for you: trimming a label rewrites your ",
-      "annotation and can merge two categories into one, moving cells between ",
-      "them. Clean the column and export again, for example:\n",
-      "    obs[['",
-      key,
-      "']] <- factor(trimws(as.character(obs[['",
-      key,
-      "']]), whitespace = ",
-      '"[\\\\h\\\\v]"',
-      "))",
-      call. = FALSE
-    )
-  }
-
-  collapsed <- gsub(.whitespace_run_pattern, " ", categories, perl = TRUE)
-  collision <- which(duplicated(collapsed))
-  if (length(collision) > 0L) {
-    later <- collision[[1L]]
-    first <- match(collapsed[[later]], collapsed)
-    stop(
-      "Categorical field '",
-      key,
-      "' labels ",
-      .escape_display_text(categories[[first]]),
-      " and ",
-      .escape_display_text(categories[[later]]),
-      " are stored as different categories but are drawn identically: a run ",
-      "of whitespace collapses to a single space in the legend, the field ",
-      "selector, and exported figures. Rename one of them so the two ",
-      "categories can be told apart, then export again.",
-      call. = FALSE
-    )
-  }
-  invisible(categories)
 }

@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
-Title: Export Single-Cell Data to the Cellucid Viewer Format
-Version: 0.9.4
+Title: Prepare and View Single-Cell Data in the Cellucid Viewer
+Version: 0.9.5
 Config/cellucid/version-marker: CELLUCID_VERSION
 Authors@R: c(
     person(
@@ -10,26 +10,46 @@ Authors@R: c(
       role = c("aut", "cre")
     )
   )
-Description: Exports single-cell embeddings, metadata, gene expression, and
-    graph connectivity to the binary/JSON interchange format consumed by the
-    Cellucid WebGL viewer. The primary entry point is cellucid_prepare(),
-    which mirrors the prepare() function in the cellucid Python package.
+Description: Writes single-cell embeddings, cell and gene metadata, gene
+    expression, neighbour graphs, and vector fields as a 'Cellucid'-ready
+    'AnnData' store: a standard 'AnnData' 'Zarr' store, as a folder or as one
+    ZIP file, with gene-major expression and the dataset's name, citation and
+    launch defaults, which the 'Cellucid' web viewer opens directly and the
+    Python 'anndata' package reads. The primary entry point is
+    cellucid_prepare(); cellucid_transition_drift() computes a vector field
+    from a cell-cell transition matrix. cellucid_view() and cellucid_serve()
+    open a 'Seurat', 'SingleCellExperiment' or 'SummarizedExperiment' object,
+    or a file, in the 'Cellucid' viewer from a local 'httpuv' web server,
+    with commands and events over a 'WebSocket'; the viewer's web
+    application is downloaded from <https://www.cellucid.com> at first use
+    and kept in the user's cache folder.
 License: BSD_3_clause + file LICENSE
 Encoding: UTF-8
 Depends:
-    R (>= 4.3.0)
+    R (>= 4.1.0)
 Imports:
+    curl,
+    httpuv (>= 1.6.0),
     jsonlite,
+    later,
     methods,
+    stats,
+    tools,
     utils
 Suggests:
+    DelayedArray,
     knitr,
     Matrix,
     rmarkdown,
-    testthat (>= 3.1.0)
+    S4Vectors,
+    SeuratObject,
+    SingleCellExperiment,
+    SummarizedExperiment,
+    testthat (>= 3.2.1)
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 NeedsCompilation: yes
+SystemRequirements: zlib
 URL: https://github.com/theislab/cellucid-r,
     https://theislab.github.io/cellucid-r/
 BugReports: https://github.com/theislab/cellucid-r/issues

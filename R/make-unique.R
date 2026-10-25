@@ -31,17 +31,25 @@
 # report on a subset of the positions.
 .make_unique_names <- function(names, index = NULL, join = "-") {
   if (!is.character(join) || length(join) != 1L || is.na(join) || !nzchar(join)) {
-    stop("join must be one non-empty string.", call. = FALSE)
+    .abort("join must be one non-empty string.")
   }
   if (is.factor(names)) {
     names <- as.character(names)
   }
+  # Distinct, non-empty strings are already unique: the rule changes nothing,
+  # and a million cell names are checked in one hashed pass.
+  if (is.character(names) && !anyNA(names) && all(nzchar(names)) && !anyDuplicated(names) &&
+      (is.null(index) || length(index) == length(names))) {
+    return(list(
+      names = names, renamed = list(), filled_from_index = 0L,
+      filled = names, from_index = logical(length(names))
+    ))
+  }
   values <- if (is.list(names)) names else as.list(names)
   n <- length(values)
   if (!is.null(index) && length(index) != n) {
-    stop(
-      "index holds ", length(index), " names but the name list holds ", n, ".",
-      call. = FALSE
+    .abort(
+      "index holds ", length(index), " names but the name list holds ", n, "."
     )
   }
   filled <- character(n)
@@ -91,10 +99,15 @@
   }
 
   # An environment is a hash set keyed by exact string; names are compared
-  # byte for byte, exactly as Python compares str.
+  # code point for code point, exactly as Python compares str. Its keys are
+  # the names' UTF-8 bytes (.symbol_keys()): in an R session that is not
+  # UTF-8, a name holding a Greek alpha would otherwise become the symbol
+  # "<U+03B1>", with a warning each time, and equal the name "<U+03B1>".
+  keys <- .symbol_keys(filled)
+  join_key <- .symbol_keys(join)
   taken <- new.env(hash = TRUE, parent = emptyenv(), size = max(1L, 2L * n))
-  for (value in filled) {
-    assign(value, TRUE, envir = taken)
+  for (key in keys) {
+    assign(key, TRUE, envir = taken)
   }
   seen <- new.env(hash = TRUE, parent = emptyenv(), size = max(1L, n))
   counters <- new.env(hash = TRUE, parent = emptyenv())
@@ -102,25 +115,27 @@
   renamed <- list()
   for (position in seq_len(n)) {
     value <- filled[[position]]
-    if (!exists(value, envir = seen, inherits = FALSE)) {
-      assign(value, TRUE, envir = seen)
+    key <- keys[[position]]
+    if (!exists(key, envir = seen, inherits = FALSE)) {
+      assign(key, TRUE, envir = seen)
       result[[position]] <- value
       next
     }
-    counter <- if (exists(value, envir = counters, inherits = FALSE)) {
-      get(value, envir = counters, inherits = FALSE)
+    counter <- if (exists(key, envir = counters, inherits = FALSE)) {
+      get(key, envir = counters, inherits = FALSE)
     } else {
       0L
     }
     repeat {
       counter <- counter + 1L
-      candidate <- paste0(value, join, counter)
-      if (!exists(candidate, envir = taken, inherits = FALSE)) {
+      candidate_key <- paste0(key, join_key, counter)
+      if (!exists(candidate_key, envir = taken, inherits = FALSE)) {
         break
       }
     }
-    assign(value, counter, envir = counters)
-    assign(candidate, TRUE, envir = taken)
+    assign(key, counter, envir = counters)
+    assign(candidate_key, TRUE, envir = taken)
+    candidate <- paste0(value, join, counter)
     result[[position]] <- candidate
     renamed[[length(renamed) + 1L]] <- c(value, candidate)
   }
@@ -142,10 +157,6 @@
   paste(format(value), collapse = ", ")
 }
 
-.plural <- function(count, singular, plural) {
-  if (count == 1) singular else plural
-}
-
 # The one-line note that reports what making names unique changed, shared
 # word for word with cellucid-python and the web app. Names are quoted with
 # plain single quotes and never escaped, and counts carry thousands
@@ -154,7 +165,7 @@
   parts <- character(0)
   if (filled_from_index > 0) {
     if (is.null(source)) {
-      stop("The var index cannot fill names from itself.", call. = FALSE)
+      .abort("The var index cannot fill names from itself.")
     }
     parts <- c(parts, paste0(
       .format_count(filled_from_index),

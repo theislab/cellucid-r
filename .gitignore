@@ -20,11 +20,8 @@ inst/doc/
 vignettes/*.html
 vignettes/*.pdf
 
-# pkgdown (local builds; CI deploys separately)
-docs/site/
-
-# Common exports folder name from examples
-exports/
+# pkgdown (local builds into docs/, its default destination; CI deploys separately)
+docs/
 
 # macOS
 .DS_Store

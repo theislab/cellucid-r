@@ -1,4 +1,342 @@
-# cellucid 0.9.4 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.5 <!-- CELLUCID_VERSION -->
+
+Version 0.9.5 is the CRAN submission release.
+
+It is a patch release on 0.9.4 and stays in step with the Python package of
+the same version. It breaks with every earlier release: the prepared export
+format is removed, and `cellucid_prepare()` writes a Cellucid-ready AnnData
+instead, a standard AnnData Zarr store that Python's anndata reads and the
+Cellucid web app opens directly. The contract is the documentation's
+"Cellucid-ready AnnData specification" page. An export written by 0.9.4 is not
+read by the matching web app; prepare the data again with this release.
+
+## Writing a Cellucid-ready AnnData (breaking)
+
+- `cellucid_prepare(out_path, format, embeddings, dataset_id, dataset_name,
+  ...)` takes a required `format` right after `out_path`: `"zarr"` (a `.zarr`
+  folder of small files, the way to publish on GitHub: no file over 100 MB, no
+  LFS) or `"zarr.zip"` (the same store as one `.zarr.zip` file, for hosts that
+  serve single files or a local file). It has no default: a missing `format`
+  is reported with the other missing required arguments, naming both choices.
+  A value is matched as `match.arg()` matches, anything else is refused with
+  the choices, and `out_path` must end in the suffix of `format`. `zarr_format
+  = 3` writes Zarr v3 (`zarr.json` documents, `c/...` chunk keys, consolidated
+  metadata in the root `zarr.json`); Zarr v2 is the default. There is no
+  `"h5ad"`: the package writes no HDF5 and depends on no HDF5 library;
+  Python's `cellucid.prepare(format = "h5ad")` writes `.h5ad`.
+- The store holds `X` gene-major (CSC from a sparse matrix, stored zeros
+  dropped) in float32, or float64 when the genes kept hold integer counts
+  above 2^24; `obs` and `var` with anndata's own encodings and pandas'
+  category code widths (int8 below 127 categories, int16 below 32,767, int32
+  beyond); every embedding whole in `obsm` (float32, unnormalized);
+  `obsp/connectivities` as symmetric float32 CSR; and `uns[["cellucid"]]`
+  (`schema`, `id`, `name`, `description`, `citation`, `source`, and only the
+  launch `defaults` that were set) with `uns[["title"]]`. Chunks hold 2^16
+  values for `X` and 2^18 for arrays read whole, deflated at level 6 after a
+  byte shuffle on every multi-byte array except the expression values: in Zarr
+  v2 numcodecs' `shuffle` filter and zlib; in Zarr v3 only codecs of the v3
+  specification, the `blosc` codec (byte shuffle, zlib level 6, the frames
+  c-blosc writes) on shuffled arrays and gzip on the others. A `.zarr.zip`
+  stores chunks first in grid order and the consolidated metadata last, with
+  fixed timestamps and permissions. The store is written beside its target and
+  moved into place when complete.
+- R and Python write identical Zarr v2 and v3 stores from the same input:
+  every metadata document (encodings, dtypes, shapes, chunks, codecs, fill
+  values) and every value, checked by `tests/testthat/test-cross-writer.R`.
+  Every `NaN` and `NA` in a float array is written as numpy's canonical quiet
+  NaN on every platform (R's `NaN` has its sign bit set on x86-64).
+- New arguments: `out_path`, `format`, `zarr_format`, `citation_text`,
+  `citation_url`, `latent_key` (the `embeddings` entry the outlier filter
+  measures in) and `normalize_embeddings`. Choose the columns an embedding
+  opens on with `embedding_defaults = list("3d" = list(key = "X_pca", columns
+  = 1:3))`.
+- Removed with the export format: the `latent_space` (name an embedding with
+  `latent_key`), `out_dir`, `obs_categorical_dtype`, `var_quantization`,
+  `obs_continuous_quantization`, `compression`, `var_gene_name_columns`,
+  `source_citation` (now `citation_text` and `citation_url`), `created_at` and
+  `centroid_outlier_quantile` arguments, `cellucid_embedding()` (store the
+  whole array), and the cross-process export lock and transaction journal.
+
+## Seurat and Bioconductor objects, several modalities
+
+- `cellucid_prepare(data = )` writes a Seurat (Seurat 3 and later,
+  SeuratObject 4 and 5, `Assay` and `Assay5`, split layers joined on a copy),
+  SingleCellExperiment (1.8 and later) or SummarizedExperiment object
+  directly; every other argument defaults to what the object holds and an
+  argument given replaces that component. The mapping is the web app's for the
+  same object saved with `saveRDS()`: `meta.data`/`colData` as `obs`,
+  reductions/`reducedDims` as `X_<name>`, `data` (else `counts`) or
+  `logcounts` (else `counts`) as `X` (one matrix per modality, as the
+  Cellucid-ready AnnData contract has it), `var.features` as
+  `highly_variable`, the first symmetric SNN graph or `colPair` as
+  `obsp/connectivities`, and `misc$cellucid`/`metadata(x)$cellucid` as the
+  identity and launch defaults. BPCells and DelayedArray (HDF5Array) matrices
+  are read in blocks of whole cells, joined once at the end. Objects too old
+  to read are refused with the line that updates them, and one without an
+  embedding with the line that computes one. An assay holding the dataset's
+  cells in another order than its `meta.data` (a Seurat v5 layer with its own
+  cells, `modalities = "ADT"`) is reordered to the dataset's cells, and an
+  assay holding only some of the cells is refused with what to do (keep those
+  cells, or write it beside an assay of every cell as a MuData). An AnnData's
+  `X` is checked to have a row per cell before anything is written. A factor
+  with an `NA` level (`addNA()`) is written with those cells missing (code
+  -1), as pandas stores them; they get no outlier quantile.
+- Several Seurat assays, or a SingleCellExperiment's alternative experiments,
+  are written as a Cellucid-ready MuData (Zarr only; R writes no HDF5):
+  MuData's own layout, which `mudata.read_zarr()` reads and Python's
+  `cellucid.prepare(data = mdata)` writes identically
+  (`tests/testthat/test-cross-writer.R`). `modalities` chooses the modalities
+  and their order (the active assay or main experiment first by default), and
+  the launch default `modality` names the one the viewer opens with; without
+  it the viewer applies the shared rule (the first named `rna`, `gex`, `gene
+  expression`, `gene_expression` or `sct`, else the first), pinned by the
+  data-mapping conformance fixture.
+- New arguments `data`, `modalities` and `modality`; `embeddings`,
+  `dataset_id` and `dataset_name` are now required only without `data`.
+- `gene_identifiers` keeps genes of an object's genes x cells matrix without
+  copying its rows: the kept genes are positions the gene-major arrays read
+  in place.
+- The viewer opens an object on its UMAP under the R world's conventional
+  names, as on Scanpy's `X_umap`: after `X_umap_1d`/`X_umap_2d`/`X_umap_3d`,
+  the first 1- to 3-column one of `X_umap` (a Seurat `umap` reduction),
+  `X_UMAP` (a SingleCellExperiment `UMAP` reducedDim), `X_wnn.umap` and
+  `X_ref.umap` is the default UMAP. The rule is the shared data-mapping
+  conformance fixture's (version 6).
+
+## The viewer
+
+- `cellucid_view()` opens a Seurat, SingleCellExperiment or
+  SummarizedExperiment object, or any file the web app reads (registry:
+  `inst/input_formats.json`), in the RStudio or Positron Viewer pane or a
+  browser; `cellucid_serve()` serves it for a browser elsewhere (an SSH
+  tunnel) and prints the address. No Python is involved. An object is served
+  from memory as the Cellucid-ready AnnData (or MuData) Zarr store
+  `cellucid_prepare()` writes for it -- the same plan, the same arrays and
+  values, every array read back from both and compared (dtype, shape, values)
+  by `tests/testthat/test-served-store.R`, with zarr-python where one is found
+  -- uncompressed: it declares no compressor and no shuffle, since the browser
+  reads it over loopback, where deflating each chunk on R's one main thread
+  cost far more than the bytes it saved (files `cellucid_prepare()` writes
+  stay compressed). Every chunk is made only when the viewer asks for it, in
+  one native pass from its R vector (`src/chunks.c`); only chunks made by a
+  transform (text, a matrix block, a gene-major block) are kept, in a
+  least-recently-used cache of `cache_bytes`. An object's genes x cells sparse
+  matrix is never transposed: reading a gene makes the block of genes around
+  it (about eight values a cell) with one binary search a cell, and the
+  block is kept within `cache_bytes`. On 1,000,000 cells x 5,000 genes (150
+  values a cell) in a real browser, the first gene takes 0.34 s, a 100-gene
+  batch 0.13 s, and R's heap peaks 600 MB over the object; on the
+  561,947-cell Suo atlas, 0.22 s, 0.05 s and 315 MB. A 100,000-cell object starts serving in 0.7 s and shows
+  its first view (cells, annotations, UMAP) in 0.1 s more. A file is
+  served from disk with exact `Range` answers. The server (`httpuv`) runs in
+  the background, so the console stays usable; it mirrors the routes of
+  cellucid-python's server, refuses a `Host` that does not name it (421;
+  checked unless the server is bound to a non-loopback IP address with no
+  `allowed_hosts`, cellucid-python's rule) and a WebSocket from a foreign
+  origin (403), and defaults to port 8765 (the address Google sign-in
+  accepts), taking the next free port when that one is taken. Several viewers
+  run at once; `cellucid_stop()`, `cellucid_stop_all()` and
+  `cellucid_viewers()` manage them.
+- The viewer channel: one WebSocket per viewer (`/_cellucid/ws`, the protocol
+  of the web app's `data/viewer-protocol.js`, pinned by the shared fixture
+  `tests/testthat/fixtures/viewer_protocol.json`). `cellucid_highlight()`,
+  `cellucid_clear_highlights()`, `cellucid_color_by()`,
+  `cellucid_set_visibility()`, `cellucid_reset_camera()`, `cellucid_freeze()`
+  and `cellucid_set_data_mapping()` send commands (queued until the viewer
+  connects); a highlight and a visibility change are binary frames, their
+  cells little-endian `uint32` checked and written in one native pass (two
+  million cells: 7.6 MB in 0.02 s, highlighted in the viewer 0.21 s after the
+  call; ten million: 0.07 s and 0.93 s); `cellucid_on()`, `cellucid_off()`, `cellucid_selection()` (cell
+  positions and names), `cellucid_wait_ready()` and `cellucid_session()` (the
+  viewer's `.cellucid-session` file) take its events. Events (`hover`,
+  `click`, `selection`) name cells by 1-based position, as every command
+  does, and also by name (`cell_name`) for an object. An event naming a cell the
+  dataset does not have closes the channel (1008), and nothing a socket sends
+  after such a close is delivered. The channel is pinged every 20 seconds (a
+  `ping` command, whose `pong` is not delivered to hooks), as
+  cellucid-python's is, so a proxy does not close an idle viewer; a socket
+  that does not say hello within 60 seconds is closed.
+- The viewer id, token and request ids come from the operating system's
+  cryptographic generator (`src/random.c`), not R's: `set.seed()` cannot
+  predict the token, and opening a viewer leaves the caller's `.Random.seed`
+  as it was.
+- The viewer page's address names a host program's viewer with `?viewer=true`,
+  and `/_cellucid/info` names the program serving it: `runtime = "r"`, which
+  the viewer shows in its Dataset box ("R"). Both are pinned in the shared
+  viewer protocol file (`page`, `runtimes`).
+- The viewer's server answers the store's bytes with `Content-Encoding:
+  identity` (httpuv would gzip a range on R's main thread and drop its
+  `Content-Length`), and a `HEAD` carries the `Content-Length` of
+  its `GET`, so the web app's Zarr reader can size every key. A range of a
+  file is never read whole into memory: the whole file is sent from disk by
+  httpuv, a range of up to 8 MiB is read with one seek, and a longer one is
+  copied block by block (8 MiB) into a file httpuv sends and removes. A
+  request path that is not valid percent-encoded UTF-8 (`%00`, a lone `%ff`)
+  is answered 400, and a failed request 500 without the internal error text
+  (which goes to the R console).
+- A dense genes x cells assay is served through its transpose block by block,
+  never transposed whole, and so is a sparse one (its gene-major blocks,
+  above); `cellucid_view()`'s help page states what `cache_bytes` holds.
+- The web app is downloaded at first use from www.cellucid.com into
+  `file.path(tools::R_user_dir("cellucid", "cache"), "web")`, checked file by
+  file against the build's SHA-256 inventory with cellucid-python's rules, and
+  replaced whole when a new build is published; a verified cache is used
+  offline. `cellucid_clear_web_cache()` removes it. Each file is asked for as
+  stored (`Accept-Encoding: identity`, as Python's web cache asks), since
+  www.cellucid.com (GitHub Pages) gzips what a client accepts gzipped and
+  declares the compressed length; the test source gzips as GitHub Pages does.
+- New `cellucid_debug_connection(viewer, timeout = 5)`: the report
+  cellucid-python's `AnnDataViewer.debug_connection()` gives (the server's
+  routes, the store's `HEAD` and first byte, a ping and a debug snapshot over
+  the channel), which makes the `pong` and `debug_snapshot` events reachable.
+- `quiet = TRUE` also silences the notes reading an object writes; cells given
+  as `TRUE`/`FALSE` with an `NA` are refused; a `misc$cellucid$citation` that
+  is not a list is named in a note; a failed `VariableFeatures()` is named
+  rather than giving no highly variable genes; a Zarr store whose own identity
+  cannot be read is said to be damaged; a server that does not stop is
+  reported and kept listed, so `cellucid_stop_all()` can try again; unloading
+  the package stops every viewer first; web assets are checked against their
+  digest once and then served from disk.
+
+## Sessions
+
+- New `cellucid_apply_session(data, session, ...)`: a saved session's
+  highlight groups (one `TRUE`/`FALSE` column each) and user-defined fields
+  (factors, or copied numbers) added to a Seurat object's `meta.data` or an
+  experiment's `colData`, with the session recorded in `misc$cellucid$session`
+  / `metadata(x)$cellucid$session`. `session` is a `.cellucid-session` file or
+  an open viewer. The rules are cellucid-python's
+  `apply_cellucid_session_to_anndata()`, check for check, held to the same
+  web-app-written session file (`tests/testthat/fixtures/session_format2/`,
+  pinned in both repositories); every check runs before anything is added. The
+  session reader is new: the file's framing and manifest, the data mapping
+  rules (now run against the shared conformance fixture's `dataMapping` and
+  `mappingModality` cases in R too), and the cell-set and user-defined-code
+  codecs in C.
+
+## Outlier quantiles, vector fields and graphs
+
+- With `latent_key`, `cellucid_prepare()` stores the latent-space outlier
+  quantiles of every factor, character or logical `obs` column in
+  `uns[["cellucid"]][["outlierQuantiles"]]` (`latentKey`, `minPoints` =
+  `centroid_min_points` or 10, and one float32 array per field, `NaN` where a
+  cell has none), so the viewer filters outliers without reading the latent
+  space. They are computed in C (`src/latent_outliers.c`), byte for byte what
+  Python's `prepare()` stores and what the web app computes, pinned by the
+  shared conformance fixture
+  (`tests/testthat/fixtures/latent_outlier_conformance.json`).
+- Vector fields follow scVelo's naming on any embedding: `vector_fields =
+  list(velocity = list(X_umap = v))` writes `obsm[["velocity_umap"]]`, with as
+  many columns as the embedding. An embedding whose key does not start with
+  `X_`, an array of another width, two fields that would share a key, and a
+  key the viewer would read as another field or as an embedding are refused
+  before anything is written. `vector_field_default` names the field
+  (`"velocity"`) and must be drawn on an embedding the viewer shows when the
+  store opens.
+- New `cellucid_transition_drift(transition_matrix, embedding,
+  normalize_rows)` computes each cell's drift in an embedding's coordinates
+  from a cell-cell transition matrix (CellRank's, for example): `T %*% E - E`,
+  with the rows of `T` divided by their sums first when `normalize_rows =
+  TRUE` (required; a zero row sum is refused). It is Python's
+  `compute_transition_drift()` operation for operation, held to the same
+  results by a shared conformance fixture
+  (`tests/testthat/fixtures/transition_drift_conformance.json`). Store the
+  result with `cellucid_prepare(vector_fields = list(T_fwd = list(X_umap =
+  drift)))`.
+- A sparse neighbour graph's stored zeros are dropped (`Matrix::drop0()`)
+  instead of refusing the graph; duplicate coordinates are still refused.
+
+## Windows R 4.1: 32-bit R and sessions that are not UTF-8
+
+- On 32-bit R (the i386 half of Windows R 4.1) every gzip or zlib stream was
+  refused with "inflate: a stream of 4 GiB or more is not one session frame",
+  so `cellucid_apply_session()` and serving a `.zarr.zip` failed: the check
+  cast `UINT32_MAX` to `R_xlen_t`, an `int` there, which made it -1. The
+  inflater now hands zlib its input and output in pieces and refuses only an
+  output longer than one R raw vector, and every size the C code takes from R
+  is checked as a double before it is cast to `R_xlen_t` or multiplied.
+- In an R session whose native encoding is not UTF-8 (Windows R before 4.2,
+  which runs in CP1252; a C or ISO-8859 locale elsewhere), every message,
+  warning and error reaches its handler with the package's exact text.
+  `message()`, `warning()` and `stop()` re-encoded it to the code page, so the
+  arrow (U+2192) of the note on repeated names ("1 duplicate name was made
+  unique, e.g. ...") arrived as `<U+2192>`. They are raised as condition
+  objects now, and a test refuses a `stop()`, `warning()` or `message()` given
+  strings.
+- In such a session, a Seurat or Bioconductor object whose `meta.data`,
+  `colData` or `rowData` column is named with a character the code page lacks
+  (Greek, Cyrillic, CJK) was refused as "obs column '<U+03B1>' contains a
+  character that cannot appear in a file name": the columns were rebuilt with
+  `as.data.frame()`, which turns each name into a symbol. They are kept as
+  they are.
+- Repeated cell and gene names holding such characters are made unique
+  without a warning per name, and a name is never taken for its escape
+  (`"<U+03B1>"`): the hash set behind the rule, the served store's keys and
+  its chunk cache are keyed by each string's UTF-8 bytes.
+- Text read from bytes is read as UTF-8 in every session: a Zarr folder's
+  metadata (and the consolidated metadata the server makes for a folder that
+  has none), the browser's text frames and binary event headers, the web
+  build's inventory and the server's own JSON. In a code-page session a
+  non-ASCII character was misread as several.
+- The viewer's server decodes a request path as UTF-8, so a served key with a
+  non-ASCII character (an `obs` column named in Greek) is found, and hands
+  httpuv each file it streams by its UTF-8 name, the only one httpuv opens: in
+  a CP1252 session a store, the web app's cache or the temporary folder under
+  a user folder with an accented name was not served.
+- Categories of a character column are sorted in code-point order whatever
+  each string's encoding, as Python's `prepare()` sorts them: a radix sort
+  compares the bytes as R holds them, so a latin1 e-acute sorted after a UTF-8
+  Greek letter.
+- A dataset name, description, source or citation held in latin1 or the
+  native encoding is reported in the usual words when it carries a defect (a
+  trailing space); reading its characters as UTF-8 failed with "missing value
+  where TRUE/FALSE needed". Data-mapping keys and session field names are
+  compared by code point the same way.
+
+## Package
+
+- The installation guide names the one extra step SeuratObject needs on R
+  older than 4.4: install Matrix 1.6-5 first
+  (`remotes::install_version("Matrix", version = "1.6-5")`), because
+  SeuratObject 5 needs Matrix 1.6-4 or later and CRAN's current Matrix needs
+  R 4.4. CI checks those R versions the same way.
+- Messages, errors, warnings and `print()` of a viewer make a count and its
+  noun agree ("1 row", "1 cell"; they read "1 rows"): the noun comes from one
+  internal `.plural()`, and a test refuses `paste0(n, " cells")`.
+- `cellucid_serve()` and `cellucid_view()` refuse an h5Seurat file before
+  serving it, in the words of the input format registry the web app and
+  `cellucid serve` use too: it is not opened; read it with
+  `SeuratDisk::LoadH5Seurat()` and pass the object, or save it with
+  `saveRDS()`.
+- R 4.1 or later (was 4.3); CI checks R 4.1, 4.2, 4.3, oldrel, release and
+  devel, with every suggested package (SeuratObject 4 and 5,
+  SingleCellExperiment) and with none. Imports `httpuv`, `later` and `curl`
+  for the viewer; SeuratObject, SingleCellExperiment, SummarizedExperiment,
+  S4Vectors and DelayedArray are suggested, with testthat 3.2.1 or later (the
+  tests mock values as well as functions). A test refuses base R functions and
+  syntax newer than R 4.1, checked against the list R 4.1 itself writes; the
+  fixture SHA-256 pins and the citation checks use the package's own SHA-256,
+  so they run on every supported R (they needed `tools::sha256sum()`, which
+  is R 4.5, or a system tool).
+- `SystemRequirements: zlib`: the C code links zlib (`-lz`) for the session
+  codecs and the exact gzip and zlib inflater, so a Linux build needs its
+  development headers (`zlib1g-dev`, `zlib-devel`).
+- Large matrices are checked in one pass in C (finiteness, float32 range,
+  stored zeros, the dtype rule) with no copy, and a SHA-256 in C checks the
+  web build on every R version.
+- Every JSON text read (Zarr metadata, the viewer's frames, the web build's
+  inventory) is parsed with `jsonlite::parse_json()`, which never reads a
+  string that names a file or URL from that file or URL, as `fromJSON()` does.
+- A gzip or zlib stream is inflated in C with exact checks; base R's
+  `memDecompress()` never returns on two concatenated gzip members, which a
+  damaged Zarr chunk could hold.
+- Tutorials on docs.cellucid.com, each run end to end: "Explore a Seurat
+  object from R" (`cellucid_view()`, commands from the console, the cells you
+  select back in R), "Share a SingleCellExperiment on GitHub"
+  (`cellucid_prepare(data = sce, format = "zarr")`) and "CITE-seq: a Seurat
+  object with RNA and ADT" (a Cellucid-ready MuData, the Modality select).
+
+# cellucid 0.9.4
 
 Version 0.9.4 is the CRAN submission release.
 

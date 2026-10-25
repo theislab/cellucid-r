@@ -4,284 +4,428 @@
 % cellucid_prepare(), so the two cannot drift apart.
 \name{cellucid_prepare}
 \alias{cellucid_prepare}
-\title{Export single-cell data to the Cellucid viewer format}
+\title{Write single-cell data as a Cellucid-ready AnnData (or MuData) store}
 \usage{
 cellucid_prepare(
-  latent_space = NULL,
+  out_path,
+  format,
+  data = NULL,
+  embeddings = NULL,
+  dataset_id = NULL,
+  dataset_name = NULL,
   obs = NULL,
   var = NULL,
   gene_expression = NULL,
-  var_gene_id_column = NULL,
-  var_gene_name_columns = NULL,
-  gene_identifiers = NULL,
   connectivities = NULL,
-  out_dir = file.path(getwd(), "exports"),
-  obs_keys = NULL,
-  centroid_outlier_quantile = 0.95,
-  centroid_min_points = 10,
-  force = FALSE,
-  var_quantization = NULL,
-  obs_continuous_quantization = NULL,
-  obs_categorical_dtype,
-  compression = NULL,
-  dataset_name,
+  vector_fields = NULL,
+  modalities = NULL,
+  gene_identifiers = NULL,
   dataset_description = NULL,
-  dataset_id,
+  citation_text = NULL,
+  citation_url = NULL,
   source_name = NULL,
   source_url = NULL,
-  source_citation = NULL,
-  embeddings,
   embedding_defaults = NULL,
-  vector_fields = NULL,
+  latent_key = NULL,
+  obs_keys = NULL,
+  var_gene_id_column = NULL,
   vector_field_default = NULL,
-  created_at = NULL
+  normalize_embeddings = NULL,
+  centroid_min_points = NULL,
+  modality = NULL,
+  zarr_format = NULL,
+  force = FALSE
 )
 }
 \arguments{
-\item{latent_space}{Numeric matrix-like of shape \code{(n_cells, n_dims)}. Required for per-cell outlier quantile calculations for categorical fields: a cell's quantile is the share of its category at its distance to the category's centre or closer. It is computed exactly as \code{cellucid-python} and the Cellucid viewer compute it, bit for bit: the values rounded to float32 and widened to double, centroid sums in cell order, squared distances in column order, the share as float32.}
-\item{obs}{A \code{data.frame} of cell metadata with \code{n_cells} rows.
-Every string category label must be text the viewer can show as written; see
-the note on displayed text below.}
-\item{var}{Optional \code{data.frame} of feature metadata with \code{n_genes} rows. Required if \code{gene_expression} is provided.}
-\item{gene_expression}{Optional numeric matrix-like of shape \code{(n_cells, n_genes)}. Every value must be finite and, for unquantized output, representable as a nonzero finite float32 value unless it is exactly zero. Rows are always interpreted as cells; Cellucid never transposes the matrix or infers its semantic orientation from \code{var}.}
-\item{var_gene_id_column}{Column name in \code{var} containing the default gene
-names. Use \code{NULL} (default) to use \code{rownames(var)}; that requires
-row names a caller actually set, because a \code{data.frame} that never had any
-reports the automatic sequence \code{"1"} to \code{"n_genes"} and those are row
-numbers, not gene identifiers. Every string,
-including \code{"index"}, names that exact column. Whatever this selects is
-recorded faithfully: Cellucid performs no symbol lookup and ships no mapping, so
-the caller decides what a gene is called. A column of text or a factor names
-genes as it is, and an integer column by its digits (\code{7157L} is
-\code{"7157"}), the rule the Cellucid viewer, \code{cellucid serve} and
-\code{cellucid-python} apply to the same column; a double or logical column
-cannot name genes and is refused. An empty value (\code{NA} or
-\code{""}) takes the row's name from \code{rownames(var)}, and repeated names are
-made unique the way anndata's \code{var_names_make_unique()} does it: the second
-\code{"MATR3"} becomes \code{"MATR3-1"}. What was changed is reported as a
-message and recorded in \code{var_manifest.json}.}
-\item{var_gene_name_columns}{Optional character vector of further \code{var}
-columns the viewer offers as alternative gene names, such as
-\code{"gene_symbols"} beside Ensembl row names. Each column is resolved with the
-same rule as \code{var_gene_id_column} and stored as metadata in the
-\code{gene_name_sets} list of \code{var_manifest.json}; no expression payload is
-duplicated. A column may be listed once and may not repeat
-\code{var_gene_id_column}. Requires \code{gene_expression}.}
-\item{gene_identifiers}{Optional character vector specifying which genes to
-export. If \code{NULL}, all genes are exported. Identifiers must be distinct and
-must all be present among the default gene names after repeated names were made
-unique. Payload files are named by integer index, so
-an identifier is never a path; the exported ones must additionally be text the
-viewer can draw exactly as stored, exactly as \code{obs_keys} narrows which
-observation keys are held to that rule. A \code{var} row this argument leaves
-out reaches no manifest and is not checked against it.}
-\item{connectivities}{Optional adjacency/connectivity matrix of shape \code{(n_cells, n_cells)}. Sparse matrices from the \pkg{Matrix} package are supported. Weights must be finite and non-negative, the matrix must be exactly symmetric in topology and weight, sparse coordinates must be unique and omit stored zero values, and its diagonal must be exactly zero.}
-\item{out_dir}{Output directory path. Defaults to \code{file.path(getwd(), "exports")}.}
-\item{obs_keys}{Optional character vector of column names in \code{obs} to export. If \code{NULL}, all columns are exported. Exported keys must be distinct and must be text the viewer can draw exactly as stored; see the note on displayed text below. Numeric observation fields must contain only finite values and, for unquantized output, every nonzero value must remain nonzero and finite as float32.}
-\item{centroid_outlier_quantile}{Quantile of distances to keep as inliers when computing centroids for categorical fields. Set to \code{NULL} to disable centroid computation.}
-\item{centroid_min_points}{Minimum number of points in a category required to compute centroids and outlier quantiles.}
-\item{force}{If \code{TRUE}, atomically replace an existing output
-generation. If \code{FALSE}, require that \code{out_dir} does not already
-exist. Independent Python or R exporters targeting the same directory are
-always rejected immediately while another live process owns the generation.
-The hidden sibling coordination file is intentionally persistent and is not
-part of the published dataset.}
-\item{var_quantization}{Integer bits for gene expression quantization (\code{8} or
-\code{16}), or \code{NULL} for full float32 export. Quantization is derived from the
-exact float32 values materialized by the viewer; a native-double range
-that collapses to one float32 value is rejected. Individual source values
-may round to zero when the float32 range remains non-collapsed.}
-\item{obs_continuous_quantization}{Integer bits for continuous obs field
-quantization (\code{8} or \code{16}), or \code{NULL} for full float32 export.
-Quantization is derived from the exact float32 values materialized by the
-viewer; a native-double range that collapses to one float32 value is
-rejected. Individual source values may round to zero when the float32
-range remains non-collapsed.}
-\item{obs_categorical_dtype}{Required exact categorical code storage:
-\code{"uint8"} (at most 255 categories per field), \code{"uint16"} (at most
-65,535) or \code{"uint32"} (at most 4,294,967,295, for fields such as barcodes
-with more than 65,535 distinct values). Every categorical field uses this
-width; a field that does not fit is rejected with the width that would hold
-it. It has no default, so omitting it is reported as a missing argument rather
-than as a value of the wrong type.}
-\item{compression}{Optional gzip compression level (\code{1}-\code{9}). Use
-\code{NULL} to disable compression. Every compressed payload carries the same
-fixed gzip header on every platform: no filename, a Unix-epoch timestamp, and
-the \code{OS} code \code{0xff}, which records no operating system. It is the
-header the \code{cellucid} Python package writes. The deflate stream itself is
-whatever the zlib underneath R produces at the requested level.}
-\item{dataset_name}{Required non-empty dataset name for
-\code{dataset_identity.json}, shown to the reader verbatim; see the note on
-displayed text below. It has no default, so omitting it is reported as a
-missing argument rather than as a value of the wrong type.}
-\item{dataset_description}{Optional dataset description shown to the reader
-verbatim. \code{NULL} (the default) and \code{""} both mean the dataset carries
-no description and both publish \code{""}; any other value must satisfy the same
-rule as a category label, see the note on displayed text below.}
-\item{dataset_id}{Required portable dataset identifier: 1--180 ASCII letters,
-numbers, \code{.}, \code{_}, or \code{-}, beginning with a letter or number,
-not ending with \code{.}, and not a Windows device name. It has no default, so
-omitting it is reported as a missing argument rather than as a value of the
-wrong type.}
-\item{source_name}{Optional non-empty data source name. Required whenever \code{source_url} or \code{source_citation} is supplied.}
-\item{source_url}{Optional non-empty data source URL. May be supplied independently when \code{source_name} is present.}
-\item{source_citation}{Optional non-empty citation text. May be supplied independently when \code{source_name} is present.}
-\item{embeddings}{Required named list of every embedding the export carries,
-keyed by embedding id. Any number per dimension is allowed. Each element is a
-numeric matrix (or numeric \code{data.frame}, or \pkg{Matrix}) with
-\code{n_cells} rows and 1, 2, or 3 columns, a plain length-\code{n_cells}
-numeric vector for one column, or a \code{\link{cellucid_embedding}()} naming
-the 1-based columns of a wider array, a display label, and the key it came from.
-Each embedding is normalized on its own and written to
-\code{embeddings/\{index\}_\{dimension\}d.bin}, ordered by dimension and then
-by id in code-point order. It has no default, so omitting it is reported as a
-missing argument.}
-\item{embedding_defaults}{Optional named character vector (or named list) naming
-the embedding each dimension shows first, such as \code{c("2d" = "X_umap")}.
-Required for every dimension with more than one embedding; a dimension with
-exactly one uses it. The highest dimension is shown initially.}
-\item{vector_fields}{Optional named list of per-cell displacement vectors, keyed
-by field id and then by the id of the embedding each array is drawn over:
-\code{list(velocity = list(X_umap = v2, X_umap_3d = v3))}. Each array has
-\code{n_cells} rows and exactly as many columns as its embedding's dimension (a
-plain numeric vector for a 1D embedding) and is scaled by that embedding's
-normalization factor.}
-\item{vector_field_default}{Exact vector-field identifier to select by default. Required when \code{vector_fields} contains more than one field.}
-\item{created_at}{Optional exact UTC-seconds timestamp in
-\code{YYYY-MM-DDTHH:MM:SSZ} format. Defaults to the current UTC time. Supply
-an exact value for reproducible \code{dataset_identity.json} metadata.}
+\item{out_path}{Required path of the store to write, ending in the suffix of
+\code{format}: a folder whose name ends in \code{".zarr"} for
+\code{format = "zarr"}, a file whose name ends in \code{".zarr.zip"} for
+\code{format = "zarr.zip"}. A path that does not match \code{format} is refused
+with the path to write instead. Missing parent folders are created.}
+\item{format}{Required kind of output, with no default, because each suits a
+different place and only you know where the store goes: \code{"zarr"} writes a
+\code{.zarr} folder of small files, the way to publish on GitHub (no file over
+100 MB, no Git LFS); \code{"zarr.zip"} writes the same store as one
+\code{.zarr.zip} file, for everywhere else: single-file hosts (Zenodo,
+Figshare, Hugging Face, S3, a lab server), local files, \code{cellucid serve}
+and Jupyter. See the section \emph{Which format?}. Matched as
+\code{match.arg()} matches. An \code{.h5ad} file is written by Python's
+\code{cellucid.prepare(format = "h5ad")}; this package writes no HDF5, so it
+depends on no HDF5 library.}
+\item{data}{Optional single-cell object to write: a \pkg{Seurat} object
+made by Seurat 3.0 or later (read with \pkg{SeuratObject} 4 or 5;
+\code{Assay} and \code{Assay5} assays), a
+\pkg{SingleCellExperiment}, or a \pkg{SummarizedExperiment}. Every other
+argument then defaults to what the object holds, and an argument given
+replaces that one component; see the section \emph{Writing an object}. With
+several assays (Seurat) or alternative experiments (SingleCellExperiment) the
+store is a Cellucid-ready MuData. \pkg{SeuratObject} and
+\pkg{SingleCellExperiment} are needed only for their own objects.}
+\item{embeddings}{Named list mapping each \code{obsm} key to a numeric
+matrix with one row per cell, such as \code{list(X_umap = umap, X_pca = pca)}.
+A numeric \code{data.frame}, a \pkg{Matrix} matrix, or a plain numeric vector
+(one column) is accepted too. Each one is stored whole, every column, as a
+float32 array at its own coordinates; the viewer chooses the columns it plots
+and scales them to its view. Every value must be finite and within the float32
+range. Each key becomes a path in the store, see the note on names below.}
+\item{dataset_id}{Portable identifier of the dataset, stored as
+\code{uns['cellucid']['id']}: 1--180 ASCII letters, numbers, \code{.},
+\code{_}, or \code{-}, beginning with a letter or number, not ending with
+\code{.}, and not a Windows device name. Sessions and community annotations are
+keyed on it.}
+\item{dataset_name}{Non-empty name of the dataset, shown to the reader
+verbatim and stored as \code{uns['cellucid']['name']} and \code{uns['title']};
+see the note on displayed text below.}
+\item{obs}{Optional \code{data.frame} of cell metadata, one row per cell. Every
+column is stored, see the note on column encodings below.}
+\item{var}{Optional \code{data.frame} of gene metadata, one row per column of
+\code{gene_expression}. Every column is stored. Supplying it without
+\code{gene_expression} is an error.}
+\item{gene_expression}{Optional cells x genes matrix: a \pkg{Matrix} sparse
+matrix (stored as a gene-major \code{csc_matrix}) or a dense numeric matrix
+(stored as a dense array in tall, gene-major chunks). Values must be finite and
+within the float32 range, and are stored as float32 -- or the whole matrix as
+float64 when every value is a whole number and one exceeds \code{2^24} in
+magnitude: integer counts float32 cannot hold exactly. That is decided on
+the genes stored, after \code{gene_identifiers} selects them.
+A stored zero of a sparse matrix is no value and is dropped; the matrix stays
+sparse. Rows are always cells;
+Cellucid never transposes the matrix, so transpose a genes x cells matrix with
+\code{t()} first.}
+\item{connectivities}{Optional cells x cells neighbour graph, a \pkg{Matrix}
+sparse matrix or a numeric matrix, stored as
+\code{obsp['connectivities']} (a float32 \code{csr_matrix}). It must be exactly
+symmetric, with a zero diagonal and finite, non-negative weights; a stored zero
+is not an edge and is dropped.}
+\item{vector_fields}{Optional per-cell vectors drawn over an embedding, keyed by
+field and then by the embedding each array belongs to:
+\code{list(velocity = list(X_umap = v2, X_umap_3d = v3, X_branches = vb))}. Each
+array has one row per cell and one column per column of its embedding, and is
+stored under scVelo's name for it, \code{obsm['<field>_<basis>']} for the
+embedding \code{X_<basis>} (\code{velocity_umap}, \code{velocity_umap_3d},
+\code{velocity_branches}), which the viewer lists as the field
+\code{'<field>'} and draws over that embedding. The embedding's key must
+therefore start with \code{X_}, and each stored key must read back as its own
+field and embedding: a field named like an embedding (\code{X_...}), or a key
+another embedding's longer basis claims (field \code{T_fwd} on \code{X_umap}
+beside an embedding \code{X_fwd_umap}), is refused.}
+\item{modalities}{Optional character vector naming the modalities of
+\code{data} to write, in this order: Seurat assays or SingleCellExperiment
+experiments (\code{"main"}, or the main experiment's name, and each
+\code{altExpNames()}). \code{NULL} writes every one, the Seurat active assay
+or the main experiment first. One modality is written as a plain AnnData.}
+\item{gene_identifiers}{Optional character vector of the genes to store, in the
+order given. \code{NULL} stores every gene. The identifiers are matched against
+the gene names the viewer shows (\code{var_gene_id_column}, or the \code{var}
+row names) after repeated names were made unique, and must be distinct.}
+\item{dataset_description}{Optional description of the dataset, shown
+verbatim; stored as \code{uns['cellucid']['description']}.}
+\item{citation_text}{Optional text that says how to cite the dataset, stored as
+\code{uns['cellucid']['citation']['text']}. Required whenever
+\code{citation_url} is supplied.}
+\item{citation_url}{Optional absolute \code{http://} or \code{https://} address
+of the publication, stored as \code{uns['cellucid']['citation']['url']}.}
+\item{source_name}{Optional name of where the data comes from, stored as
+\code{uns['cellucid']['source']['name']}. Required whenever \code{source_url} is
+supplied.}
+\item{source_url}{Optional absolute \code{http://} or \code{https://} address of
+the source, stored as \code{uns['cellucid']['source']['url']}.}
+\item{embedding_defaults}{Optional launch default: the embedding each view
+dimension shows first, by \code{"1d"}, \code{"2d"}, or \code{"3d"}. A value is an
+\code{obsm} key, plotted by its first columns, such as
+\code{c("2d" = "X_umap")}, or \code{list(key = , columns = )} naming the 1-based
+columns to plot, such as \code{list("3d" = list(key = "X_pca", columns = 1:3))}.
+Stored as \code{uns['cellucid']['defaults']['embedding<d>d']}, columns
+0-based. Without it the viewer chooses.}
+\item{latent_key}{Optional \code{embeddings} key of the latent space the
+viewer's outlier filter measures in, such as \code{"X_pca"} or
+\code{"X_scVI"}: a latent space such as scVI or PCA, never a 2D or 3D layout.
+The outlier quantiles of every categorical \code{obs} column (each cell's
+distance to its category's centre, as the share of its category at that
+distance or closer) are computed here and stored in
+\code{uns['cellucid']['outlierQuantiles']}, so the viewer filters outliers at
+once instead of reading the whole latent space to compute them. See the
+section \emph{Outlier quantiles}. Also stored as the launch default
+\code{defaults['latentKey']}.}
+\item{obs_keys}{Optional launch default: the \code{obs} columns the viewer
+shows, in this order. Every column is stored either way. Stored as
+\code{defaults['obsKeys']}.}
+\item{var_gene_id_column}{Optional launch default: the \code{var} column whose
+values name the genes in the viewer, such as gene symbols beside Ensembl row
+names. \code{NULL} names genes by the \code{var} row names. A column of text or
+a factor names genes as it is, an integer column by its digits; a double or
+logical column cannot name genes and is refused. Stored as
+\code{defaults['geneIdColumn']}.}
+\item{vector_field_default}{Optional launch default: the field of
+\code{vector_fields} selected first, by the name used there (\code{"velocity"}),
+which is the id the viewer lists. One of its embeddings must be shown when the
+file opens: one named in \code{embedding_defaults} or found by the viewer's
+default rule, or any other 1 to 3 column embedding that is not
+\code{latent_key}. Stored as \code{defaults['vectorFieldDefault']}.}
+\item{normalize_embeddings}{Optional launch default: \code{FALSE} shows
+embeddings at their own coordinates instead of scaled to the view. Stored as
+\code{defaults['normalizeEmbeddings']}.}
+\item{centroid_min_points}{Optional positive integer: the fewest cells a
+category needs to get outlier quantiles (10 when \code{NULL}). Stored as the
+launch default \code{defaults['centroidMinPoints']}, and with
+\code{latent_key} as \code{uns['cellucid']['outlierQuantiles']['minPoints']}.}
+\item{modality}{Optional launch default for a multimodal store: the
+modality the viewer opens with. Stored as \code{defaults['modality']}. Without
+it the viewer opens the first modality named like gene expression
+(\code{rna}, \code{gex}, \code{gene expression}, \code{gene_expression},
+\code{sct}, any letter case), else the first. \code{var_gene_id_column} then
+names a column of that modality's \code{var}. \code{gene_expression},
+\code{var} and \code{gene_identifiers} describe one feature
+space and are refused for an object of several: change its assay first, or
+write one with \code{modalities}.}
+\item{zarr_format}{Optional Zarr format of the store: \code{2} (the default,
+when \code{NULL}), read by every \pkg{anndata} release since 0.8 and by
+zarr-python 2 and 3, or \code{3}, read by \pkg{anndata} 0.11 and later
+(zarr-python 3). The web app reads both equally fast. Python's
+\code{cellucid.prepare(zarr_format = )} takes the same values.}
+\item{force}{\code{TRUE} replaces an existing store at \code{out_path}, once the
+new one is complete. An existing folder that is not a Zarr store is never
+replaced.}
 }
 \value{
-Invisibly returns \code{NULL}. Called for its side effects (file export).
+Invisibly, the absolute path of the written store.
 }
 \description{
-\code{cellucid_prepare()} mirrors the \code{prepare()} function from the \pkg{cellucid} Python package and writes a directory of binary and JSON manifest files consumed by the Cellucid WebGL viewer.
+\code{cellucid_prepare()} writes a Seurat, SingleCellExperiment or
+SummarizedExperiment object, or embeddings, cell and gene metadata, gene
+expression, a neighbour graph, and vector fields as a \emph{Cellucid-ready
+AnnData}: a standard AnnData store, written as AnnData Zarr (format 2, or 3
+with \code{zarr_format = 3}), that Python's \pkg{anndata} reads without a
+warning and the Cellucid web app opens directly, with the dataset's name,
+citation, and launch defaults in \code{uns['cellucid']}.
 }
 \details{
-The export directory includes:
+The store is an AnnData Zarr group (Zarr format 2 unless \code{zarr_format = 3}):
 \itemize{
-  \item \code{embeddings/} binaries, one per exported embedding, named \code{\{index\}_\{dimension\}d.bin} (float32 row-major; optionally gzipped)
-  \item \code{obs_manifest.json} and \code{obs/} binaries for continuous values, categorical codes, and per-cell outlier quantiles
-  \item \code{var_manifest.json} and \code{var/} binaries for gene expression (one file per exported gene)
-  \item \code{connectivity_manifest.json} and aligned \code{connectivity/edges.src.bin}, \code{edges.dst.bin}, and little-endian float64 \code{edges.weights.f64.bin} payloads for unique undirected edges
-  \item \code{vectors/} binaries, one per vector field and bound embedding, named \code{\{fieldIndex\}_\{embeddingIndex\}.bin}
-  \item \code{dataset_identity.json} (version 3) describing the export, its embedding items and their per-dimension defaults
+  \item \code{X}: gene expression, gene-major float32 (float64 for integer
+  counts above \code{2^24}), a \code{csc_matrix} with int32 \code{indices}
+  and \code{indptr} and no stored zeros, or a dense array;
+  \item \code{obs} and \code{var}: data frames, the index in \code{_index};
+  \item \code{obsm}: every embedding and vector field, float32;
+  \item \code{obsp/connectivities}: the neighbour graph, float32 \code{csr_matrix};
+  \item \code{uns/title} and \code{uns/cellucid}: \code{schema} (1),
+  \code{id}, \code{name}, and, when supplied, \code{description},
+  \code{citation} (\code{text}, \code{url}), \code{source} (\code{name},
+  \code{url}), \code{defaults} holding only the launch defaults that were
+  set, and, with \code{latent_key}, \code{outlierQuantiles};
+  \item the consolidated metadata (\code{.zmetadata}; format 3: the root
+  \code{zarr.json}), so a store on a web host opens with one request.
 }
+Every element carries the \code{encoding-type} and \code{encoding-version}
+attributes \pkg{anndata} 0.8 and later write. Every chunk of values wider
+than one byte is byte-shuffled, so the similar high bytes of neighbouring
+values compress together -- except the expression values themselves, which
+compress best as they are -- and every chunk is compressed with DEFLATE level 6,
+which browsers decompress natively: in format 2 numcodecs' \code{Shuffle}
+filter and the compressor \code{\{"id": "zlib", "level": 6\}}; in format 3
+the \code{blosc} codec (byte shuffle, zlib level 6) for a shuffled array and
+the \code{gzip} codec for every other, only codecs of the Zarr v3
+specification (\code{numcodecs.shuffle} is not one). A chunk is the unit of every read: arrays read whole (data
+frame columns, embeddings as a chunk of rows with every column, the neighbour
+graph) hold up to 262,144 (\code{2^18}) values per chunk, and the data and
+indices of the expression matrix, which the viewer reads one gene at a time,
+65,536 (\code{2^16}). Python's \code{cellucid.prepare()} writes the same store,
+element for element, from the same input.
 
-Note on payload names: no exported filename carries dataset content. A payload
-on the \code{embeddings}, \code{obs}, \code{var}, or \code{vectors} axis is
-named by the integer position of its field in the export --
-\code{embeddings/0_2d.bin}, \code{var/0.values.f32}, \code{obs/1.codes.u8},
-\code{vectors/0_1.bin} -- and \code{connectivity/} uses fixed neutral names. Every dataset therefore has the same directory listing.
-Each manifest entry declares its own index as its first element, so
-\code{fields} entries read \code{[index, name]} or
-\code{[index, name, minValue, maxValue]}, \code{_continuousFields} entries read
-\code{[index, key]} or \code{[index, key, minValue, maxValue]}, and
-\code{_categoricalFields} entries read \code{[index, key, categories, dtype,
-sentinel, centroidsByEmbedding]} with \code{outlierMinValue} and \code{outlierMaxValue}
-appended when the generated quantiles are quantized. The schema path patterns
-\code{pathPattern}, \code{codesPathPattern}, and \code{outlierPathPattern}
-substitute \code{\{index\}}. Within one axis directory the indices are exactly
-\code{0} through \code{N-1} with each used once; \code{obs/} is written by both
-manifest arrays, so those two arrays share one index space. The
-\code{cellucid} Python package writes the identical layout.
+A \code{.zarr.zip} holds the same files, byte for byte, as entries of one ZIP
+archive at its top level, each stored without further compression, so the web
+app reads any chunk with one range request. The chunks come first and the
+metadata documents last, the consolidated metadata the very last entry: the
+web app reads the end of an archive when it opens it, and with it everything
+that describes the store.
 
-Note on gene expression orientation: \code{gene_expression} must be shaped
-\code{(n_cells, n_genes)} (cells as rows, genes as columns). Many R single-cell
-containers store expression as \code{(n_genes, n_cells)}; transpose before
-passing to \code{cellucid_prepare()}. See the vignette for Seurat and
-SingleCellExperiment extraction examples. Shape checks cannot detect an
-incorrectly oriented square matrix, so callers must verify orientation.
+The store is written beside \code{out_path} under a temporary name and moved
+into place only once it is complete: a failed or interrupted call leaves
+nothing at \code{out_path}, and with \code{force = TRUE} the store it replaces
+stays untouched until then.
 
-Continuous observation fields, gene expression, and vector fields must contain
-only finite values. Every nonzero value written as float32, after required
-embedding/vector scaling, must have an absolute magnitude from \code{2^-149}
-through \code{(2 - 2^-23) * 2^127}; values that would become zero or infinity
-in the file are rejected before publication. Quantized continuous values and
-their manifest bounds are derived only after round-tripping through the
-viewer's float32 domain. A field whose exported values are all one float32
-value -- including source variation that collapses to one under float32
-rounding -- is published as a constant field: equal manifest bounds and every
-code \code{0}, which the viewer decodes back to that exact value. An
-individual nonzero source value may round to zero when the resulting float32
-range remains non-collapsed. Categorical outlier quantiles are
-generated internally; cells in categories smaller than
-\code{centroid_min_points} carry \code{NaN}, encoded with the reserved integer
-marker only when those generated quantiles are quantized.
+Note on column encodings: the columns of \code{obs} and \code{var} are stored
+with \pkg{anndata}'s own rules. A factor is a categorical with its levels in
+their order (\code{ordered} for an ordered factor). A character column is a
+categorical, its levels in code-point order, when a value repeats or is
+missing, and a string array otherwise. Category codes take the integer type
+pandas gives them: int8 for fewer than 127 categories, int16 for fewer than
+32,767, else int32. Every other column keeps its own type, as in Python: a
+logical column is a boolean array, or a nullable boolean when it holds
+\code{NA}; an integer column is int32 (R's integer), or a nullable integer
+when it holds \code{NA}; a double column is float64 whether or not its values
+are whole numbers, with \code{NA} stored as NaN, and must hold no infinite
+value. Any other column, a
+\code{Date} for example, is refused with the conversion that makes it storable.
 
-Note on required arguments: \code{obs_categorical_dtype}, \code{dataset_name},
-\code{dataset_id}, and \code{embeddings} carry no default, because no value of any of them is a
-reasonable guess about someone else's dataset. Leaving one out is reported as
+Note on names: cell names are the row names \code{obs},
+\code{gene_expression}, and the embeddings agree on; where several are set they
+must be the same names in the same order, and with none the cells are named
+\code{"0"} to \code{"n - 1"}. Gene names are the \code{var} row names, else the
+column names of \code{gene_expression}. Repeated names are made unique the way
+\pkg{anndata}'s \code{obs_names_make_unique()} and
+\code{var_names_make_unique()} do it -- the second \code{"MATR3"} becomes
+\code{"MATR3-1"} -- and what changed is reported as a message. Every
+\code{obs} and \code{var} column name and every \code{obsm} key becomes a path
+in the store, so it must be a portable file name on every platform: no slash,
+backslash, colon, asterisk, question mark, quotation mark, \code{<}, \code{>},
+\code{|}, or control character, no trailing space or dot, not a
+Windows device name, not \code{_index} for a column, and distinct from its
+neighbours by more than letter case (\code{"Sex"} and \code{"sex"} are one
+folder on macOS and Windows).
+
+Note on displayed text: \code{dataset_name}, \code{dataset_description},
+\code{citation_text}, and \code{source_name} are drawn verbatim, so each must be
+free of control characters (\code{U+0001}--\code{U+001F},
+\code{U+007F}--\code{U+009F}), of the zero-width characters \code{U+200B},
+\code{U+2060}, and \code{U+FEFF}, and of leading or trailing whitespace of any
+kind. Nothing is trimmed: trimming would rewrite text the caller never asked to
+change.
+
+Note on required arguments: \code{out_path} and \code{format} carry no
+default, and without \code{data} neither do \code{embeddings},
+\code{dataset_id}, and \code{dataset_name}, because no value of any of them is
+a reasonable guess about someone else's dataset. Leaving one out is reported as
 what it is -- \code{cellucid_prepare() is missing 1 required argument:} --
-followed by the argument's name and what a valid value of it is, so a missing
-argument is never described as a value of the wrong type. Every argument that
-is left out is named in that one message. The \code{cellucid} Python package
-requires the same four and reports the same set in one \code{TypeError}.
+followed by the argument's name and what a valid value of it is.
+}
+\section{Writing an object}{
+With \code{data}, the object's contents are read as the Cellucid web app reads
+the same object saved with \code{saveRDS()}, so a session saved on either
+applies to the other:
+\itemize{
+  \item cells and \code{obs}: Seurat \code{meta.data} (and
+  \code{active.ident} as \code{active_ident}); \code{colData} (and the size
+  factors); columns of a type AnnData does not store are left out and named;
+  \item \code{obsm}: every Seurat reduction and every \code{reducedDim} as
+  \code{X_<name>}, the name's letter case kept (\code{X_umap},
+  \code{X_UMAP}); one that does not cover every cell is left out and named;
+  \item expression: an assay's log-normalised \code{data} (else
+  \code{counts}) as \code{X}; \code{logcounts} (else \code{counts}, else
+  the first assay) as \code{X}; Seurat v5 split layers joined. A
+  Cellucid-ready AnnData holds one matrix per modality, so \code{counts}
+  beside \code{data}, the other assays, and \code{scale.data} are not
+  written;
+  \item \code{var}: \code{meta.features} (Assay5 \code{meta.data}) with the
+  variable features as \code{highly_variable}; \code{rowData};
+  \item \code{obsp/connectivities}: the first symmetric neighbour graph, its
+  diagonal removed: Seurat's \code{<active assay>_snn}, then any other
+  \code{_snn} graph, then any other graph; a \code{colPair} named
+  \code{connectivities}, then one named like \code{snn}, then any other; a
+  graph passed over (not symmetric, or not over every cell) is named;
+  \item identity and launch defaults: the object's own record,
+  \code{misc$cellucid} or \code{metadata(x)$cellucid}, shaped as
+  \code{uns['cellucid']}: \code{list(id = , name = , description = ,
+  citation = list(text = , url = ), source = list(name = , url = ), defaults =
+  list(embedding2d = "X_umap", latentKey = "X_pca", ...))}; a Seurat
+  \code{project.name} other than \code{"SeuratProject"} names it too.
+}
+Matrices kept outside R's memory (BPCells, HDF5Array and other DelayedArray
+backends) are read into memory block by block, each block a set of whole
+cells. Seurat objects
+made before 3.0, and SingleCellExperiment objects before 1.8, are refused with
+the line that updates them.
 
-Note on displayed text: a category label, an exported gene name, an exported
-\code{obs} key, a vector-field id, \code{dataset_name},
-\code{dataset_description}, \code{source_name}, \code{source_url}, and
-\code{source_citation} are drawn verbatim in the viewer's legend, its field
-selector, and every exported figure, so a character with no glyph changes the
-stored value without changing the picture. Each must be free of control
-characters (\code{U+0001}--\code{U+001F}, \code{U+007F}--\code{U+009F}), free of
-the zero-width characters \code{U+200B}, \code{U+2060}, and \code{U+FEFF}, and
-without leading or trailing whitespace of any kind, \code{U+00A0} NO-BREAK
-SPACE included. An empty category label is rejected, as are two labels in one
-field that a whitespace-collapsing renderer draws identically, such as
-\code{"T cell"} and \code{"T  cell"}. Nothing is trimmed: trimming would
-rewrite an annotation the caller never asked to change, and would merge
-\code{"Liver "} into a separate \code{"Liver"} category, moving cells between
-them. The rejection names every offending label in the field at once. The
-\code{cellucid} Python package enforces the identical rule.
-
-Note on field identity: a payload filename is an integer index, so a gene name,
-an \code{obs} key, and a vector-field id are never paths and carry no filename
-rule -- no ASCII restriction, no case-insensitive collision rule, and no
-Windows device-name rule. What each one must be is what it is for: a non-empty
-string, distinct within its axis so a lookup resolves one field, and text the
-viewer can draw exactly as it is stored, because a gene name and a category
-label appear in the same legend. The rule covers the identifiers that are
-exported: \code{obs_keys} and \code{gene_identifiers} narrow the export and
-narrow this rule with it, and a \code{var} row left out reaches no manifest.
-Gene names are made unique over the whole \code{var}, not only the exported
-rows, so a gene keeps its name however the export is narrowed and
-\code{gene_identifiers} addresses exactly one row per name. \code{dataset_id} is the one identifier that still names a
-directory, so it must be a 1--180-byte portable ASCII filename component: it
-begins with a letter or digit, contains only letters, digits, \code{.},
-\code{_}, or \code{-}, does not end with \code{.}, and is not a Windows device
-name.
+Several assays or experiments are written as a \emph{Cellucid-ready MuData}:
+MuData's own Zarr layout (\code{mudata.read_zarr()} reads it), the cells'
+\code{obs}, \code{obsm}, \code{obsp} and \code{uns['cellucid']} at the root,
+each modality an AnnData under \code{mod/<name>} (gene-major \code{X} and
+\code{var}), \code{mod-order} listing them, and
+\code{obsmap}/\code{varmap} placing each modality's cells and features. R writes
+MuData as Zarr only; Python's \code{cellucid.prepare(data = mdata)} writes the
+same store, and \code{.h5mu}.
+}
+\section{Which format?}{
+Where the store goes decides \code{format}:
+\itemize{
+  \item a GitHub repository or its GitHub Pages site: \code{"zarr"}. GitHub
+  refuses files over 100 MB, and a folder of small files publishes any size
+  without Git LFS; GitHub answers over HTTP/2, 100 requests at a time, so a
+  folder's one request per chunk costs nothing there.
+  \item everything else -- a single-file host (Zenodo, Figshare, Hugging
+  Face, S3, a lab web server), your own disk (the web app's file picker),
+  \code{cellucid serve}, Jupyter: \code{"zarr.zip"}. One file is read in
+  ranges that the web app merges into few requests; most single-file hosts
+  answer over HTTP/1.1, six requests at a time, where a folder's one request
+  per chunk makes many-gene and whole-matrix reads several times slower.
+}
+Measured on a 561,947-cell atlas, every read the web app makes, in total:
+over GitHub's HTTP/2 (80 ms round trip, 50 MB/s) 8.0 s from the folder and
+8.2 s from the \code{.zarr.zip}; over HTTP/1.1 (80 ms, 50 MB/s) 46.8 s and
+9.0 s; from a local file in a browser 2.6 and 2.7 s.
+In a browser, a local Zarr folder reads as fast as a single file. Python's
+\code{cellucid.prepare(format = "h5ad")} writes an \code{.h5ad}, which goes
+wherever a \code{.zarr.zip} goes; this package writes Zarr only, so it needs
+no HDF5 library.
+}
+\section{Outlier quantiles}{
+With \code{latent_key}, \code{uns['cellucid']['outlierQuantiles']} holds
+\code{latentKey}, \code{minPoints} (\code{centroid_min_points}, or 10) and
+\code{fields}: one float32 array of one value per cell for every \code{obs}
+column the viewer shows as categorical -- a factor, a character column, a
+logical column with or without \code{NA} -- in \code{obs} column order.
+Its categories are its values; \code{NA} belongs to none. For each category of
+at least \code{minPoints} cells, over the latent values as stored (float32):
+the centroid is the column sums, accumulated cell by cell in cell order,
+divided by the cell count; a cell's distance is the square root of its squared
+differences from the centroid, accumulated column by column; its quantile is
+the number of the category's cells at that distance or closer divided by the
+cell count, both as float32. Every other cell is \code{NaN}. A column with no
+category of \code{minPoints} cells gets no entry, and a numeric column never
+does. The viewer's outlier filter hides the cells above a threshold of these
+quantiles. Python's \code{cellucid.prepare()} stores the same bytes, and the
+web app computes the same bytes for a file that stores none.
 }
 \examples{
-latent <- matrix(c(0, 0, 1, 1, 2, 2), ncol = 2, byrow = TRUE)
+umap <- matrix(c(0, 0, 1, 0, 0, 1, 1, 1), ncol = 2, byrow = TRUE)
+pca <- matrix(c(0, 3, 1, 2, 5, 1, 4, 0, 2, 1, 1, 1), ncol = 3, byrow = TRUE)
 obs <- data.frame(
-  cluster = factor(c("A", "A", "B")),
-  score = c(0.1, 0.2, 0.3)
+  cluster = factor(c("A", "A", "B", "B")),
+  score = c(0.1, 0.2, 0.3, 0.4),
+  row.names = paste0("cell", 1:4)
 )
-umap2 <- matrix(c(0, 0, 1, 0, 0, 1), ncol = 2, byrow = TRUE)
-pca <- matrix(c(0, 3, 1, 2, 5, 1, 4, 0, 2), ncol = 3, byrow = TRUE)
-expr <- matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, ncol = 2)
-var <- data.frame(symbol = c("G1", "G2"))
-rownames(var) <- var$symbol
+expr <- matrix(
+  c(0, 1, 2, 3, 4, 5, 0, 0),
+  nrow = 4,
+  dimnames = list(rownames(obs), c("ENSG01", "ENSG02"))
+)
+var <- data.frame(symbol = c("CD3E", "MS4A1"), row.names = colnames(expr))
 
-out <- file.path(tempdir(), "cellucid_example")
-dir.create(out, showWarnings = FALSE, recursive = TRUE)
-
-cellucid_prepare(
+store <- cellucid_prepare(
+  out_path = file.path(tempdir(), "example.zarr"),
+  format = "zarr",
+  embeddings = list(X_umap = umap, X_pca = pca),
   dataset_id = "cellucid-example",
   dataset_name = "Cellucid example",
-  latent_space = latent,
   obs = obs,
   var = var,
   gene_expression = expr,
-  embeddings = list(
-    X_umap = umap2,
-    X_pca = cellucid_embedding(pca, columns = c(1, 2), label = "PCA")
-  ),
   embedding_defaults = c("2d" = "X_umap"),
-  out_dir = out,
-  centroid_min_points = 1,
-  force = TRUE,
-  obs_categorical_dtype = "uint16"
+  latent_key = "X_pca",
+  var_gene_id_column = "symbol",
+  force = TRUE
+)
+list.files(store, all.files = TRUE, no.. = TRUE)
+
+# A Seurat object, read as the web app reads it
+if (requireNamespace("SeuratObject", quietly = TRUE)) {
+  data("pbmc_small", package = "SeuratObject")
+  cellucid_prepare(
+    file.path(tempdir(), "pbmc_small.zarr"), "zarr",
+    data = SeuratObject::UpdateSeuratObject(pbmc_small),
+    dataset_id = "pbmc-small", dataset_name = "PBMC (small)",
+    force = TRUE
+  )
+}
+
+# The same store as one file
+cellucid_prepare(
+  out_path = file.path(tempdir(), "example.zarr.zip"),
+  format = "zarr.zip",
+  embeddings = list(X_umap = umap),
+  dataset_id = "cellucid-example",
+  dataset_name = "Cellucid example",
+  force = TRUE
 )
 }

@@ -1,21 +1,3 @@
-current_contract_fixture <- function(out_dir) {
-  list(
-    latent_space = matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE),
-    obs = data.frame(group = factor(c("A", "B"))),
-    var = data.frame(
-      index = c("column_gene_1", "column_gene_2"),
-      row.names = c("row_gene_1", "row_gene_2")
-    ),
-    gene_expression = matrix(c(1, 2, 3, 4), nrow = 2),
-    embeddings = list(X_umap = matrix(c(0, 0, 1, 1), ncol = 2, byrow = TRUE)),
-    out_dir = out_dir,
-    centroid_min_points = 1,
-    dataset_id = "current-contract",
-    dataset_name = "Current contract",
-    force = TRUE
-  )
-}
-
 test_that("every path the current contract reads is present in this layout", {
   # The assertions in this file are worth exactly as much as the files they
   # read, and every one of them used to sit inside an `if (file.exists(...))`
@@ -200,11 +182,11 @@ test_that("main is the only workflow branch", {
   expect_false(any(grepl("^[[:space:]]*release:", pkgdown_lines)))
 })
 
-test_that("DESCRIPTION is the one in-repo source of the 0.9.4 release identity", {
+test_that("DESCRIPTION is the one in-repo source of the 0.9.5 release identity", {
   repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
   version <- cellucid_description_version()
-  expect_identical(version, "0.9.4")
+  expect_identical(version, "0.9.5")
 
   description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
   version_line <- which(startsWith(description, "Version:"))
@@ -407,52 +389,62 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   # signature, so no generator is needed to hold the two together.
   #
   # tools::codoc() itself is not usable here: it loads and unloads the package
-  # it inspects, and cellucid's .onUnload() calls library.dynam.unload(), which
-  # would pull the native export lock out from under the running suite.
+  # it inspects, which would unload the namespace the running suite uses.
   repository_root <- cellucid_repository_root()
   man_directory <- file.path(repository_root, "man")
   # The .Rd sources themselves, in both layouts: test_local() loads the package
   # from source, where no installed help database exists yet, and under
   # R CMD check the unpacked sources carry man/ as well.
   rd_database <- tools::Rd_db(dir = repository_root)
-  # Every exported function has exactly one hand-written page, and each page's
-  # usage and argument list match the function's formals.
-  exported <- c("cellucid_embedding", "cellucid_prepare")
-  expect_setequal(names(rd_database), paste0(exported, ".Rd"))
-  for (function_name in exported) {
-    rd <- rd_database[[paste0(function_name, ".Rd")]]
-    expect_false(is.null(rd), info = function_name)
+  # Every exported function is documented by exactly one hand-written page's
+  # \usage, and each call there matches the function's formals; a page's
+  # \arguments list every argument of its functions once, in order.
+  exported <- c(
+    "cellucid_prepare", "cellucid_transition_drift", "cellucid_view", "cellucid_serve",
+    "cellucid_stop", "cellucid_stop_all", "cellucid_viewers", "cellucid_highlight",
+    "cellucid_clear_highlights", "cellucid_color_by", "cellucid_set_visibility",
+    "cellucid_reset_camera", "cellucid_freeze", "cellucid_set_data_mapping", "cellucid_on",
+    "cellucid_off", "cellucid_selection", "cellucid_wait_ready", "cellucid_session",
+    "cellucid_clear_web_cache", "cellucid_debug_connection", "cellucid_apply_session"
+  )
+  documented <- character()
+  for (page in names(rd_database)) {
+    rd <- rd_database[[page]]
     section_tags <- vapply(rd, function(node) attr(node, "Rd_tag"), character(1))
-    implementation <- get(function_name, envir = asNamespace("cellucid"))
-
-    usage <- trimws(paste(unlist(rd[section_tags == "\\usage"]), collapse = ""))
-    expect_true(startsWith(usage, paste0(function_name, "(")), info = function_name)
-    documented_signature <- eval(parse(
-      text = paste0(sub(paste0("^", function_name), "function", usage), "\nNULL")
-    ))
-    expect_identical(
-      formals(documented_signature),
-      formals(implementation),
-      info = function_name
-    )
-
-    arguments <- rd[section_tags == "\\arguments"][[1L]]
-    argument_tags <- vapply(
-      arguments,
-      function(node) attr(node, "Rd_tag"),
-      character(1)
-    )
+    usage <- paste(unlist(rd[section_tags == "\\usage"]), collapse = "")
+    calls <- as.list(parse(text = usage))
+    page_arguments <- character()
+    for (call in calls) {
+      function_name <- as.character(call[[1L]])
+      documented <- c(documented, function_name)
+      implementation <- get(function_name, envir = asNamespace("cellucid"))
+      given <- as.list(call)[-1L]
+      labels <- names(given)
+      if (is.null(labels)) labels <- rep("", length(given))
+      formal_names <- ifelse(nzchar(labels), labels, vapply(given, deparse, character(1)))
+      documented_formals <- stats::setNames(
+        lapply(seq_along(given), function(index) if (nzchar(labels[[index]])) given[[index]] else quote(expr = )),
+        formal_names
+      )
+      expect_identical(as.pairlist(documented_formals), formals(implementation), info = function_name)
+      page_arguments <- c(page_arguments, setdiff(names(formals(implementation)), page_arguments))
+    }
+    arguments <- rd[section_tags == "\\arguments"]
+    if (length(page_arguments) == 0L) {
+      expect_length(arguments, 0L)
+      next
+    }
+    arguments <- arguments[[1L]]
+    argument_tags <- vapply(arguments, function(node) attr(node, "Rd_tag"), character(1))
     documented_arguments <- vapply(
       arguments[argument_tags == "\\item"],
       function(item) trimws(paste(unlist(item[[1L]]), collapse = "")),
       character(1)
     )
-    expect_identical(
-      unname(documented_arguments),
-      names(formals(implementation)),
-      info = function_name
-    )
+    expect_identical(unname(documented_arguments), page_arguments, info = page)
   }
+  expect_setequal(documented, exported)
+  expect_false(anyDuplicated(documented) > 0L)
 
   namespace <- readLines(
     file.path(repository_root, "NAMESPACE"),
@@ -467,7 +459,7 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   expect_false(any(grepl("Generated by roxygen2", namespace, fixed = TRUE)))
   expect_identical(
     sort(grep("^export\\(", namespace, value = TRUE)),
-    c("export(cellucid_embedding)", "export(cellucid_prepare)")
+    paste0("export(", sort(exported), ")")
   )
 
   man_paths <- list.files(man_directory, pattern = "\\.Rd$", full.names = TRUE)
@@ -511,217 +503,4 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   expect_false("RoxygenNote" %in% fields)
   expect_false("Roxygen" %in% fields)
   expect_false(any(startsWith(fields, "Config/roxygen2/")))
-})
-
-test_that("categorical code width is one required exact caller choice", {
-  expect_true(
-    identical(
-      formals(cellucid_prepare)[["obs_categorical_dtype"]],
-      quote(expr = )
-    )
-  )
-
-  # An argument that was never supplied is reported as missing, not as a value
-  # of the wrong type, and the message says what a valid one is.
-  missing_out <- tempfile("cellucid_r_missing_categorical_dtype_")
-  expect_error(
-    do.call(cellucid_prepare, current_contract_fixture(missing_out)),
-    paste0(
-      "^cellucid_prepare\\(\\) is missing 1 required argument:\\n",
-      "  - obs_categorical_dtype: exactly one of \"uint8\", \"uint16\" or ",
-      "\"uint32\", the storage width of every categorical code\\.$"
-    )
-  )
-  expect_false(dir.exists(missing_out))
-
-  automatic_out <- tempfile("cellucid_r_automatic_categorical_dtype_")
-  automatic_args <- current_contract_fixture(automatic_out)
-  automatic_args$obs_categorical_dtype <- "auto"
-  expect_error(
-    do.call(cellucid_prepare, automatic_args),
-    "exactly one of \"uint8\", \"uint16\" or \"uint32\""
-  )
-  expect_false(dir.exists(automatic_out))
-})
-
-test_that("a required argument that was never supplied is reported as missing", {
-  # No value of any of these four is a reasonable guess about someone else's
-  # dataset, so none of them carries a default. Leaving one out is a different
-  # mistake from supplying a bad one, and the two must not read alike.
-  for (argument in c("obs_categorical_dtype", "dataset_name", "dataset_id", "embeddings")) {
-    expect_true(
-      identical(formals(cellucid_prepare)[[argument]], quote(expr = )),
-      info = argument
-    )
-  }
-
-  guidance <- c(
-    obs_categorical_dtype = paste0(
-      "exactly one of \"uint8\", \"uint16\" or \"uint32\", the storage width ",
-      "of every categorical code"
-    ),
-    dataset_name = "one non-empty name for the dataset, shown to the reader verbatim",
-    dataset_id = paste0(
-      "one portable identifier of 1-180 ASCII letters, numbers, '.', '_', or ",
-      "'-', beginning with a letter or number and not ending with '.'"
-    ),
-    embeddings = paste0(
-      "a named list mapping each embedding id to a matrix or a ",
-      "cellucid_embedding(), for example list(X_umap = umap)"
-    )
-  )
-
-  for (argument in names(guidance)) {
-    out <- tempfile(paste0("cellucid_r_absent_", argument, "_"))
-    args <- current_contract_fixture(out)
-    args$obs_categorical_dtype <- "uint16"
-    args[[argument]] <- NULL
-    failure <- tryCatch(
-      do.call(cellucid_prepare, args),
-      error = conditionMessage
-    )
-    expect_identical(
-      failure,
-      paste0(
-        "cellucid_prepare() is missing 1 required argument:\n",
-        "  - ", argument, ": ", guidance[[argument]], "."
-      )
-    )
-    expect_false(dir.exists(out))
-  }
-
-  # Every argument left out is named at once, in signature order, exactly as
-  # the cellucid Python package names them in one TypeError.
-  all_absent <- tempfile("cellucid_r_absent_all_")
-  args <- current_contract_fixture(all_absent)
-  args$dataset_name <- NULL
-  args$dataset_id <- NULL
-  args$embeddings <- NULL
-  failure <- tryCatch(
-    do.call(cellucid_prepare, args),
-    error = conditionMessage
-  )
-  expect_identical(
-    failure,
-    paste0(
-      "cellucid_prepare() is missing 4 required arguments:\n",
-      "  - obs_categorical_dtype: ", guidance[["obs_categorical_dtype"]], ".\n",
-      "  - dataset_name: ", guidance[["dataset_name"]], ".\n",
-      "  - dataset_id: ", guidance[["dataset_id"]], ".\n",
-      "  - embeddings: ", guidance[["embeddings"]], "."
-    )
-  )
-  expect_false(dir.exists(all_absent))
-
-  # A value that was supplied and is wrong stays a message about that value.
-  supplied_out <- tempfile("cellucid_r_supplied_null_id_")
-  supplied <- current_contract_fixture(supplied_out)
-  supplied$obs_categorical_dtype <- "uint16"
-  expect_error(
-    do.call(
-      cellucid_prepare,
-      c(supplied[names(supplied) != "dataset_id"], list(dataset_id = NULL))
-    ),
-    "^dataset_id must be exactly one string\\.$"
-  )
-  expect_false(dir.exists(supplied_out))
-})
-
-test_that("dataset_description is optional and NULL and \"\" publish the same", {
-  expect_null(formals(cellucid_prepare)[["dataset_description"]])
-
-  described <- function(value, suffix) {
-    out <- tempfile(paste0("cellucid_r_description_", suffix, "_"))
-    args <- current_contract_fixture(out)
-    args$obs_categorical_dtype <- "uint16"
-    args$dataset_description <- value
-    do.call(cellucid_prepare, args)
-    identity <- jsonlite::read_json(
-      file.path(out, "dataset_identity.json"),
-      simplifyVector = FALSE
-    )
-    identity$description
-  }
-
-  expect_identical(described(NULL, "null"), "")
-  expect_identical(described("", "empty"), "")
-  expect_identical(described("An exact description", "text"), "An exact description")
-
-  # Nothing else about the argument is relaxed: text the viewer cannot draw as
-  # written is still rejected.
-  padded_out <- tempfile("cellucid_r_description_padded_")
-  padded <- current_contract_fixture(padded_out)
-  padded$obs_categorical_dtype <- "uint16"
-  padded$dataset_description <- " padded "
-  expect_error(
-    do.call(cellucid_prepare, padded),
-    "^dataset_description is displayed verbatim"
-  )
-  expect_false(dir.exists(padded_out))
-
-  wrong_type_out <- tempfile("cellucid_r_description_wrong_type_")
-  wrong_type <- current_contract_fixture(wrong_type_out)
-  wrong_type$obs_categorical_dtype <- "uint16"
-  wrong_type$dataset_description <- 5
-  expect_error(
-    do.call(cellucid_prepare, wrong_type),
-    "^dataset_description must be exactly one string\\.$"
-  )
-  expect_false(dir.exists(wrong_type_out))
-})
-
-current_contract_gene_names <- function(out_dir) {
-  manifest <- jsonlite::read_json(
-    file.path(out_dir, "var_manifest.json"),
-    simplifyVector = FALSE
-  )
-  vapply(manifest$fields, function(field) field[[2L]], character(1))
-}
-
-test_that("NULL alone selects var row names and every string names one exact column", {
-  gene_id_default <- formals(cellucid_prepare)$var_gene_id_column
-  expect_null(gene_id_default)
-
-  # The selected axis is now visible only in the manifest: the payload files
-  # are named by index on every dataset, so no filename can report which
-  # column was chosen.
-  payload_names <- c("0.values.f32", "1.values.f32")
-
-  rowname_out <- tempfile("cellucid_r_rowname_gene_ids_")
-  rowname_args <- current_contract_fixture(rowname_out)
-  rowname_args$obs_categorical_dtype <- "uint16"
-  rowname_args$var_gene_id_column <- NULL
-  do.call(cellucid_prepare, rowname_args)
-  expect_identical(
-    current_contract_gene_names(rowname_out),
-    c("row_gene_1", "row_gene_2")
-  )
-  expect_identical(
-    sort(list.files(file.path(rowname_out, "var"))),
-    payload_names
-  )
-
-  column_out <- tempfile("cellucid_r_literal_index_column_")
-  column_args <- current_contract_fixture(column_out)
-  column_args$obs_categorical_dtype <- "uint16"
-  column_args$var_gene_id_column <- "index"
-  do.call(cellucid_prepare, column_args)
-  expect_identical(
-    current_contract_gene_names(column_out),
-    c("column_gene_1", "column_gene_2")
-  )
-  expect_identical(
-    sort(list.files(file.path(column_out, "var"))),
-    payload_names
-  )
-
-  missing_out <- tempfile("cellucid_r_missing_gene_id_column_")
-  missing_args <- current_contract_fixture(missing_out)
-  missing_args$obs_categorical_dtype <- "uint16"
-  missing_args$var_gene_id_column <- "missing"
-  expect_error(
-    do.call(cellucid_prepare, missing_args),
-    "var_gene_id_column 'missing' not found in var"
-  )
-  expect_false(dir.exists(missing_out))
 })

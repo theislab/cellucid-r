@@ -1,7 +1,11 @@
 name: R-CMD-check
 
 # This is the main CI gate for package changes and releases.
-# It runs `R CMD check` across multiple OSes and R versions using r-lib/actions.
+# It runs `R CMD check` across the supported R versions (R 4.1 to devel) on
+# Linux, and on macOS and Windows at the oldest supported R and the current
+# release, through r-lib/actions. Two more jobs check the package with every
+# suggested package installed (the Seurat and SingleCellExperiment paths,
+# with SeuratObject 4 and 5) and with none of them.
 # If this workflow is green, you are generally in good shape for:
 # - GitHub releases
 # - CRAN submission (see publishing.md for the final `--as-cran` steps)
@@ -17,21 +21,44 @@ jobs:
   R-CMD-check:
     runs-on: ${{ matrix.config.os }}
 
-    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+    name: ${{ matrix.config.os }} (R ${{ matrix.config.r }}, ${{ matrix.config.suggests }})
 
+    # The oldest R is checked with every suggested package on Linux, where
+    # those packages still install. On macOS and Windows at R 4.1 it is checked
+    # with its hard dependencies and the build and check tools only: CRAN no longer serves R 4.1 Windows
+    # binaries (bin/windows/contrib/4.1 answers 404), so the Bioconductor stack
+    # builds RCurl from source without curl headers, and Matrix 1.6-5 has no
+    # R 4.1 arm64 binary and fails to link from source. Both are toolchain
+    # limits of those platforms, not of this package; the suggested-package
+    # paths are covered at R 4.1 on Linux and at the current release on all
+    # three systems.
     strategy:
       fail-fast: false
       matrix:
         config:
-          - {os: macos-latest, r: 'release'}
-          - {os: windows-latest, r: 'release'}
-          - {os: ubuntu-latest, r: 'devel', http-user-agent: 'release'}
-          - {os: ubuntu-latest, r: 'release'}
-          - {os: ubuntu-latest, r: 'oldrel-1'}
+          - {os: ubuntu-latest, r: '4.1', suggests: 'all', pins: 'Matrix@1.6-5'}
+          - {os: ubuntu-latest, r: '4.2', suggests: 'all', pins: 'Matrix@1.6-5'}
+          - {os: ubuntu-latest, r: '4.3', suggests: 'all'}
+          - {os: ubuntu-latest, r: 'oldrel-1', suggests: 'all'}
+          - {os: ubuntu-latest, r: 'release', suggests: 'all'}
+          - {os: ubuntu-latest, r: 'devel', suggests: 'all', http-user-agent: 'release'}
+          - {os: ubuntu-latest, r: 'release', suggests: 'none'}
+          - {os: ubuntu-latest, r: 'release', suggests: 'seuratobject-4'}
+          - {os: macos-latest, r: '4.1', suggests: 'none'}
+          - {os: macos-latest, r: 'release', suggests: 'all'}
+          - {os: windows-latest, r: '4.1', suggests: 'none'}
+          - {os: windows-latest, r: 'release', suggests: 'all'}
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
+      # Without the suggested packages the checks that need them skip, naming
+      # what is missing.
+      _R_CHECK_FORCE_SUGGESTS_: ${{ matrix.config.suggests == 'none' && 'false' || 'true' }}
+      # pak takes Bioconductor from bioconductor.posit.co unless told otherwise,
+      # and that mirror keeps only the recent releases (3.19 on). R 4.1, 4.2 and
+      # 4.3 need Bioconductor 3.14, 3.16 and 3.18, which bioconductor.org keeps.
+      R_BIOC_MIRROR: https://bioconductor.org
 
     steps:
       - uses: actions/checkout@v7
@@ -44,13 +71,44 @@ jobs:
           http-user-agent: ${{ matrix.config.http-user-agent }}
           use-public-rspm: true
 
-      # Installs package dependencies and rcmdcheck.
+      # Installs package dependencies and rcmdcheck (pak resolves the
+      # Bioconductor ones, SingleCellExperiment and SummarizedExperiment, for
+      # the running R). SeuratObject 5 needs Matrix >= 1.6.4; CRAN's current
+      # Matrix (1.7) needs R >= 4.4 and pak only resolves the current CRAN
+      # release, so the jobs on older R pin Matrix 1.6-5 (R >= 3.5), the last
+      # release those R versions can install. The jobs without suggested
+      # packages still install what building and checking needs (knitr and
+      # rmarkdown build the vignettes, testthat runs the tests), so they never
+      # depend on what a runner image happens to ship.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck
+          extra-packages: >-
+            any::rcmdcheck
+            ${{ matrix.config.suggests == 'seuratobject-4' && 'SeuratObject@4.1.4' || '' }}
+            ${{ matrix.config.pins || '' }}
+            ${{ matrix.config.suggests == 'none' && 'any::knitr any::rmarkdown any::testthat' || '' }}
+          dependencies: ${{ matrix.config.suggests == 'none' && '"hard"' || '"all"' }}
           needs: check
 
-      # Runs `R CMD check` (via rcmdcheck) and uploads the check results on failure.
+      # Python with cellucid, anndata, zarr and mudata, for the cross-writer and
+      # interoperability tests (they skip without it).
+      - uses: actions/setup-python@v6
+        if: matrix.config.suggests == 'all' && matrix.config.os == 'ubuntu-latest' && matrix.config.r == 'release'
+        with:
+          python-version: '3.12'
+
+      - name: Install the Python reference writers
+        if: matrix.config.suggests == 'all' && matrix.config.os == 'ubuntu-latest' && matrix.config.r == 'release'
+        run: |
+          python -m pip install "cellucid[mudata] @ git+https://github.com/theislab/cellucid-python" anndata zarr mudata
+          echo "CELLUCID_PYTHON=$(which python)" >> "$GITHUB_ENV"
+          echo "CELLUCID_ANNDATA_PYTHON=$(which python)" >> "$GITHUB_ENV"
+          echo "CELLUCID_MUDATA_PYTHON=$(which python)" >> "$GITHUB_ENV"
+        shell: bash
+
+      # Runs `R CMD check --as-cran` (via rcmdcheck) and uploads the check
+      # results on failure.
       - uses: r-lib/actions/check-r-package@v2
         with:
+          args: 'c("--no-manual", "--as-cran")'
           upload-snapshots: true

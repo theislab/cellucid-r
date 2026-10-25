@@ -77,9 +77,9 @@ Update these files with the new version number:
 
 | File | What to change |
 |------|----------------|
-| `DESCRIPTION` | `Version:` field (e.g., `Version: 0.10.0`) |
-| `CITATION.cff` | `version:` field (e.g., `version: 0.10.0`) |
-| `NEWS.md` | Add a new section header (e.g., `# cellucid 0.10.0`) |
+| `DESCRIPTION` | `Version:` field (e.g., `Version: 0.9.6`) |
+| `CITATION.cff` | `version:` field (e.g., `version: 0.9.6`) |
+| `NEWS.md` | Add a new section header (e.g., `# cellucid 0.9.6`) |
 | `README.md` | The "Active package version" block |
 | `vignettes/installation.Rmd` | Every version mention, including the `packageVersion()` output |
 | `tests/testthat/test-current-contract.R` | The one pinned literal in `expect_identical(version, ...)` |
@@ -116,7 +116,7 @@ lockstep is real but manual:
 ### Step 3: Create a GitHub Release
 
 1. Go to **Releases** → **"Draft a new release"**
-2. Click **"Choose a tag"** → type `vX.Y.Z` (e.g., `v0.10.0`) → **"Create new tag"**
+2. Click **"Choose a tag"** → type `vX.Y.Z` (e.g., `v0.9.6`) → **"Create new tag"**
 3. Target: `main`
 4. Title: `cellucid X.Y.Z`
 5. Description: copy from `NEWS.md` or write release notes
@@ -220,7 +220,7 @@ Don't panic — most first submissions get feedback.
 |------|---------|
 | Submission frequency | Max once per month (unless responding to feedback) |
 | Example runtime | Total < 5 seconds |
-| Documentation | All exported functions need `@returns` tag |
+| Documentation | Every exported function's help page needs a `\value{}` section (the pages under `man/` are hand-written; there is no roxygen) |
 | Title | < 65 characters, no period at end |
 | Description | Must end with a period |
 
@@ -236,15 +236,11 @@ Don't panic — most first submissions get feedback.
    - Go to: https://github.com/new
    - Make it **public**
 
-2. **Add `packages.json`** to the repo root:
-   ```json
-   [
-     {
-       "package": "cellucid",
-       "url": "https://github.com/theislab/cellucid-r"
-     }
-   ]
-   ```
+2. **Add `packages.json`** to the repo root: copy
+   `.github/r-universe/packages.json` from this repository, the registry entry
+   for `cellucid` (its GitHub repository and the `main` branch). r-universe
+   installs the Bioconductor packages in `Suggests` (SingleCellExperiment,
+   SummarizedExperiment, S4Vectors, DelayedArray) itself.
 
 3. **Install the r-universe GitHub App**:
    - Go to: https://github.com/apps/r-universe/installations/new
@@ -309,7 +305,7 @@ Common issues and fixes:
 | Issue | Fix |
 |-------|-----|
 | Examples take too long | Wrap slow examples in `\donttest{}` |
-| Missing `@returns` | Add return value documentation to all exported functions |
+| Missing `\value` | Add a `\value{}` section to the hand-written `man/*.Rd` page of every exported function |
 | URLs don't work | Run `urlchecker::url_check()` locally and fix broken URLs |
 | Title too long | Keep under 65 characters |
 | Description doesn't end with period | Add a period |

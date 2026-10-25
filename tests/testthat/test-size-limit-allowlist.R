@@ -9,17 +9,73 @@
 # message quotes); a limit made up for convenience has no class to take.
 
 size_limit_allowlist <- list(
-  "R/binary-payloads.R:.float32_max_magnitude" = c(
+  "R/matrix-input.R:.float32_max_magnitude" = c(
     "FORMAT",
     "The largest finite IEEE 754 binary32 value; a larger one is not a float32."
+  ),
+  "R/matrix-input.R:.float32_exact_integer_limit" = c(
+    "FORMAT",
+    "The largest integer float32 holds exactly (2^24); counts above it are stored as float64."
+  ),
+  "R/zip.R:.zip_u16_max" = c(
+    "FORMAT",
+    "The largest classic ZIP entry count; above it the archive carries ZIP64 records."
+  ),
+  "R/zip.R:.zip_u32_max" = c(
+    "FORMAT",
+    "The largest classic ZIP size or offset; above it the archive carries ZIP64 fields."
+  ),
+  "R/viewer-protocol.R:.viewer_reason_limit" = c(
+    "HOST",
+    "The longest command_error reason accepted from the browser (the protocol's own 240, with margin), as cellucid-python accepts."
+  ),
+  "R/web-cache.R:.web_build_id_max" = c(
+    "FORMAT",
+    "The longest build id the web build's inventory schema allows, as cellucid-python's web cache checks it."
   ),
   "R/error-messages.R:.non_finite_example_limit" = c(
     "MSG",
     "How many offending values an error message quotes; every value is checked."
   ),
-  "src/export_lock.c:INT_MAX" = c(
+  "src/random.c:R_XLEN_T_MAX" = c(
     "PLAT",
-    "The lock's reentry count is a C int; a third of INT_MAX keeps its arithmetic from overflowing."
+    "The longest vector R can allocate; a byte count beyond it has no raw vector to fill."
+  ),
+  "R/session-bundle.R:.session_max_frame_bytes" = c(
+    "FORMAT",
+    "A session frame's length is a u32: the largest manifest or stored chunk the format can frame."
+  ),
+  "R/session-bundle.R:.session_max_safe_integer" = c(
+    "FORMAT",
+    "The largest integer the web app reads exactly from JSON (2^53 - 1), as cellucid-python checks it."
+  ),
+  "R/session-fields.R:.codes_maximum" = c(
+    "FORMAT",
+    "The largest code of each typed array a session declares (Uint8/16/32); the largest marks an uncovered cell."
+  ),
+  "src/session_codecs.c:INT_MAX" = c(
+    "PLAT",
+    "R's integer vectors hold the 0-based cell indices: a cell count beyond INT_MAX has no R object to index."
+  ),
+  "src/session_codecs.c:UINT_MAX" = c(
+    "PLAT",
+    "zlib counts each inflate buffer in uInt: longer input and output are passed in pieces of at most UINT_MAX bytes, so nothing is refused for it."
+  ),
+  "src/session_codecs.c:R_XLEN_T_MAX" = c(
+    "PLAT",
+    "The longest raw vector R can return (2^31 - 1 on 32-bit R): an inflated stream or declared size beyond it has no vector to fill."
+  ),
+  "src/chunks.c:R_XLEN_T_MAX" = c(
+    "PLAT",
+    "The longest raw vector R allocates: a chunk, block or frame beyond it is refused before its byte count can wrap a 32-bit R_xlen_t."
+  ),
+  "src/extent.c:R_XLEN_T_MAX" = c(
+    "PLAT",
+    "The longest vector R allocates: a row count whose pointers (one more) it cannot hold is refused before the cast."
+  ),
+  "src/chunks.c:UINT32_MAX" = c(
+    "FORMAT",
+    "A binary command frame states its header's length as a uint32."
   )
 )
 

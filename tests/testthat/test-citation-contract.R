@@ -5,8 +5,8 @@
 # changed without re-running the script, or a region edited by hand, fails here.
 #
 # inst/CITATION and README.md ship in the package; CITATION.cff does not, so the
-# comparison with the block runs in a source checkout only. The body checks run
-# wherever tools::sha256sum() exists (R >= 4.5).
+# comparison with the block runs in a source checkout only. The digests come from
+# the package's own SHA-256, so both checks run on every supported R.
 
 cellucid_text_bytes <- function(path) {
   bytes <- readBin(path, "raw", file.info(path)$size)
@@ -16,10 +16,7 @@ cellucid_text_bytes <- function(path) {
 }
 
 cellucid_sha256_text <- function(text) {
-  path <- tempfile()
-  on.exit(unlink(path), add = TRUE)
-  writeBin(charToRaw(enc2utf8(text)), path)
-  unname(tools::sha256sum(path))
+  cellucid:::.native_sha256(charToRaw(enc2utf8(text)))
 }
 
 cellucid_citation_region <- function(text, comment_open, comment_close) {
@@ -65,10 +62,6 @@ cellucid_generated_citations <- function() {
 }
 
 test_that("generated citations were not edited by hand", {
-  skip_if_not(
-    exists("sha256sum", envir = asNamespace("tools"), inherits = FALSE),
-    "tools::sha256sum() needs R >= 4.5"
-  )
   for (surface in cellucid_generated_citations()) {
     region <- cellucid_citation_region(
       cellucid_text_bytes(surface$path), surface$open, surface$close
@@ -87,10 +80,6 @@ test_that("generated citations were not edited by hand", {
 
 test_that("generated citations match this checkout's CITATION.cff", {
   skip_if_not(cellucid_is_source_checkout(), "CITATION.cff is not shipped")
-  skip_if_not(
-    exists("sha256sum", envir = asNamespace("tools"), inherits = FALSE),
-    "tools::sha256sum() needs R >= 4.5"
-  )
   block <- cellucid_citation_block(
     file.path(cellucid_repository_root(), "CITATION.cff")
   )

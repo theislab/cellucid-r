@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "build_id": "fixture-build-1",
+  "assets": [
+    {
+      "path": "assets/app.js",
+      "sha256": "bfd95bbc24a2664fdcd273a9b281f107f62f886b3a085a1187b6e8cb4b3678c6",
+      "bytes": 55,
+      "content_type": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "index.html",
+      "sha256": "830e67b0407cf491de842f255fd693f0c45466fa78d1a78a8127f7bab208a6bd",
+      "bytes": 313,
+      "content_type": "text/html; charset=utf-8"
+    }
+  ]
+}

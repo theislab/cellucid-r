@@ -1,0 +1,1 @@
+{"chunks":[34],"compressor":{"id":"zlib","level":6},"dimension_separator":".","dtype":"|O","fill_value":"","filters":[{"id":"vlen-utf8"}],"order":"C","shape":[34],"zarr_format":2}

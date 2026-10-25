@@ -1,0 +1,126 @@
+---
+title: "Viewing data from R"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{Viewing data from R}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## View an object
+
+`cellucid_view()` opens a Seurat, SingleCellExperiment or SummarizedExperiment
+object in the Cellucid viewer: in the RStudio or Positron Viewer pane, or in
+your browser. Nothing is written to disk and no Python is needed.
+
+```{r, eval=FALSE}
+library(cellucid)
+library(SeuratObject)
+data("pbmc_small")
+
+viewer <- cellucid_view(pbmc_small)
+```
+
+The object is read as `cellucid_prepare(data = pbmc_small)` reads it -- cell
+metadata, every reduction as `X_<name>`, the assays, the SNN graph -- into the
+same Cellucid-ready AnnData, held in memory and uncompressed (the browser
+reads it over loopback): only what the viewer asks for is made, when it asks,
+and an object's genes x cells matrix is never transposed whole. Several assays (RNA and ADT, say) open as modalities,
+with a Modality choice in the viewer's Data mapping.
+
+The viewer is yours to talk to:
+
+```{r, eval=FALSE}
+cellucid_color_by(viewer, "groups")
+cellucid_highlight(viewer, colnames(pbmc_small)[1:20], color = "#377eb8")
+
+cellucid_on(viewer, "selection", function(event) {
+  message(length(event$cells), " cells selected")
+})
+# ... select cells in the viewer with the lasso, then:
+selected <- cellucid_selection(viewer)
+subset(pbmc_small, cells = selected$cell_names)
+
+session <- cellucid_session(viewer, file = "pbmc.cellucid-session")
+# The highlight groups and fields made in the viewer, as meta.data columns:
+pbmc_small <- cellucid_apply_session(pbmc_small, viewer)
+cellucid_stop(viewer)
+```
+
+The R console stays usable while the viewer is open: the server answers the
+viewer whenever R is idle.
+
+## Serve from a cluster
+
+On a machine without a screen, `cellucid_serve()` serves the same viewer and
+prints its address; reach it through an SSH tunnel:
+
+```{r, eval=FALSE}
+viewer <- cellucid_serve(sce)
+#> Serving sce at http://127.0.0.1:8765
+#> Open http://127.0.0.1:8765/?viewer=true&viewerId=...&viewerToken=...&anndata=true in a browser (from another machine: ssh -L 8765:127.0.0.1:8765 <this host>, then open the address there).
+#> Stop it with cellucid_stop().
+```
+
+Port 8765 is the default because Google sign-in (community annotation) accepts
+only that local address; when it is taken, the next free port is used and the
+message says so. Behind RStudio Server or Posit Workbench, name the proxy's
+host with `allowed_hosts = "rstudio.example.org"`.
+
+## What the viewer reads
+
+The web app itself is downloaded once, at first use, from www.cellucid.com
+into `file.path(tools::R_user_dir("cellucid", "cache"), "web")`, and every file is checked
+against the build's SHA-256 inventory before it is served.
+`cellucid_clear_web_cache()` removes it.
+
+The data side can be shown here without a browser: serve a store with
+`serve_web_ui = FALSE` and ask the server what a viewer would ask. Because R
+serves and asks in one process here, `fetch()` turns R's event loop while it
+waits for the answer.
+
+```{r}
+library(cellucid)
+
+store <- cellucid_prepare(
+  file.path(tempdir(), "viewer-example.zarr"), "zarr",
+  embeddings = list(X_umap = matrix(c(0, 1, 0, 1, 0, 0, 1, 1), ncol = 2)),
+  obs = data.frame(cluster = factor(c("a", "a", "b", "b"))),
+  dataset_id = "viewer-example", dataset_name = "Viewer example",
+  force = TRUE
+)
+
+viewer <- cellucid_serve(store, port = 0L, serve_web_ui = FALSE, quiet = TRUE)
+viewer
+
+fetch <- function(path) {
+  answer <- NULL
+  pool <- curl::new_pool()
+  curl::curl_fetch_multi(
+    paste0(viewer$url, path), pool = pool,
+    done = function(response) answer <<- response,
+    fail = function(message) stop(message)
+  )
+  while (is.null(answer)) {
+    curl::multi_run(timeout = 0, poll = TRUE, pool = pool)
+    later::run_now(0.01)
+  }
+  rawToChar(answer$content)
+}
+
+cat(fetch("/_cellucid/datasets"))
+cat(fetch("/_cellucid/anndata/viewer-example.zarr/obs/.zattrs"))
+
+cellucid_stop(viewer)
+```
+
+The browser opens `_cellucid/datasets`, then reads the store key by key with
+range requests, exactly as it reads a Cellucid-ready AnnData on any web host.
+A file given by path (an `.h5ad`, a `.zarr.zip`, a Loom or 10x `.h5`, an
+`.rds`) is served from disk as it is; the browser reads it itself.

@@ -14,3 +14,4 @@
 ^cran-comments\.md$
 ^cellucid-logo\.svg$
 ^\.git$
+^tests/testthat/fixtures/cross_writer_mudata$

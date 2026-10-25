@@ -23,3 +23,19 @@ articles:
     contents:
       - installation
       - cellucid
+      - viewer
+reference:
+  - title: Write a Cellucid-ready AnnData
+    contents:
+      - cellucid_prepare
+      - cellucid_transition_drift
+  - title: View from R
+    contents:
+      - cellucid_view
+      - cellucid_highlight
+      - cellucid_on
+      - cellucid_debug_connection
+      - cellucid_clear_web_cache
+  - title: Sessions
+    contents:
+      - cellucid_apply_session
