@@ -85,6 +85,24 @@
   expression
 }
 
+# The matrix with its cells in the order `rows` gives (1-based), as a store
+# in priority order presents it (R/priority.R), without a reordered copy: a
+# sparse genes x cells matrix is read in that order (its gene-major blocks
+# visit the cells so, src/chunks.c), a sparse cells x genes one renumbered
+# (each gene's values sorted by new row when its block is made), a dense one
+# read row block by row block through the order. Only the order is held.
+.expression_in_cell_order <- function(expression, rows) {
+  expression$cells <- as.integer(rows)
+  expression
+}
+
+# The 0-based new row of each cell of a cells x genes matrix in cell order.
+.expression_new_rows <- function(expression) {
+  new_row <- integer(length(expression$cells))
+  new_row[expression$cells] <- seq_along(expression$cells) - 1L
+  new_row
+}
+
 # The stored values' dtype, from the extent already measured when no genes
 # were left out since.
 .expression_value_dtype <- function(expression) {
@@ -114,14 +132,25 @@
   shape <- .expression_dims(expression)
   if (!expression$sparse) {
     # A genes x cells matrix is read block by block through its transpose,
-    # never transposed whole.
+    # never transposed whole; cells in an order are read through it.
     values <- if (expression$feature_major) .transposed(matrix) else matrix
+    if (!is.null(expression$cells)) values <- .rows_in_order(values, expression$cells)
     .ad_dense(store, path, values, gene_major = TRUE, dtype = dtype)
     return(invisible(NULL))
   }
   if (expression$feature_major) {
-    arrays <- .gene_major_arrays(store, path, matrix, shape, dtype, .expression_gene_map(expression))
+    arrays <- .gene_major_arrays(store, path, matrix, shape, dtype, .expression_gene_map(expression),
+                                 cells = expression$cells)
     pointers <- arrays$pointers
+    indices <- arrays$indices
+    values <- arrays$values
+  } else if (!is.null(expression$cells)) {
+    sizes <- c(.zarr_item_size(.sparse_index_dtype("csc_matrix", shape)), .zarr_item_size(dtype))
+    arrays <- .renumbered_arrays(
+      store, path, matrix, .expression_new_rows(expression), sizes, dtype,
+      block_values = .renumbered_block_values(store, shape[[1L]], length(matrix@x), sum(sizes))
+    )
+    pointers <- matrix@p
     indices <- arrays$indices
     values <- arrays$values
   } else {
@@ -151,7 +180,8 @@
 # makes a block when the viewer first reads one of its genes: the first gene
 # costs one block, not the whole transpose, and a block is kept in the
 # store's cache, so the blocks held never exceed cache_bytes.
-.gene_major_arrays <- function(store, path, matrix, shape, dtype, genes) {
+.gene_major_arrays <- function(store, path, matrix, shape, dtype, genes, cells = NULL) {
+  visit <- if (is.null(cells)) integer(0) else as.integer(cells - 1L)
   n_cells <- shape[[1L]]
   n_genes <- shape[[2L]]
   pointers <- .deferred(function() .native_row_pointers(matrix@i, genes$map, n_genes), length = n_genes + 1)
@@ -166,7 +196,7 @@
       first <- index * block_values
       .native_gene_major_block(
         matrix, genes$map, genes$origin, .realize(pointers), first, min(n_values, first + block_values),
-        sizes[[1L]], dtype
+        sizes[[1L]], dtype, visit
       )
     }
     if (store$memory) {
@@ -180,20 +210,66 @@
     }
     held$block
   }
-  array <- function(part) {
-    structure(list(
-      length = n_values,
-      chunk = function(first, count, chunk_length) {
-        position <- first - 1
-        index <- position %/% block_values
-        size <- sizes[[part]]
-        .native_raw_slice(
-          block(index)[[part]], (position - index * block_values) * size, count * size, chunk_length * size
-        )
-      }
-    ), class = "cellucid_chunked")
+  list(pointers = pointers, indices = .block_array(n_values, block_values, sizes, block, 1L),
+       values = .block_array(n_values, block_values, sizes, block, 2L))
+}
+
+# One part (1: indices, 2: values) of gene-major arrays made by blocks of
+# `block_values` positions: each chunk cut from its block.
+.block_array <- function(n_values, block_values, sizes, block, part) {
+  structure(list(
+    length = n_values,
+    chunk = function(first, count, chunk_length) {
+      position <- first - 1
+      index <- position %/% block_values
+      size <- sizes[[part]]
+      .native_raw_slice(
+        block(index)[[part]], (position - index * block_values) * size, count * size, chunk_length * size
+      )
+    }
+  ), class = "cellucid_chunked")
+}
+
+# The gene-major arrays of a cells x genes dgCMatrix whose rows (cells) are
+# renumbered (`new_row`, 0-based) -- an expression matrix in priority order,
+# its genes in their order: each block's genes read whole, renumbered and
+# sorted by new row (src/chunks.c), never a reordered copy of the matrix; the
+# blocks kept as .gene_major_arrays() keeps them. `sizes` are the bytes of an
+# index and of a value (`dtype`).
+.renumbered_arrays <- function(store, path, matrix, new_row, sizes, dtype, block_values) {
+  n_values <- length(matrix@x)
+  held <- new.env(parent = emptyenv())
+  block <- function(index) {
+    make <- function() {
+      first <- index * block_values
+      .native_renumbered_block(matrix, new_row, first, min(n_values, first + block_values), sizes[[1L]], dtype)
+    }
+    if (store$memory) return(.cached(store$cache, paste0(path, "\001", index), make))
+    if (!identical(held$index, index)) {
+      held$block <- NULL
+      held$block <- make()
+      held$index <- index
+    }
+    held$block
   }
-  list(pointers = pointers, indices = array(1L), values = array(2L))
+  list(indices = .block_array(n_values, block_values, sizes, block, 1L),
+       values = .block_array(n_values, block_values, sizes, block, 2L))
+}
+
+# How many values one renumbered block of an expression matrix holds: a whole
+# number of the sliced chunks (a chunk never spans two blocks), at most eight
+# values a cell. A block sorts every gene reaching into it whole, and a gene
+# holds at most one value a cell, so at most one gene in eight is sorted
+# twice. A written store holds one block at a time -- X's values are written
+# block by block, then its cells, each block made once for each -- so writing
+# in priority order holds one block (8 bytes a value with float32 data), not
+# a copy of X; a served store keeps its blocks in its cache, each at most
+# half of it.
+.renumbered_block_values <- function(store, n_cells, n_values, bytes_per_value) {
+  chunk <- .chunk_elements_sliced
+  blocks <- min(ceiling(n_values / chunk), ceiling(8 * n_cells / chunk))
+  if (store$memory) blocks <- min(blocks, floor(store$cache$budget / 2 / bytes_per_value / chunk))
+  max(1, blocks) * chunk
 }
 
 # How many values one gene-major block holds: a whole number of the sliced

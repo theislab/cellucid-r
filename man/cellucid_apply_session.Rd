@@ -23,10 +23,20 @@ cellucid_apply_session(
 }
 \arguments{
 \item{data}{The Seurat, SingleCellExperiment or SummarizedExperiment object
-the session was saved on, with its cells in the same order.}
+the session was saved on, its cells in their original order: a session names
+every cell by its original position (its column in the order the cells were
+given, whatever order a store keeps them in). An object read from a
+Cellucid-ready store in its stored priority order (its
+\code{cellucid$priority} record describes its cells) is refused;
+\code{\link{cellucid_restore_original_order}()} puts it back. One whose
+record no longer describes its cells (subset, combined or reordered since it
+was read) is taken row by row as it is, with a warning, as the web app reads
+such a file.}
 \item{session}{A \code{.cellucid-session} file (what the viewer saves, and
-\code{\link{cellucid_session}()} returns), or an open viewer
-(\code{\link{cellucid_view}()}), whose session is fetched now.}
+\code{\link{cellucid_session_result}()} returns), or what
+\code{\link{cellucid_request_session}()} returned: the session is asked for
+first and applied here (in a Jupyter notebook in a later cell, since the
+viewer answers between cells; elsewhere this waits for it).}
 \item{...}{The arguments \code{\link{cellucid_view}()} was given that choose
 what is shown (\code{embeddings}, \code{obs}, \code{modalities}, \ldots), so
 the object is checked against what the viewer showed.}
@@ -50,7 +60,7 @@ fingerprint, the columns added, its highlight pages and field overlays -- in
 \item{return_summary}{\code{TRUE} returns \code{list(data, added_columns)}
 instead of the object alone.}
 \item{timeout}{Seconds to wait for a viewer's session, when \code{session}
-is a viewer.}
+is a request.}
 }
 \value{
 The object with the added columns in its cell metadata (Seurat
@@ -84,8 +94,8 @@ mapping names. Pass \code{\link{cellucid_view}()}'s own arguments in
 \code{...} when it was given any that change what is shown.
 }
 \seealso{
-\code{\link{cellucid_session}()} (in \code{\link{cellucid_on}}) to save a
-viewer's session; cellucid-python's \code{apply_cellucid_session_to_anndata()}.
+\code{\link{cellucid_request_session}()} (in \code{\link{cellucid_on}}) to
+ask a viewer for its session; cellucid-python's \code{apply_cellucid_session_to_anndata()}.
 }
 \examples{
 \dontrun{

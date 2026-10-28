@@ -58,11 +58,13 @@ test_that("a path is classified as the registry and the web app classify it", {
   expect_error(classify(file.path(folder, "missing.h5ad")), "Nothing exists at")
   expect_error(classify(folder), "is not a Zarr store")
   store <- suppressMessages(cellucid_prepare(
+    priority_seed = NULL,
     file.path(folder, "s.zarr"), "zarr",
     embeddings = list(X_umap = diag(2)), dataset_id = "s", dataset_name = "S"
   ))
   expect_identical(classify(store)[c("kind", "layout", "zarr_format")], list(kind = "zarr", layout = "folder", zarr_format = 2L))
   zip <- suppressMessages(cellucid_prepare(
+    priority_seed = NULL,
     file.path(folder, "s.zarr.zip"), "zarr.zip",
     embeddings = list(X_umap = diag(2)), dataset_id = "s", dataset_name = "S"
   ))

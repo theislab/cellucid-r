@@ -11,12 +11,20 @@
 #
 # - commands (R -> viewer): text frames, one JSON object each, with exactly
 #   the keys .viewer_command_fields names; no credentials. A command that
-#   names cells (a highlight, a visibility change) is a binary frame whose
-#   header has exactly the keys .viewer_binary_command_fields names, padded
-#   with spaces so its cells start on a 4-byte boundary;
+#   names cells or carries a column (a highlight, a visibility change, a
+#   pushed field) is a binary frame whose header has exactly the keys
+#   .viewer_binary_command_fields names, padded with spaces so its cells
+#   start on a 4-byte boundary;
 # - events (viewer -> R): text frames with exactly the keys
-#   .viewer_event_fields names, and binary frames for a selection and a
-#   session bundle.
+#   .viewer_event_fields names, and binary frames for a selection, a result
+#   and a session bundle.
+#
+# Every cell either side names is an original position: the 0-based row of
+# the dataset's obs, whatever subsample the viewer opened. A result is one
+# thing a person made in the viewer (a highlight group, a categorical or
+# continuous field, a gene set, the visible or the open cells): its body is
+# its cells (uint32, when its header counts them) then its values (one per
+# named cell, or per cell of the dataset when it names none).
 #
 # A binary frame, either way, is a little-endian uint32 header length, that
 # many bytes of UTF-8 JSON header, then the body; a body of cells is
@@ -40,21 +48,25 @@
   setColorBy = c("type", "field"),
   resetCamera = "type",
   freeze = "type",
-  setDataMapping = c("type", "requestId", "mapping")
+  setDataMapping = c("type", "requestId", "mapping"),
+  setGeneSet = c("type", "requestId", "name", "description", "genes")
 )
 
 # The header of each binary command; its body is the cells. setVisibility of
 # every cell is all = TRUE and no cells.
 .viewer_binary_command_fields <- list(
-  highlight = c("type", "color"),
-  setVisibility = c("type", "visible", "all")
+  highlight = c("type", "color", "label"),
+  setVisibility = c("type", "visible", "all"),
+  setField = c("type", "requestId", "key", "kind", "categories", "nObs", "cells", "values")
 )
 
 # The keys a command is given as here, its cells under `cells` (NULL for
-# setVisibility of every cell).
+# setVisibility of every cell, and for a setField whose values cover every
+# cell); a setField's values under `values`, in the type `valueType` names.
 .viewer_binary_command_arguments <- list(
-  highlight = c("type", "cells", "color"),
-  setVisibility = c("type", "cells", "visible")
+  highlight = c("type", "cells", "color", "label"),
+  setVisibility = c("type", "cells", "visible"),
+  setField = c("type", "requestId", "key", "kind", "categories", "nObs", "cells", "values", "valueType")
 )
 
 .viewer_command_types <- c(names(.viewer_command_fields), names(.viewer_binary_command_fields))
@@ -62,17 +74,44 @@
 .viewer_event_fields <- list(
   hover = c("type", "cell", "position"),
   click = c("type", "cell", "button", "shift", "ctrl"),
-  ready = c("type", "n_cells", "dimensions"),
+  ready = c("type", "n_cells", "n_obs", "dimensions"),
   pong = c("type", "requestId", "t"),
   debug_snapshot = c("type", "requestId", "ts", "locationHref", "origin", "serverUrl", "connected", "userAgent"),
   command_error = c("type", "command", "reason"),
-  data_mapping = c("type", "requestId", "origin", "mapping")
+  data_mapping = c("type", "requestId", "origin", "mapping"),
+  color_by = c("type", "field", "source", "label"),
+  result_removed = c("type", "epoch", "revision", "kind", "id"),
+  results = c("type", "epoch", "dataset", "revision", "nObs", "items")
 )
 
 .viewer_binary_event_fields <- list(
   selection = c("type", "source"),
-  session_bundle = c("type", "requestId")
+  session_bundle = c("type", "requestId"),
+  result = c("type", "requestId", "epoch", "revision", "kind", "id", "nObs", "meta", "cells", "values")
 )
+
+# One page's account of one dataset it opened (viewer-protocol.json
+# results$epochPattern): every result event carries it, and a host keeps the
+# results of one epoch.
+.viewer_result_epoch_pattern <- "^[0-9a-f]{16}$"
+.is_epoch <- function(value) {
+  is.character(value) && length(value) == 1L && !is.na(value) && grepl(.viewer_result_epoch_pattern, value)
+}
+
+# Each result kind, with the exact keys of its meta.
+.viewer_result_meta_fields <- list(
+  highlight = c("label", "tool", "pageId", "pageName", "color", "enabled"),
+  categorical = c("key", "categories", "origin"),
+  continuous = c("key", "origin"),
+  geneSet = c("name", "description", "genes", "symbols", "origin"),
+  visibility = character(0),
+  subset = "digest"
+)
+.viewer_highlight_tools <- c("annotation", "category", "combined", "knn", "lasso", "proximity", "range")
+.viewer_result_origins <- c("analysis", "markers", "notebook", "user")
+.viewer_field_kinds <- c("categorical", "continuous")
+# Each value type of a body, and its size in bytes.
+.viewer_value_types <- c(uint8 = 1L, uint16 = 2L, uint32 = 4L, float32 = 4L, float64 = 8L)
 
 .viewer_data_mapping_origins <- c("default", "best_guess", "session", "user", "notebook")
 
@@ -167,8 +206,40 @@
       if (!isTRUE(event$shift) && !isFALSE(event$shift)) bad("shift must be true or false")
       if (!isTRUE(event$ctrl) && !isFALSE(event$ctrl)) bad("ctrl must be true or false")
     },
+    color_by = {
+      if (is.null(event$field) != is.null(event$source) || is.null(event$field) != is.null(event$label)) {
+        bad("names a field, its source and its label, or none")
+      }
+      if (!is.null(event$field)) {
+        if (!.is_exact_text(event$field, whitespace = TRUE)) bad("field must be exact text")
+        if (!.is_exact_text(event$label, whitespace = TRUE)) bad("label must be exact text")
+        if (!event$source %in% c("obs", "var")) bad("source must be obs or var")
+      }
+    },
+    result_removed = {
+      if (!.is_epoch(event$epoch)) bad("epoch must be 16 lowercase hexadecimal characters")
+      if (!.is_count(event$revision) || event$revision < 1) bad("revision must be a positive whole number")
+      if (!.is_exact_text(event$kind) || is.null(.viewer_result_meta_fields[[event$kind]])) bad("kind must be a result kind")
+      if (!.is_exact_text(event$id, whitespace = TRUE)) bad("id must be exact text")
+    },
+    results = {
+      if (!.is_epoch(event$epoch)) bad("epoch must be 16 lowercase hexadecimal characters")
+      if (!is.null(event$dataset) && !.is_exact_text(event$dataset)) bad("dataset must be a dataset id or null")
+      if (!.is_count(event$revision)) bad("revision must be a count")
+      if (!.is_count(event$nObs)) bad("nObs must be a count")
+      if (!is.list(event$items) || !is.null(names(event$items))) bad("items must be a list")
+      if (is.null(event$dataset) && length(event$items) > 0L) bad("of a dataset the host did not open must list nothing")
+      for (item in event$items) {
+        .require_exact_keys(item, c("kind", "id", "revision"), "A results item")
+        if (!.is_exact_text(item$kind) || is.null(.viewer_result_meta_fields[[item$kind]])) bad("item kind must be a result kind")
+        if (!.is_exact_text(item$id, whitespace = TRUE) || !.is_count(item$revision) || item$revision < 1) {
+          bad("item must name a result and its revision")
+        }
+      }
+    },
     ready = {
       if (!.is_count(event$n_cells)) bad("n_cells must be a count")
+      if (!.is_count(event$n_obs) || event$n_obs < event$n_cells) bad("n_obs must be a count of at least n_cells")
       if (!.is_count(event$dimensions) || !event$dimensions %in% 1:3) bad("dimensions must be 1, 2 or 3")
     },
     pong = {
@@ -238,6 +309,8 @@
   if (identical(type, "selection")) {
     if (!.is_exact_text(header$source)) .refuse_frame("selection source must be exact text.")
     list(type = type, payload = list(cells = .decode_selection_cells(body), source = header$source))
+  } else if (identical(type, "result")) {
+    list(type = type, payload = .decode_result(header, body))
   } else {
     if (!.is_exact_text(header$requestId)) .refuse_frame("session_bundle requestId must be exact text.")
     list(type = type, payload = list(requestId = header$requestId), body = body)
@@ -297,8 +370,12 @@
     if (!is.character(command$color) || length(command$color) != 1L || !grepl("^#[0-9a-fA-F]{6}$", command$color)) {
       .abort("highlight color must be a six-digit hex colour such as \"#e41a1c\".")
     }
-    return(.binary_command_frame(list(type = type, color = command$color), command$cells))
+    if (!is.null(command$label) && !.is_exact_text(command$label, whitespace = TRUE)) {
+      .abort("highlight label must be exact text, or NULL.")
+    }
+    return(.binary_command_frame(list(type = type, color = command$color, label = command$label), command$cells))
   }
+  if (identical(type, "setField")) return(.set_field_frame(command))
   if (identical(type, "setVisibility")) {
     if (!isTRUE(command$visible) && !isFALSE(command$visible)) {
       .abort("setVisibility visible must be TRUE or FALSE.")
@@ -306,7 +383,17 @@
     every <- is.null(command$cells)
     return(.binary_command_frame(list(type = type, visible = command$visible, all = every), command$cells, every))
   }
-  if (identical(type, "setColorBy")) {
+  if (identical(type, "setGeneSet")) {
+    if (!.is_exact_text(command$name, whitespace = TRUE)) .abort("setGeneSet name must be exact text.")
+    if (!is.character(command$description) || length(command$description) != 1L || is.na(command$description)) {
+      .abort("setGeneSet description must be one string.")
+    }
+    genes <- unlist(command$genes)
+    if (length(genes) > 0L && (!is.character(genes) || anyNA(genes) || !all(vapply(genes, .is_exact_text, logical(1))) || anyDuplicated(genes))) {
+      .abort("setGeneSet genes must be gene names, each once, without spaces.")
+    }
+    command$genes <- I(as.character(genes))
+  } else if (identical(type, "setColorBy")) {
     if (!.is_exact_text(command$field, whitespace = TRUE)) .abort("setColorBy field must be exact text.")
   } else if (identical(type, "setDataMapping")) {
     tryCatch(
@@ -324,11 +411,190 @@
 # -- as little-endian uint32, checked and written in one pass (src/chunks.c).
 # `every`: a setVisibility of every cell, which names none.
 .binary_command_frame <- function(header, cells, every = FALSE) {
-  text <- as.character(jsonlite::toJSON(header, auto_unbox = TRUE))
+  text <- as.character(jsonlite::toJSON(header, auto_unbox = TRUE, null = "null"))
   text <- paste0(text, strrep(" ", (4L - nchar(text, type = "bytes") %% 4L) %% 4L))
   frame <- .native_cells_frame(charToRaw(text), if (!every) cells, allow_empty = every)
   if (is.null(frame)) {
     .abort(header$type, " cells must be cell indices, strictly ascending, at least one.")
   }
   frame
+}
+
+# --- Results and pushed fields --------------------------------------------------
+
+# Values of one value type as little-endian bytes, and back.
+.encode_wire_values <- function(values, type) {
+  switch(type,
+    uint8 = writeBin(as.integer(values), raw(), size = 1L),
+    uint16 = writeBin(as.integer(values), raw(), size = 2L, endian = "little"),
+    uint32 = .encode_uint32(values),
+    float32 = writeBin(as.double(values), raw(), size = 4L, endian = "little"),
+    float64 = writeBin(as.double(values), raw(), size = 8L, endian = "little")
+  )
+}
+
+.decode_wire_values <- function(bytes, type, n) {
+  if (n == 0L) return(if (type %in% c("float32", "float64")) double(0) else integer(0))
+  switch(type,
+    uint8 = readBin(bytes, "integer", n = n, size = 1L, signed = FALSE),
+    uint16 = readBin(bytes, "integer", n = n, size = 2L, signed = FALSE, endian = "little"),
+    uint32 = {
+      values <- as.double(readBin(bytes, "integer", n = n, size = 4L, endian = "little"))
+      values[is.na(values)] <- 2147483648
+      values[values < 0] <- values[values < 0] + 4294967296
+      values
+    },
+    float32 = readBin(bytes, "double", n = n, size = 4L, endian = "little"),
+    float64 = readBin(bytes, "double", n = n, size = 8L, endian = "little")
+  )
+}
+
+.is_text_list <- function(value, whitespace = TRUE, nonempty = FALSE) {
+  values <- unlist(value)
+  is.list(value) && (!nonempty || length(value) > 0L) && length(values) == length(value) &&
+    (length(values) == 0L || (is.character(values) && !anyNA(values) && !anyDuplicated(values) &&
+      (whitespace || all(vapply(values, .is_exact_text, logical(1))))))
+}
+
+# Check one result's header against the rules of its kind.
+.require_result_header <- function(header) {
+  bad <- function(what) .refuse_frame("A result ", what, ".")
+  kind <- header$kind
+  if (!.is_exact_text(kind) || is.null(.viewer_result_meta_fields[[kind]])) bad("kind must be a result kind")
+  if (!is.null(header$requestId) && !.is_exact_text(header$requestId)) bad("requestId must be exact text or null")
+  if (!.is_epoch(header$epoch)) bad("epoch must be 16 lowercase hexadecimal characters")
+  if (!.is_count(header$revision) || header$revision < 1) bad("revision must be a positive whole number")
+  if (!.is_exact_text(header$id, whitespace = TRUE)) bad("id must be exact text")
+  if (!.is_count(header$nObs)) bad("nObs must be a cell count")
+  meta <- header$meta
+  fields <- .viewer_result_meta_fields[[kind]]
+  if (length(fields) == 0L) {
+    if (!is.list(meta) || length(meta) != 0L) bad("meta of this kind must be empty")
+  } else {
+    .require_exact_keys(meta, fields, paste0("A ", kind, " result's meta"))
+  }
+  if ("origin" %in% fields && !identical(length(meta$origin), 1L)) bad("must name its origin")
+  if ("origin" %in% fields && !meta$origin %in% .viewer_result_origins) bad("origin must be one of the protocol's")
+  cells <- header$cells
+  values <- header$values
+  if (!is.null(cells) && !.is_count(cells)) bad("cells must be a count or null")
+  if (!is.null(values) && (!.is_exact_text(values) || !values %in% names(.viewer_value_types))) bad("values must be a value type or null")
+  switch(kind,
+    highlight = {
+      if (!.is_exact_text(meta$label, whitespace = TRUE) || !meta$tool %in% .viewer_highlight_tools) bad("names its label and tool")
+      if (!.is_exact_text(meta$pageId) || !.is_exact_text(meta$pageName, whitespace = TRUE)) bad("names its page")
+      if (!is.character(meta$color) || !grepl("^#[0-9a-fA-F]{6}$", meta$color) || !(isTRUE(meta$enabled) || isFALSE(meta$enabled))) {
+        bad("carries its page colour and whether it is enabled")
+      }
+      if (is.null(cells) || cells < 1 || !is.null(values)) bad("of a highlight names its cells and no values")
+    },
+    categorical = {
+      if (!.is_exact_text(meta$key, whitespace = TRUE) || !.is_text_list(meta$categories, nonempty = TRUE)) bad("names its key and categories")
+      if (!values %in% c("uint8", "uint16", "uint32") || identical(cells, 0L)) bad("of a categorical carries codes")
+    },
+    continuous = {
+      if (!.is_exact_text(meta$key, whitespace = TRUE)) bad("names its key")
+      if (!values %in% c("float32", "float64") || identical(cells, 0L)) bad("of a continuous field carries floats")
+    },
+    geneSet = {
+      if (!.is_exact_text(meta$name, whitespace = TRUE) || !is.character(meta$description)) bad("names its gene set")
+      if (!.is_text_list(meta$genes, whitespace = FALSE)) bad("lists its genes, each once")
+      if (!is.list(meta$symbols) || length(meta$symbols) != length(meta$genes) ||
+          !all(vapply(meta$symbols, function(symbol) is.character(symbol) && length(symbol) == 1L, TRUE))) {
+        bad("names a symbol for each of its genes")
+      }
+      if (!identical(as.integer(cells), 0L) || !is.null(values)) bad("of a gene set names no cells and no values")
+    },
+    visibility = {
+      if (!identical(header$id, "visible") || !is.null(values)) bad("of the visible cells is \"visible\" with no values")
+    },
+    subset = {
+      if (!identical(header$id, "open") || !is.null(values) || identical(as.integer(cells), 0L)) bad("of the open cells is \"open\"")
+      if (!is.character(meta$digest) || !grepl("^[0-9a-f]{16}$", meta$digest)) bad("carries the open set's digest")
+    }
+  )
+  invisible(header)
+}
+
+# One result: its header checked, its cells (0-based, ascending, or NULL for
+# every cell) and values read.
+.decode_result <- function(header, body) {
+  .require_result_header(header)
+  n_cells <- header$cells
+  type <- header$values
+  cell_bytes <- if (is.null(n_cells)) 0 else 4 * n_cells
+  n_values <- if (is.null(type)) 0 else if (is.null(n_cells)) header$nObs else n_cells
+  value_bytes <- if (is.null(type)) 0 else n_values * .viewer_value_types[[type]]
+  if (length(body) != cell_bytes + value_bytes) {
+    .refuse_frame("The ", header$kind, " result body must be ", cell_bytes + value_bytes, " ", .plural(cell_bytes + value_bytes, "byte"), ", not ", length(body), ".")
+  }
+  cells <- NULL
+  if (!is.null(n_cells)) {
+    cells <- if (n_cells == 0) numeric(0) else .decode_selection_cells(body[seq_len(cell_bytes)])
+    if (length(cells) > 0L && cells[[length(cells)]] >= header$nObs) .refuse_frame("A result names a cell beyond its dataset.")
+  }
+  values <- NULL
+  if (!is.null(type)) {
+    values <- .decode_wire_values(if (value_bytes == 0) raw(0) else body[cell_bytes + seq_len(value_bytes)], type, n_values)
+    if (identical(header$kind, "categorical")) {
+      missing <- 2^(8 * .viewer_value_types[[type]]) - 1
+      if (any(values >= length(header$meta$categories) & values != missing)) .refuse_frame("A categorical result code names no category.")
+    } else if (any(is.infinite(values))) {
+      .refuse_frame("A continuous result holds an infinity.")
+    }
+  }
+  list(
+    requestId = header$requestId, epoch = header$epoch, revision = header$revision, kind = header$kind, id = header$id,
+    nObs = header$nObs, meta = header$meta, cells = cells, values = values, value_type = type
+  )
+}
+
+# A setField command: a column for the viewer to add as a field. `cells` are
+# 0-based ascending positions or NULL (values for every cell), `values` codes
+# (`valueType` uint8/16/32, the type's largest value "no category") or
+# numbers (float32/64, NA or NaN "no value").
+.set_field_frame <- function(command) {
+  if (!.is_exact_text(command$requestId)) .abort("setField requestId must be exact text.")
+  if (!.is_exact_text(command$key, whitespace = TRUE)) .abort("setField key must be exact text.")
+  if (!.is_exact_text(command$kind) || !command$kind %in% .viewer_field_kinds) .abort("setField kind must be categorical or continuous.")
+  n_obs <- command$nObs
+  if (!.is_count(n_obs) || n_obs < 1) .abort("setField nObs must be the dataset's cell count.")
+  type <- command$valueType
+  categorical <- identical(command$kind, "categorical")
+  if (!.is_exact_text(type) || !type %in% if (categorical) c("uint8", "uint16", "uint32") else c("float32", "float64")) {
+    .abort("setField values must be ", if (categorical) "uint8, uint16 or uint32 codes" else "float32 or float64 numbers", ".")
+  }
+  cells <- command$cells
+  if (!is.null(cells) && (length(cells) == 0L || anyNA(cells) || any(cells < 0) || any(cells >= n_obs) ||
+                          is.unsorted(cells, strictly = TRUE))) {
+    .abort("setField cells must be cell positions, strictly ascending, inside the dataset.")
+  }
+  values <- command$values
+  count <- if (is.null(cells)) n_obs else length(cells)
+  if (length(values) != count) .abort("setField holds ", length(values), " ", .plural(length(values), "value"), " for ", count, " ", .plural(count, "cell"), ".")
+  if (categorical) {
+    categories <- as.character(unlist(command$categories))
+    missing <- 2^(8 * .viewer_value_types[[type]]) - 1
+    if (length(categories) == 0L || anyNA(categories) || anyDuplicated(categories) || length(categories) > missing) {
+      .abort("setField categories must be text, each once, fewer than the code type holds.")
+    }
+    if (anyNA(values) || any(values < 0 | (values >= length(categories) & values != missing))) {
+      .abort("setField codes must name a category, or be ", missing, " for none.")
+    }
+    categories <- I(categories)
+  } else {
+    categories <- NULL
+    values <- as.double(values)
+    values[is.na(values)] <- NaN
+    if (any(is.infinite(values))) .abort("setField values must be finite numbers, or NA for none.")
+  }
+  header <- list(
+    type = "setField", requestId = command$requestId, key = command$key, kind = command$kind,
+    categories = categories, nObs = n_obs, cells = if (is.null(cells)) NULL else length(cells), values = type
+  )
+  text <- as.character(jsonlite::toJSON(header, auto_unbox = TRUE, null = "null", digits = NA))
+  text <- paste0(text, strrep(" ", (4L - nchar(text, type = "bytes") %% 4L) %% 4L))
+  header_bytes <- charToRaw(text)
+  c(.encode_uint32(length(header_bytes)), header_bytes,
+    if (!is.null(cells)) .encode_uint32(cells), .encode_wire_values(values, type))
 }

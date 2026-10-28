@@ -194,15 +194,18 @@ SEXP cellucid_encode_values(SEXP values, SEXP first, SEXP count, SEXP chunk_leng
  * cell's values in that range are one run of its column, found by a binary
  * search; rows outside the block's genes are passed over. The cells are
  * visited in order, so each gene's values come out in its cells' order,
- * which is the transpose's. When the genes are kept in the matrix's own
+ * which is the transpose's; with `cells`, the cells are visited in that
+ * order and output row `c` is the `c`-th of them (a store in priority order:
+ * each gene's rows ascend by priority, made from the matrix as it is, never
+ * from a reordered copy). When the genes are kept in the matrix's own
  * order (every gene, or a subset in order) the range holds only the block's
  * rows and the rows left out between them.
  */
-SEXP cellucid_gene_major_block(SEXP i, SEXP p, SEXP x, SEXP map, SEXP origin, SEXP pointers,
+SEXP cellucid_gene_major_block(SEXP i, SEXP p, SEXP x, SEXP map, SEXP origin, SEXP pointers, SEXP cells,
                                SEXP first, SEXP last, SEXP index_size, SEXP data_dtype) {
   if (TYPEOF(i) != INTSXP || TYPEOF(p) != INTSXP || TYPEOF(x) != REALSXP || TYPEOF(pointers) != REALSXP ||
-      TYPEOF(map) != INTSXP || TYPEOF(origin) != INTSXP) {
-    Rf_error("The gene-major block needs a dgCMatrix's i, p and x, the row map and origins, and the pointers as doubles.");
+      TYPEOF(map) != INTSXP || TYPEOF(origin) != INTSXP || TYPEOF(cells) != INTSXP) {
+    Rf_error("The gene-major block needs a dgCMatrix's i, p and x, the row map and origins, the cell order and the pointers as doubles.");
   }
   enum dtype out_type = parse_dtype(data_dtype);
   if (out_type != F4 && out_type != F8) Rf_error("Expression values are stored as <f4 or <f8.");
@@ -217,6 +220,10 @@ SEXP cellucid_gene_major_block(SEXP i, SEXP p, SEXP x, SEXP map, SEXP origin, SE
   const double *pointer = REAL(pointers);
   R_xlen_t n_genes = XLENGTH(pointers) - 1;
   R_xlen_t n_cells = XLENGTH(p) - 1;
+  /* The cells in the order the output rows take them (0-based columns): the
+   * priority order of a store in priority order, none for the matrix's own. */
+  const int *order = XLENGTH(cells) > 0 ? INTEGER(cells) : NULL;
+  if (order != NULL && XLENGTH(cells) != n_cells) Rf_error("The cell order names %d cells, the matrix %d.", (int)XLENGTH(cells), (int)n_cells);
   if (XLENGTH(origin) != n_genes) Rf_error("The origins name %d genes, the pointers %d.", (int)XLENGTH(origin), (int)n_genes);
   int64_t low = (int64_t)Rf_asReal(first);
   int64_t high = (int64_t)Rf_asReal(last);
@@ -256,7 +263,8 @@ SEXP cellucid_gene_major_block(SEXP i, SEXP p, SEXP x, SEXP map, SEXP origin, SE
     unsigned char *cell_bytes = RAW(cells_out);
     unsigned char *value_bytes = RAW(values_out);
     for (R_xlen_t c = 0; c < n_cells; c++) {
-      int k = columns[c], end = columns[c + 1];
+      R_xlen_t column = order == NULL ? c : order[c];
+      int k = columns[column], end = columns[column + 1];
       if (k == end || rows[end - 1] < r_low || rows[k] > r_high) continue;
       /* The column's first value at a row >= r_low. */
       int a = k, b = end;
@@ -352,5 +360,164 @@ SEXP cellucid_cells_frame(SEXP header, SEXP cells, SEXP allow_empty) {
     }
   }
   UNPROTECT(1);
+  return out;
+}
+
+
+/* One (row, value) pair of a column being put in row order. */
+struct renumbered { int64_t row; double value; };
+
+/*
+ * The `n` pairs in ascending row (rows are distinct and below 2^`bits`), into
+ * `pairs`; `spare` is as long. A short column (a graph's row) by insertion;
+ * a long one (a gene) by a least-significant-digit radix sort, a byte of the
+ * row a pass: about ten times faster than qsort() on a gene of 10^4 values,
+ * which made priority order cost as much as the rest of writing X.
+ */
+static void sort_by_row(struct renumbered *pairs, struct renumbered *spare, R_xlen_t n, int bits) {
+  if (n < 64) {
+    for (R_xlen_t k = 1; k < n; k++) {
+      struct renumbered item = pairs[k];
+      R_xlen_t m = k;
+      while (m > 0 && pairs[m - 1].row > item.row) {
+        pairs[m] = pairs[m - 1];
+        m--;
+      }
+      pairs[m] = item;
+    }
+    return;
+  }
+  struct renumbered *from = pairs, *to = spare;
+  for (int shift = 0; shift < bits; shift += 8) {
+    R_xlen_t count[257] = {0};
+    for (R_xlen_t k = 0; k < n; k++) count[((from[k].row >> shift) & 0xFF) + 1]++;
+    for (int d = 0; d < 256; d++) count[d + 1] += count[d];
+    for (R_xlen_t k = 0; k < n; k++) to[count[(from[k].row >> shift) & 0xFF]++] = from[k];
+    struct renumbered *swap = from;
+    from = to;
+    to = swap;
+  }
+  if (from != pairs) memcpy(pairs, from, (size_t)n * sizeof(struct renumbered));
+}
+
+/*
+ * Positions first .. last - 1 (0-based) of the column-compressed arrays of a
+ * dgCMatrix (`i`, `p`, `x`) whose rows are renumbered -- row `r` becomes
+ * `new_row[r]` (0-based) -- and whose columns are taken in the order
+ * `column_order` gives (0-based; empty for the matrix's own): output column
+ * `g` is column `column_order[g]`, its values ascending by new row, and
+ * `pointers` (integers, one more than the columns) are the output's column
+ * pointers (`p` itself when the columns keep their order). Two uses, both
+ * made from the matrix as it is, never from a reordered copy:
+ *   - a cells x genes expression matrix (a column per gene) in priority
+ *     order: its cells renumbered, its genes in their order;
+ *   - a symmetric neighbour graph (obsp) in priority order: both axes
+ *     permuted, row r of the output being column order[r] of the graph (its
+ *     column-compressed arrays are its row-compressed ones), each row's
+ *     columns renumbered and sorted.
+ * Each output column reaching into the block is read whole and sorted
+ * (R/expression-input.R sizes blocks so that a column is sorted about once).
+ * `part` 0 returns list(row index bytes, value bytes); 1 or 2 returns only
+ * the row indices or only the values, as one chunk: zeros after them up to
+ * `padded` items (a graph's chunk, made when it is read and let go: one
+ * allocation, the chunk itself).
+ */
+SEXP cellucid_renumbered_block(SEXP i, SEXP p, SEXP x, SEXP new_row, SEXP column_order, SEXP pointers,
+                               SEXP first, SEXP last, SEXP index_size, SEXP data_dtype, SEXP part, SEXP padded) {
+  if (TYPEOF(i) != INTSXP || TYPEOF(p) != INTSXP || TYPEOF(x) != REALSXP || TYPEOF(new_row) != INTSXP ||
+      TYPEOF(column_order) != INTSXP || TYPEOF(pointers) != INTSXP) {
+    Rf_error("The renumbered block needs a dgCMatrix's i, p and x, the new row of each row, the column order and the output pointers.");
+  }
+  enum dtype out_type = parse_dtype(data_dtype);
+  if (out_type != F4 && out_type != F8) Rf_error("Stored values are <f4 or <f8.");
+  int value_size = dtype_size(out_type);
+  int cell_size = Rf_asInteger(index_size);
+  if (cell_size != 4 && cell_size != 8) Rf_error("Row indices are 4 or 8 bytes.");
+  const int *rows = INTEGER(i);
+  const int *columns = INTEGER(p);
+  const double *values = REAL(x);
+  const int *renumber = INTEGER(new_row);
+  R_xlen_t n_rows = XLENGTH(new_row);
+  const int *pointer = INTEGER(pointers);
+  R_xlen_t n_columns = XLENGTH(p) - 1;
+  const int *source = XLENGTH(column_order) > 0 ? INTEGER(column_order) : NULL;
+  if (source != NULL && XLENGTH(column_order) != n_columns) {
+    Rf_error("The column order names %d columns, the matrix %d.", (int)XLENGTH(column_order), (int)n_columns);
+  }
+  if (XLENGTH(pointers) != n_columns + 1) Rf_error("The output pointers name %d columns, the matrix %d.", (int)XLENGTH(pointers) - 1, (int)n_columns);
+  int64_t low = (int64_t)Rf_asReal(first);
+  int64_t high = (int64_t)Rf_asReal(last);
+  if (low < 0 || high < low || n_columns < 1 || high > (int64_t)pointer[n_columns] ||
+      pointer[n_columns] != columns[n_columns]) {
+    Rf_error("The block lies outside the matrix's values.");
+  }
+  R_xlen_t n = raw_length((double)(high - low), 1, "A block");
+  int which = Rf_asInteger(part);
+  if (which < 0 || which > 2) Rf_error("A block's part is 0 (both), 1 (row indices) or 2 (values).");
+  R_xlen_t length = which == 0 ? n : xlength_of(Rf_asReal(padded), "A chunk's length");
+  if (length < n) Rf_error("A chunk of %.0f items cannot hold %.0f.", (double)length, (double)n);
+  SEXP cells_out = PROTECT(which == 2 ? R_NilValue : Rf_allocVector(RAWSXP, raw_length((double)length, cell_size, "A block's row indices")));
+  SEXP values_out = PROTECT(which == 1 ? R_NilValue : Rf_allocVector(RAWSXP, raw_length((double)length, value_size, "A block's values")));
+  unsigned char *cell_bytes = which == 2 ? NULL : RAW(cells_out);
+  unsigned char *value_bytes = which == 1 ? NULL : RAW(values_out);
+  if (cell_bytes != NULL && length > n) memset(cell_bytes + n * cell_size, 0, (size_t)((length - n) * cell_size));
+  if (value_bytes != NULL && length > n) memset(value_bytes + n * value_size, 0, (size_t)((length - n) * value_size));
+  if (n > 0) {
+    R_xlen_t a = 0, b = n_columns; /* pointer[a] <= low < pointer[b] */
+    while (b - a > 1) {
+      R_xlen_t m = a + (b - a) / 2;
+      if ((int64_t)pointer[m] <= low) a = m; else b = m;
+    }
+    /* One buffer, as long as the longest column reaching into the block, used
+       by each column in turn (R_alloc'd per column, every column's pairs would
+       be held until the call returns: 16 bytes a value of the whole block). */
+    int longest = 0;
+    for (R_xlen_t g = a; g < n_columns && (int64_t)pointer[g] < high; g++) {
+      R_xlen_t column = source == NULL ? g : source[g];
+      if (column < 0 || column >= n_columns || columns[column + 1] - columns[column] != pointer[g + 1] - pointer[g]) {
+        Rf_error("The output pointers do not match the matrix's columns in that order.");
+      }
+      if (columns[column + 1] - columns[column] > longest) longest = columns[column + 1] - columns[column];
+    }
+    struct renumbered *pairs = longest > 0 ? (struct renumbered *)R_alloc((size_t)longest, sizeof(struct renumbered)) : NULL;
+    struct renumbered *spare = longest >= 64 ? (struct renumbered *)R_alloc((size_t)longest, sizeof(struct renumbered)) : NULL;
+    /* The bits a new row takes: rows are below n_rows. */
+    int bits = 0;
+    while (bits < 63 && ((int64_t)1 << bits) < (int64_t)n_rows) bits++;
+    for (R_xlen_t g = a; g < n_columns && (int64_t)pointer[g] < high; g++) {
+      R_xlen_t column = source == NULL ? g : source[g];
+      int start = columns[column], end = columns[column + 1];
+      if (end == start) continue;
+      for (int k = start; k < end; k++) {
+        if (rows[k] < 0 || rows[k] >= n_rows) Rf_error("A row index lies outside the %d rows renumbered.", (int)n_rows);
+        if (renumber[rows[k]] < 0 || renumber[rows[k]] >= n_rows) Rf_error("A new row lies outside the %d rows.", (int)n_rows);
+        pairs[k - start].row = renumber[rows[k]];
+        pairs[k - start].value = values[k];
+      }
+      sort_by_row(pairs, spare, end - start, bits);
+      int64_t base = pointer[g];
+      for (int k = 0; k < end - start; k++) {
+        int64_t position = base + k;
+        if (position < low || position >= high) continue;
+        R_xlen_t at = (R_xlen_t)(position - low);
+        if (cell_bytes != NULL) {
+          if (cell_size == 4) put32(cell_bytes + 4 * at, (uint32_t)pairs[k].row);
+          else put64(cell_bytes + 8 * at, (uint64_t)pairs[k].row);
+        }
+        if (value_bytes != NULL) {
+          if (value_size == 4) put_f4(value_bytes + 4 * at, pairs[k].value);
+          else put_f8(value_bytes + 8 * at, pairs[k].value);
+        }
+      }
+    }
+  }
+  if (which != 0) {
+    UNPROTECT(2);
+    return which == 1 ? cells_out : values_out;
+  }
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(out, 0, cells_out);
+  SET_VECTOR_ELT(out, 1, values_out);
+  UNPROTECT(3);
   return out;
 }

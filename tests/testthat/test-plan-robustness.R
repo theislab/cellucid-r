@@ -8,7 +8,7 @@
 prepare_components <- function(components) {
   local_mocked_bindings(.dataset_from = function(data) components, .package = "cellucid")
   out <- file.path(tempfile(), "plan.zarr")
-  suppressMessages(cellucid_prepare(out, "zarr", data = "an object"))
+  suppressMessages(cellucid_prepare(out, "zarr", data = "an object", priority_seed = NULL))
 }
 
 # X of a store as a dense cells x genes matrix, without dimnames (X stores

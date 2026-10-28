@@ -242,6 +242,24 @@
     graph <- .resolve_connectivities(components$connectivities, n_cells)
   }
 
+  # --- Priority order (R/priority.R) ---------------------------------------
+  # Every per-cell element in priority order before anything is derived from
+  # it (the outlier quantiles), so the file holds what its rows give.
+  priority <- .cell_priority(n_cells, components$priority_seed)
+  # The cells by original position, which the viewer's positions name: the
+  # cells' order as given (an object in a verified stored order was put back
+  # in its original order first, .in_original_order()).
+  cell_names <- obs_index
+  if (!is.null(priority)) {
+    rows <- priority$order
+    matrices <- lapply(matrices, function(values) values[rows, , drop = FALSE])
+    vectors$arrays <- lapply(vectors$arrays, function(values) values[rows, , drop = FALSE])
+    obs <- .obs_in_priority(obs, priority)
+    obs_index <- obs_index[rows]
+    if (!is.null(graph)) graph <- .graph_in_priority(graph, priority)
+    for (index in seq_along(spaces)) spaces[[index]] <- .space_in_priority(spaces[[index]], priority)
+  }
+
   # --- uns['cellucid'] ------------------------------------------------------
   defaults <- .resolve_defaults(
     matrices = matrices,
@@ -267,6 +285,7 @@
     if (is.null(min_points)) min_points <- .default_outlier_min_points
     cellucid$outlierQuantiles <- .stored_outlier_quantiles(obs, latent, matrices[[latent]], min_points)
   }
+  if (!is.null(priority)) cellucid$priority <- .priority_record(priority)
   uns <- list(title = .uns_string(dataset_name), cellucid = cellucid)
 
   shared <- list(
@@ -286,6 +305,7 @@
     dataset_name = dataset_name,
     n_cells = n_cells,
     obs_index = obs_index,
+    cell_names = cell_names,
     n_genes = if (is.null(launch_space$expression)) 0L else length(launch_space$index),
     modalities = if (multimodal) names else NULL,
     launch_modality = if (multimodal) names[[launch]] else NULL
@@ -427,17 +447,56 @@
     .ad_dense(store, key("obsm", name), vectors$arrays[[name]])
   }
   .ad_dict(store, key("obsp"))
-  if (!is.null(graph)) {
-    .ad_sparse(
-      store, key("obsp/connectivities"), "csr_matrix", dim(graph),
-      pointers = graph@p, indices = graph@i, values = graph@x
-    )
-  }
+  if (!is.null(graph)) .ad_graph(store, key("obsp/connectivities"), graph)
   .ad_dict(store, key("varm"))
+  # A sparse X in priority order: each gene's values below each prefix
+  # level, one column per level (R/priority.R).
+  if (!is.null(space$prefix_levels) && !is.null(space$expression)) {
+    counts <- .expression_prefix_counts(space$expression, space$prefix_levels)
+    if (!is.null(counts)) {
+      .zarr_matrix(
+        store, key("varm", .prefix_counts_key), counts, "<u4",
+        .chunk_length(nrow(counts), .chunk_elements_whole), 1L, .encoding("array", "0.2.0")
+      )
+    }
+  }
   .ad_dict(store, key("varp"))
   .ad_dict(store, key("layers"))
   .ad_uns_value(store, key("uns"), uns)
   invisible(NULL)
+}
+
+# The neighbour graph, obsp['connectivities'], as a csr_matrix: a symmetric
+# dgCMatrix's column-compressed arrays are its row-compressed ones, written as
+# they are, or a .graph_in_priority() one, both axes in priority order: its
+# pointers counted once, when first needed (one integer a cell), and its
+# indices and values made one chunk at a time from the graph as it is --
+# row r is column order[r], its columns renumbered and sorted (src/chunks.c)
+# -- each chunk made when it is written or read and then let go, as
+# cellucid-python serves a graph. Nothing as large as the graph is held
+# beside it.
+.ad_graph <- function(store, path, graph) {
+  if (!inherits(graph, "cellucid_graph_in_order")) {
+    return(.ad_sparse(store, path, "csr_matrix", dim(graph), pointers = graph@p, indices = graph@i, values = graph@x))
+  }
+  matrix <- graph$matrix
+  shape <- dim(matrix)
+  order <- graph$order
+  pointers <- .deferred(function() c(0L, cumsum(diff(matrix@p)[order])), length = shape[[1L]] + 1)
+  index_size <- .zarr_item_size(.sparse_index_dtype("csr_matrix", shape))
+  new_row <- graph$new_row - 1L
+  column_order <- order - 1L
+  part <- function(which) {
+    structure(list(
+      length = length(matrix@x),
+      chunk = function(first, count, chunk_length) {
+        .native_renumbered_block(matrix, new_row, first - 1, first - 1 + count, index_size, "<f4",
+                                 column_order = column_order, pointers = .realize(pointers),
+                                 part = which, padded = chunk_length)
+      }
+    ), class = "cellucid_chunked")
+  }
+  .ad_sparse(store, path, "csr_matrix", shape, pointers = pointers, indices = part(1L), values = part(2L))
 }
 
 .write_anndata <- function(store, shared, space) {

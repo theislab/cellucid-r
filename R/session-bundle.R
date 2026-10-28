@@ -1,5 +1,5 @@
 # Reading a .cellucid-session file (session format 2), the file the viewer
-# saves and cellucid_session() fetches: the web app's framing
+# saves and cellucid_session_result() collects: the web app's framing
 # (app/session/bundle/format.js) and cellucid-python's reader
 # (session_bundle.py), check for check and message for message.
 #
@@ -185,7 +185,10 @@
 
 .validate_session_manifest <- function(manifest) {
   if (!.is_json_object(manifest)) .session_manifest_error("expected an object")
-  expected <- c("createdAt", "datasetFingerprint", "source", "requires", "chunks")
+  # `cells` is present only for a session saved on a subsample (which cells
+  # were open: R/subsample.R, .session_cells()).
+  expected <- c("createdAt", "datasetFingerprint", "source", "requires", "chunks",
+                if ("cells" %in% names(manifest)) "cells")
   if (!setequal(names(manifest), expected) || anyDuplicated(names(manifest))) {
     .abort("Invalid session manifest fields (", .session_key_report(names(manifest), expected), ")")
   }
@@ -196,6 +199,9 @@
   manifest[["datasetFingerprint"]] <- .validate_session_fingerprint(manifest[["datasetFingerprint"]])
   .validate_session_source(manifest[["source"]])
   .validate_session_requires(manifest[["requires"]])
+  if ("cells" %in% names(manifest)) {
+    .session_cells(manifest[["cells"]], manifest[["datasetFingerprint"]][["cellCount"]])
+  }
   chunks <- manifest[["chunks"]]
   if (!.is_json_array(chunks)) .session_manifest_error("chunks must be an array")
   seen <- character()

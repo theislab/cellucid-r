@@ -84,9 +84,28 @@
 # row's 0-based output gene or -1; `origin`: each output gene's 0-based row),
 # as list(cell index bytes, value bytes), made without transposing the matrix
 # or copying the rows it keeps (R/expression-input.R).
-.native_gene_major_block <- function(matrix, map, origin, pointers, first, last, index_size, dtype) {
-  .Call(C_cellucid_gene_major_block, matrix@i, matrix@p, matrix@x, map, origin, pointers,
+# `cells`: the 0-based columns in the order the output rows take them
+# (integer(0): the matrix's own).
+.native_gene_major_block <- function(matrix, map, origin, pointers, first, last, index_size, dtype,
+                                     cells = integer(0)) {
+  .Call(C_cellucid_gene_major_block, matrix@i, matrix@p, matrix@x, map, origin, pointers, as.integer(cells),
         as.double(first), as.double(last), as.integer(index_size), dtype)
+}
+
+# src/chunks.c: positions first .. last - 1 (0-based) of the column-compressed
+# arrays of a dgCMatrix whose rows are renumbered (`new_row`, 0-based) and
+# whose columns are taken in `column_order` (0-based; integer(0) for their
+# own), each column's values ascending by new row; `pointers` are the
+# output's column pointers (the matrix's own @p when its columns keep their
+# order). A cells x genes expression matrix in priority order, or both axes
+# of a symmetric graph. `part` 0 returns list(index bytes, value bytes); 1 or
+# 2 only the indices or only the values, zero-padded to `padded` items (one
+# chunk).
+.native_renumbered_block <- function(matrix, new_row, first, last, index_size, dtype,
+                                     column_order = integer(0), pointers = matrix@p, part = 0L, padded = 0) {
+  .Call(C_cellucid_renumbered_block, matrix@i, matrix@p, matrix@x, as.integer(new_row),
+        as.integer(column_order), pointers, as.double(first), as.double(last), as.integer(index_size), dtype,
+        as.integer(part), as.double(padded))
 }
 
 # src/chunks.c: bytes offset .. offset + count - 1 (0-based) of `bytes`,
@@ -101,4 +120,43 @@
 # (none allowed with `allow_empty`).
 .native_cells_frame <- function(header, cells, allow_empty = FALSE) {
   .Call(C_cellucid_cells_frame, header, cells, allow_empty)
+}
+
+# src/subsample.c: the subsampling specification (R/subsample.R). Positions
+# are 0-based doubles both ways (a dataset holds up to 2^32 - 1 cells).
+.native_subsample_rank <- function(seed, positions) {
+  .Call(C_cellucid_subsample_rank, as.double(seed), as.double(positions))
+}
+.native_subsample_uniform <- function(n_obs, k, seed) {
+  .Call(C_cellucid_subsample_uniform, as.double(n_obs), as.double(k), as.double(seed))
+}
+.native_subsample_blocks <- function(n_obs, k, seed, block_size) {
+  .Call(C_cellucid_subsample_blocks, as.double(n_obs), as.double(k), as.double(seed), as.double(block_size))
+}
+.native_subsample_split <- function(strata, n_strata, k, seed, allocation, minimum) {
+  .Call(C_cellucid_subsample_split, as.double(strata), as.double(n_strata), as.double(k), as.double(seed),
+        as.character(allocation), as.double(minimum))
+}
+.native_subsample_boxes <- function(coordinates, dimensions, grid_size) {
+  .Call(C_cellucid_subsample_boxes, as.double(coordinates), as.integer(dimensions), as.double(grid_size))
+}
+.native_subsample_digest <- function(n_obs, kept) {
+  .Call(C_cellucid_subsample_digest, as.double(n_obs), if (is.null(kept)) NULL else as.double(kept))
+}
+.native_subsample_encode <- function(kept) {
+  .Call(C_cellucid_subsample_encode, as.double(kept))
+}
+.native_subsample_decode <- function(bytes, n_obs) {
+  .Call(C_cellucid_subsample_decode, bytes, as.double(n_obs))
+}
+
+# src/priority.c: each gene's stored values in the cells before each prefix
+# level (R/priority.R). `matrix` is a dgCMatrix, genes x cells
+# (`cells_by_column`, `map` each row's 0-based output gene, -1 for none) or
+# cells x genes. `cells` takes a genes x cells matrix's columns in that order
+# (0-based), `new_row` renumbers a cells x genes matrix's rows (0-based).
+.native_prefix_counts <- function(matrix, levels, n_genes, cells_by_column, map = integer(0),
+                                  cells = integer(0), new_row = integer(0)) {
+  .Call(C_cellucid_prefix_counts, matrix@p, matrix@i, as.double(levels), as.double(n_genes),
+        cells_by_column, as.integer(map), as.integer(cells), as.integer(new_row))
 }

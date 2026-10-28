@@ -33,6 +33,7 @@ cellucid_prepare(
   normalize_embeddings = NULL,
   centroid_min_points = NULL,
   modality = NULL,
+  priority_seed = 0,
   zarr_format = NULL,
   force = FALSE
 )
@@ -153,7 +154,10 @@ shows, in this order. Every column is stored either way. Stored as
 \code{defaults['obsKeys']}.}
 \item{var_gene_id_column}{Optional launch default: the \code{var} column whose
 values name the genes in the viewer, such as gene symbols beside Ensembl row
-names. \code{NULL} names genes by the \code{var} row names. A column of text or
+names. \code{NULL} leaves the choice to the viewer: the \code{var} row names,
+or, when they are database identifiers (such as Ensembl ids) and a \code{var}
+column holds gene symbols (such as CELLxGENE's \code{feature_name}), that
+column, the identifiers staying searchable beside it. A column of text or
 a factor names genes as it is, an integer column by its digits; a double or
 logical column cannot name genes and is refused. Stored as
 \code{defaults['geneIdColumn']}.}
@@ -179,6 +183,20 @@ names a column of that modality's \code{var}. \code{gene_expression},
 \code{var} and \code{gene_identifiers} describe one feature
 space and are refused for an object of several: change its assay first, or
 write one with \code{modalities}.}
+\item{priority_seed}{The seed of the cells' priority order, a whole number in
+[0, 2^32 - 1]. The cells are stored by ascending priority -- the
+\code{"uniform"} rank of \code{\link{cellucid_subsample_cells}()} with this
+seed -- so every subsample Cellucid opens with this seed is the first rows of
+every array and reads nothing of the cells it leaves out. Each row's original
+position is kept in \code{obs[['cellucid_original_position']]};
+\code{\link{cellucid_restore_original_order}()} puts the cells back in the order
+given. \code{NULL} stores the cells in the order given, without a priority.
+An object in a Cellucid-ready file's stored order (its \code{cellucid$priority}
+record describes its cells) is put back in its original order first, whatever
+the seed, so every cell keeps its original position; a
+\code{cellucid_original_position} column with no record that describes the
+cells names no order and is not written (with a warning).
+Python's \code{cellucid.prepare(priority_seed = )} takes the same values.}
 \item{zarr_format}{Optional Zarr format of the store: \code{2} (the default,
 when \code{NULL}), read by every \pkg{anndata} release since 0.8 and by
 zarr-python 2 and 3, or \code{3}, read by \pkg{anndata} 0.11 and later
@@ -213,7 +231,16 @@ The store is an AnnData Zarr group (Zarr format 2 unless \code{zarr_format = 3})
   \code{id}, \code{name}, and, when supplied, \code{description},
   \code{citation} (\code{text}, \code{url}), \code{source} (\code{name},
   \code{url}), \code{defaults} holding only the launch defaults that were
-  set, and, with \code{latent_key}, \code{outlierQuantiles};
+  set, with \code{latent_key}, \code{outlierQuantiles}, and in priority
+  order \code{priority} (\code{seed}, \code{specVersion}, \code{nObs} -- the
+  cell count it was written with, which a reader verifies it by --
+  \code{levels});
+  \item in priority order (the default, \code{priority_seed}): every per-cell
+  element -- \code{obs}, \code{obsm}, \code{X}'s rows, both axes of
+  \code{obsp} -- by ascending priority, \code{obs[['cellucid_original_position']]}
+  (uint32) holding each row's original position, and beside a sparse
+  \code{X} \code{varm[['cellucid_prefix_counts']]} (uint32, one column per
+  level of \code{levels}): each gene's values in the rows below that level;
   \item the consolidated metadata (\code{.zmetadata}; format 3: the root
   \code{zarr.json}), so a store on a web host opens with one request.
 }
@@ -226,11 +253,15 @@ which browsers decompress natively: in format 2 numcodecs' \code{Shuffle}
 filter and the compressor \code{\{"id": "zlib", "level": 6\}}; in format 3
 the \code{blosc} codec (byte shuffle, zlib level 6) for a shuffled array and
 the \code{gzip} codec for every other, only codecs of the Zarr v3
-specification (\code{numcodecs.shuffle} is not one). A chunk is the unit of every read: arrays read whole (data
-frame columns, embeddings as a chunk of rows with every column, the neighbour
-graph) hold up to 262,144 (\code{2^18}) values per chunk, and the data and
-indices of the expression matrix, which the viewer reads one gene at a time,
-65,536 (\code{2^16}). Python's \code{cellucid.prepare()} writes the same store,
+specification (\code{numcodecs.shuffle} is not one). A chunk is the unit of every read: every array with one
+row per cell (data frame columns and index, embeddings as a chunk of rows with
+every column, masks, cell maps, outlier quantiles) holds 65,536
+(\code{2^16}) values per chunk, so a subsample -- the first rows of a store in
+priority order -- reads little beyond its own cells; arrays read whole
+(\code{var}, the expression matrix's pointers, the neighbour graph) up to
+262,144 (\code{2^18}); and the data and indices of the expression matrix,
+which the viewer reads one gene (or its first values) at a time, 16,384
+(\code{2^14}). Python's \code{cellucid.prepare()} writes the same store,
 element for element, from the same input.
 
 A \code{.zarr.zip} holds the same files, byte for byte, as entries of one ZIP

@@ -67,6 +67,7 @@ test_that("without the web build the data routes still answer", {
 test_that("every key of the served store answers with the prepared store's arrays, with exact ranges", {
   skip_without_sce()
   object <- small_sce()
+  # Served in priority order under the served seed, as cellucid_prepare() writes it by default.
   folder <- suppressMessages(cellucid_prepare(file.path(tempfile(), "s.zarr"), "zarr", data = object, dataset_id = "s", dataset_name = "S"))
   viewer <- test_viewer(object, dataset_id = "s", dataset_name = "S")
   served <- tempfile("cellucid_answered_")
@@ -153,7 +154,7 @@ test_that("the channel welcomes the viewer's credentials and refuses others", {
   expect_identical(ws_receive(wrong)$code, 4401L)
   ws_close(wrong)
   rude <- ws_open(viewer)
-  ws_send_json(rude, list(type = "ready", n_cells = 1, dimensions = 2))
+  ws_send_json(rude, list(type = "ready", n_cells = 1, n_obs = 1, dimensions = 2))
   expect_identical(ws_receive(rude)$code, 1008L)
   ws_close(rude)
   elsewhere <- ws_open(viewer, path = "/elsewhere")
@@ -185,7 +186,7 @@ test_that("commands wait for the channel and go out in order", {
   received <- lapply(frames, function(frame) frame$json)
   # Commands that name cells are binary frames; every other one is text.
   expect_identical(vapply(frames, function(frame) frame$opcode, 0L), c(2L, 1L, 2L, 1L, 1L, 1L))
-  expect_identical(received[[1L]], list(type = "highlight", color = "#123456", cells = c(0L, 2L)))
+  expect_identical(received[[1L]], list(type = "highlight", color = "#123456", label = NULL, cells = c(0L, 2L)))
   expect_identical(received[[2L]], list(type = "setColorBy", field = "cluster"))
   expect_identical(received[[3L]], list(type = "setVisibility", visible = FALSE, all = FALSE, cells = c(0L, 2:11)))
   expect_identical(vapply(received, function(x) x$type, ""), c("highlight", "setColorBy", "setVisibility", "resetCamera", "clearHighlights", "freeze"))
@@ -208,7 +209,7 @@ test_that("events reach the hooks, a selection by index and by name", {
   cellucid_on(viewer, "hover", function(event) seen$hover <<- event)
   cellucid_on(viewer, "click", function(event) stop("a broken hook"))
   client <- ws_welcomed(viewer)
-  ws_send_json(client, list(type = "ready", n_cells = 12, dimensions = 2))
+  ws_send_json(client, list(type = "ready", n_cells = 12, n_obs = 12, dimensions = 2))
   ws_send_json(client, list(type = "hover", cell = 3, position = list(x = 0.5, y = -1, z = 0)))
   header <- charToRaw("{\"type\":\"selection\",\"source\":\"lasso\"}")
   ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, cellucid:::.encode_uint32(c(0, 4, 11))))
@@ -219,7 +220,7 @@ test_that("events reach the hooks, a selection by index and by name", {
   # Cells are R's 1-based positions in every event (the wire's 3 is cell 4).
   expect_identical(seen$hover$cell, 4L)
   expect_identical(seen$hover$cell_name, colnames(object)[[4L]])
-  expect_identical(cellucid_wait_ready(viewer, timeout = 5), list(n_cells = 12L, dimensions = 2L))
+  expect_identical(cellucid_wait_ready(viewer, timeout = 5), list(n_cells = 12L, n_obs = 12L, dimensions = 2L))
   ws_send_json(client, list(type = "click", cell = 1, button = 0, shift = FALSE, ctrl = FALSE))
   expect_warning(run_loop_until(function() !is.null(viewer$last$click)), "a broken hook")
   cellucid_off(viewer, "selection")
@@ -260,7 +261,7 @@ test_that("a session bundle arrives as the file it asked for", {
   }
   later::later(answer, 0.2)
   target <- tempfile(fileext = ".cellucid-session")
-  path <- cellucid_session(viewer, file = target, timeout = 10)
+  path <- cellucid_session_result(cellucid_request_session(viewer), file = target, timeout = 10)
   expect_identical(readLines(path, warn = FALSE), c("CELLUCID_SESSION/2", "body"))
   expect_length(viewer$session_requests, 0L)
   # A bundle without the signature is reported to the one waiting for it.
@@ -270,15 +271,23 @@ test_that("a session bundle arrives as the file it asked for", {
     ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("not a session")))
   }
   later::later(bad, 0.2)
-  expect_error(cellucid_session(viewer, timeout = 10), "invalid session bundle.*CELLUCID_SESSION/2.*Try cellucid_session\\(\\) again")
+  # The one waiting stops with why; with no command_error hook, the refusal
+  # is also said as it arrives (as every refused command is).
+  expect_warning(
+    expect_error(cellucid_session_result(cellucid_request_session(viewer), timeout = 10),
+                 "invalid session bundle.*CELLUCID_SESSION/2.*Ask again with cellucid_request_session\\(\\)"),
+    "The viewer did not take cellucid_request_session\\(\\): The viewer sent an invalid session bundle"
+  )
   ws_close(client)
 })
 
 test_that("waiting on a viewer that never answers stops with what to do", {
   skip_without_sce()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
-  expect_error(cellucid_session(viewer, timeout = 0.3), "did not answer within 0.3 seconds.*No viewer is connected: open http")
-  expect_length(viewer$session_requests, 0L)
+  request <- cellucid_request_session(viewer)
+  expect_error(cellucid_session_result(request, timeout = 0.3), "did not answer within 0.3 seconds.*No viewer is connected: open http")
+  # The request stays open: collected later, once a viewer answers it.
+  expect_length(viewer$session_requests, 1L)
 })
 
 test_that("stopping closes the channel and frees the port for a new viewer", {
@@ -326,6 +335,54 @@ test_that("several viewers run at once, a taken port is refused or passed over",
   expect_length(cellucid_viewers(), 0L)
 })
 
+test_that("a file rewritten while it is served is a new version, in place or replaced", {
+  skip_if_not_installed("Matrix")
+  args <- prepare_fixture(file.path(tempfile(), "f.zarr.zip"))
+  args$format <- "zarr.zip"
+  zip <- suppressMessages(do.call(cellucid_prepare, args))
+  viewer <- test_viewer(zip)
+  url <- paste0(viewer$url, "/_cellucid/anndata/", viewer$served$route_name)
+  listed <- function() http_json(paste0(viewer$url, "/_cellucid/datasets"))$datasets[[1L]]$anndata$file
+  first <- listed()
+  expect_identical(http_request(url, list(`If-None-Match` = first$etag))$status, 304L)
+  expect_identical(listed()$etag, first$etag)
+
+  # Rewritten in place, the same size, its modification time put back (as a
+  # copy that keeps it would): still a new version.
+  bytes <- readBin(zip, "raw", file.size(zip))
+  modified <- file.mtime(zip)
+  Sys.sleep(0.05)
+  connection <- file(zip, "r+b")
+  seek(connection, 0L, rw = "write")
+  writeBin(rev(bytes[1:8]), connection)
+  close(connection)
+  Sys.setFileTime(zip, modified)
+  second <- listed()
+  expect_identical(second$size, first$size)
+  expect_false(identical(second$etag, first$etag))
+  stale <- http_request(url, list(`If-None-Match` = first$etag))
+  expect_identical(stale$status, 200L)
+  expect_identical(stale$headers[["etag"]], second$etag)
+  # A range asked of the old version is answered whole, as the new one.
+  ranged <- http_request(url, list(Range = "bytes=0-7", `If-Range` = first$etag))
+  expect_identical(ranged$status, 200L)
+  expect_identical(ranged$body[1:8], rev(bytes[1:8]))
+
+  # Replaced by another file moved over it.
+  Sys.sleep(0.05)
+  other <- tempfile(tmpdir = dirname(zip))
+  writeBin(bytes, other)
+  expect_true(file.rename(other, zip))
+  expect_false(listed()$etag %in% c(first$etag, second$etag))
+
+  # A file that is gone is not listed as if it were there.
+  unlink(zip)
+  gone <- http_request(paste0(viewer$url, "/_cellucid/datasets"))
+  expect_identical(gone$status, 404L)
+  expect_identical(rawToChar(gone$body), paste0(basename(zip), " is no longer readable"))
+  expect_identical(http_request(url)$status, 404L)
+})
+
 test_that("a prepared store or file given by path is served from disk", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(file.path(tempfile(), "f.zarr"))
@@ -346,6 +403,10 @@ test_that("a prepared store or file given by path is served from disk", {
   expect_identical(whole$body, readBin(zip, "raw", file.size(zip)))
   part <- http_request(url, list(Range = "bytes=100-163"))
   expect_identical(part$body, whole$body[101:164])
+  # The list states the validator the bytes are answered with: the version
+  # the viewer files what it keeps of the file under.
+  expect_match(datasets$anndata$file$etag, '^"[0-9]+-[0-9]+-[0-9]+"$')
+  expect_identical(whole$headers[["etag"]], datasets$anndata$file$etag)
 
   viewer <- test_viewer(folder, latent_key = "X_pca", obs_keys = c("cluster"))
   health <- http_json(paste0(viewer$url, "/_cellucid/health"))
@@ -373,4 +434,41 @@ test_that("arguments that do not choose what is shown are refused by name", {
   expect_error(cellucid_serve(small_sce(), "positional", quiet = TRUE), "must be named")
   expect_error(cellucid_view(), "needs data")
   expect_error(cellucid_serve(small_sce(), port = 70000, quiet = TRUE), "port must be one whole number")
+})
+
+test_that("a file served as it is says what a subsample of it reads, unless it is in priority order", {
+  skip_if_not_installed("Matrix")
+  # An HDF5 file (its signature), which R cannot read to put in priority order.
+  loom <- tempfile(fileext = ".loom")
+  writeBin(c(as.raw(c(0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a)), raw(4000L)), loom)
+  note <- .path_order_note(.classify_path(loom))
+  expect_match(note, "is served as it is. Its cells are in their own order:", fixed = TRUE)
+  expect_match(note, "cellucid_view(object)", fixed = TRUE)
+  expect_match(note, "cellucid serve <path>", fixed = TRUE)
+  expect_no_match(note, "unless cellucid_prepare", fixed = TRUE)
+  h5ad <- tempfile(fileext = ".h5ad")
+  file.copy(loom, h5ad)
+  expect_match(.path_order_note(.classify_path(h5ad)), "unless cellucid_prepare() or prepare() wrote it", fixed = TRUE)
+  # A store cellucid_prepare() wrote in priority order: nothing to say, folder or zip.
+  args <- prepare_fixture(file.path(tempfile(), "f.zarr"))
+  args$priority_seed <- 0
+  folder <- suppressMessages(do.call(cellucid_prepare, args))
+  expect_null(.path_order_note(.classify_path(folder)))
+  args$out_path <- sub("\\.zarr$", ".zarr.zip", args$out_path)
+  args$format <- "zarr.zip"
+  expect_null(.path_order_note(.classify_path(suppressMessages(do.call(cellucid_prepare, args)))))
+  # One in its own order (no uns['cellucid']['priority']) is told.
+  unlink(file.path(folder, "uns", "cellucid", "priority"), recursive = TRUE)
+  expect_match(.path_order_note(.classify_path(folder)), "no reader of Zarr chunks", fixed = TRUE)
+  # Said when it is served (not when quiet).
+  messages <- character()
+  viewer <- withCallingHandlers(
+    cellucid_serve(loom, dataset_id = "l", dataset_name = "L", port = 0L, serve_web_ui = FALSE),
+    message = function(condition) {
+      messages <<- c(messages, conditionMessage(condition))
+      invokeRestart("muffleMessage")
+    }
+  )
+  on.exit(cellucid_stop(viewer), add = TRUE)
+  expect_true(any(grepl("Its cells are in their own order", messages, fixed = TRUE)))
 })

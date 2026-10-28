@@ -363,7 +363,8 @@ test_that("dense expression is stored gene-major in tall strips", {
     embeddings = list(X_umap = matrix(seq_len(6), ncol = 2)),
     dataset_id = "dense",
     dataset_name = "Dense",
-    gene_expression = matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, dimnames = list(NULL, c("g1", "g2")))
+    gene_expression = matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, dimnames = list(NULL, c("g1", "g2"))),
+    priority_seed = NULL
   )
   store <- do.call(cellucid_prepare, args)
   meta <- store_json(store, "X/.zarray")
@@ -414,6 +415,7 @@ test_that("integer counts above 2^24 keep the whole X in float64, and nothing el
 
   dense <- function(values) {
     store <- cellucid_prepare(
+      priority_seed = NULL,
       store_path(),
       format = "zarr",
       embeddings = list(X_umap = matrix(seq_len(4), ncol = 2)),
@@ -434,6 +436,7 @@ test_that("category codes take the type pandas gives them", {
   codes_dtype <- function(n_levels) {
     levels <- sprintf("t%05d", seq_len(n_levels))
     store <- cellucid_prepare(
+      priority_seed = NULL,
       store_path(),
       format = "zarr",
       embeddings = list(X_umap = matrix(seq_len(4), ncol = 2)),
@@ -452,7 +455,7 @@ test_that("category codes take the type pandas gives them", {
   expect_identical(cellucid:::.ad_codes_dtype(2147483647), "<i8")
 })
 
-test_that("expression is chunked for gene reads and the graph for whole reads", {
+test_that("expression is chunked for gene reads, per-cell arrays by cells and the graph for whole reads", {
   skip_if_not_installed("Matrix")
   n <- 70000L
   ring <- c(seq(2L, n), 1L)
@@ -461,6 +464,7 @@ test_that("expression is chunked for gene reads and the graph for whole reads", 
   )
   expression <- Matrix::sparseMatrix(i = seq_len(n), j = rep(1:2, length.out = n), x = 1, dims = c(n, 2L))
   store <- cellucid_prepare(
+    priority_seed = NULL,
     store_path(),
     format = "zarr",
     embeddings = list(X_umap = matrix(as.double(seq_len(2L * n)), ncol = 2)),
@@ -471,14 +475,16 @@ test_that("expression is chunked for gene reads and the graph for whole reads", 
     connectivities = graph
   )
   chunks <- function(key) unlist(store_json(store, file.path(key, ".zarray"))$chunks)
-  expect_identical(chunks("X/data"), 65536L)
-  expect_identical(chunks("X/indices"), 65536L)
+  # Expression in 2^14 values, every array of one row per cell in 2^16 values
+  # (an embedding: whole rows), the rest in 2^18 (Python's constants).
+  expect_identical(chunks("X/data"), 16384L)
+  expect_identical(chunks("X/indices"), 16384L)
   expect_identical(chunks("X/indptr"), 3L)
   expect_identical(chunks("obsp/connectivities/data"), 2L * n)
   expect_identical(chunks("obsp/connectivities/indices"), 2L * n)
   expect_identical(chunks("obsp/connectivities/indptr"), n + 1L)
-  expect_identical(chunks("obsm/X_umap"), c(n, 2L))
-  expect_identical(chunks("obs/_index"), n)
+  expect_identical(chunks("obsm/X_umap"), c(32768L, 2L))
+  expect_identical(chunks("obs/_index"), 65536L)
 })
 
 test_that("repeated cell and gene names are made unique the anndata way", {
@@ -539,12 +545,12 @@ test_that("a required argument that was never supplied is reported as missing", 
     )
   )
   expect_error(
-    cellucid_prepare(store_path(), "zarr", embeddings = list(X_umap = diag(2)), dataset_id = "a"),
+    cellucid_prepare(store_path(), "zarr", embeddings = list(X_umap = diag(2)), dataset_id = "a", priority_seed = NULL),
     "^cellucid_prepare\\(\\) is missing 1 required argument:\\n  - dataset_name: one non-empty name"
   )
   # format has no default: the message names both choices and what each is for.
   expect_error(
-    cellucid_prepare(store_path(), embeddings = list(X_umap = diag(2)), dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), embeddings = list(X_umap = diag(2)), dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     paste0(
       "^cellucid_prepare\\(\\) is missing 1 required argument:\\n",
       "  - format: the kind of output to write, \"zarr\" \\(a \\.zarr folder of small ",

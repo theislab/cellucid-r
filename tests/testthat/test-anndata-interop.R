@@ -4,11 +4,13 @@
 # CELLUCID_ANNDATA_PYTHON environment variable, else python3 on the PATH. It
 # is skipped otherwise, and on CRAN.
 
+# A Python whose anndata reads both Zarr formats: zarr-python 3 (zarr-python 2
+# reads Zarr format 2 only, and answers a format 3 store "nothing found").
 anndata_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_ANNDATA_PYTHON"), Sys.which("python3"))
+  candidates <- c(Sys.getenv("CELLUCID_ANNDATA_PYTHON"), Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
   for (candidate in candidates[nzchar(candidates)]) {
     status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import anndata, zarr")),
+      candidate, c("-c", shQuote("import anndata, zarr; assert int(zarr.__version__.split('.')[0]) >= 3")),
       stdout = FALSE, stderr = FALSE
     ))
     if (identical(status, 0L)) return(candidate)
@@ -78,7 +80,7 @@ test_that("Python's anndata reads the folder and the .zarr.zip, Zarr format 2 an
   skip_on_cran()
   skip_if_not_installed("Matrix")
   python <- anndata_python()
-  skip_if(is.null(python), "no Python with anndata and zarr")
+  skip_if(is.null(python), "no Python with anndata and zarr-python 3")
   script <- testthat::test_path("python", "read_with_anndata.py")
 
   args <- prepare_fixture(file.path(tempfile("cellucid_interop_"), "fixture.zarr"))
@@ -96,17 +98,22 @@ test_that("Python's anndata reads the folder and the .zarr.zip, Zarr format 2 an
   )
 
   folder <- dirname(args$out_path)
-  for (zarr_format in c(2L, 3L)) {
-    for (format in c("zarr", "zarr.zip")) {
-      args$out_path <- file.path(folder, paste0("fixture-v", zarr_format, ".", format))
-      args$format <- format
-      args$zarr_format <- zarr_format
-      store <- suppressMessages(do.call(cellucid_prepare, args))
-      output <- suppressWarnings(system2(
-        python, c(shQuote(script), shQuote(store), shQuote(expected_path)),
-        stdout = TRUE, stderr = TRUE
-      ))
-      expect_identical(output[length(output)], "ok", info = paste(format, zarr_format, paste(output, collapse = "\n")))
+  # The cells as given and in priority order (the default), each format.
+  for (order in list(NULL, 0)) {
+    for (zarr_format in c(2L, 3L)) {
+      for (format in c("zarr", "zarr.zip")) {
+        label <- if (is.null(order)) "given" else "priority"
+        args$out_path <- file.path(folder, paste0("fixture-", label, "-v", zarr_format, ".", format))
+        args$format <- format
+        args$zarr_format <- zarr_format
+        args["priority_seed"] <- list(order)
+        store <- suppressMessages(do.call(cellucid_prepare, args))
+        output <- suppressWarnings(system2(
+          python, c(shQuote(script), shQuote(store), shQuote(expected_path)),
+          stdout = TRUE, stderr = TRUE
+        ))
+        expect_identical(output[length(output)], "ok", info = paste(label, format, zarr_format, paste(output, collapse = "\n")))
+      }
     }
   }
 })
@@ -115,7 +122,7 @@ test_that("Python's anndata reads integer counts above 2^24 back exactly, as flo
   skip_on_cran()
   skip_if_not_installed("Matrix")
   python <- anndata_python()
-  skip_if(is.null(python), "no Python with anndata and zarr")
+  skip_if(is.null(python), "no Python with anndata and zarr-python 3")
   script <- testthat::test_path("python", "read_with_anndata.py")
 
   args <- prepare_fixture(file.path(tempfile("cellucid_interop_"), "counts.zarr"))

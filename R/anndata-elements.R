@@ -11,12 +11,14 @@
   .zarr_group(store, path, .encoding("dict", "0.1.0"))
 }
 
-.ad_string_array <- function(store, path, strings) {
-  .zarr_vector(store, path, strings, "|O", .encoding("string-array", "0.2.0"))
+# `target`: the elements a chunk holds -- .chunk_elements_cell for an array
+# with one value per cell, else .chunk_elements_whole.
+.ad_string_array <- function(store, path, strings, target = .chunk_elements_whole) {
+  .zarr_vector(store, path, strings, "|O", .encoding("string-array", "0.2.0"), target = target)
 }
 
-.ad_numeric_array <- function(store, path, values, dtype) {
-  .zarr_vector(store, path, values, dtype, .encoding("array", "0.2.0"))
+.ad_numeric_array <- function(store, path, values, dtype, target = .chunk_elements_whole) {
+  .zarr_vector(store, path, values, dtype, .encoding("array", "0.2.0"), target = target)
 }
 
 # The signed integer type of the category codes, exactly as pandas chooses
@@ -36,16 +38,16 @@
   }
 }
 
-.ad_categorical <- function(store, path, codes, categories, ordered) {
+.ad_categorical <- function(store, path, codes, categories, ordered, target = .chunk_elements_whole) {
   .zarr_group(store, path, .encoding("categorical", "0.2.0", ordered = ordered))
-  .ad_numeric_array(store, .zarr_key(path, "codes"), codes, .ad_codes_dtype(length(categories)))
+  .ad_numeric_array(store, .zarr_key(path, "codes"), codes, .ad_codes_dtype(length(categories)), target)
   .ad_string_array(store, .zarr_key(path, "categories"), categories)
 }
 
-.ad_nullable <- function(store, path, type, values, mask, dtype) {
+.ad_nullable <- function(store, path, type, values, mask, dtype, target = .chunk_elements_whole) {
   .zarr_group(store, path, .encoding(type, "0.1.0"))
-  .ad_numeric_array(store, .zarr_key(path, "values"), values, dtype)
-  .ad_numeric_array(store, .zarr_key(path, "mask"), mask, "|b1")
+  .ad_numeric_array(store, .zarr_key(path, "values"), values, dtype, target)
+  .ad_numeric_array(store, .zarr_key(path, "mask"), mask, "|b1", target)
 }
 
 # How one data-frame column is stored. The rules are anndata's own:
@@ -69,7 +71,12 @@
 # Anything else -- a date, a time, a list -- is refused with the conversion
 # that makes it storable, because writing its underlying numbers would
 # store values the caller never saw.
-.ad_column <- function(store, path, values, label) {
+.ad_column <- function(store, path, values, label, target = .chunk_elements_whole) {
+  # Original positions (R/priority.R): uint32, as cellucid-python stores them.
+  if (inherits(values, "cellucid_uint32")) {
+    .ad_numeric_array(store, path, unclass(values), "<u4", target)
+    return(invisible(NULL))
+  }
   if (is.factor(values)) {
     levels <- levels(values)
     codes <- as.integer(values) - 1L
@@ -86,7 +93,7 @@
       codes[present] <- codes[present] - shift[codes[present] + 1L]
       levels <- levels[kept]
     }
-    .ad_categorical(store, path, codes, levels, is.ordered(values))
+    .ad_categorical(store, path, codes, levels, is.ordered(values), target)
     return(invisible(NULL))
   }
   if (is.object(values) || !is.null(dim(values)) || is.list(values)) {
@@ -101,9 +108,9 @@
       categories <- .sort_code_points(unique(values[!is.na(values)]))
       codes <- match(values, categories) - 1L
       codes[is.na(codes)] <- -1L
-      .ad_categorical(store, path, codes, categories, FALSE)
+      .ad_categorical(store, path, codes, categories, FALSE, target)
     } else {
-      .ad_string_array(store, path, values)
+      .ad_string_array(store, path, values, target)
     }
     return(invisible(NULL))
   }
@@ -112,9 +119,9 @@
       mask <- is.na(values)
       filled <- values
       filled[mask] <- FALSE
-      .ad_nullable(store, path, "nullable-boolean", filled, mask, "|b1")
+      .ad_nullable(store, path, "nullable-boolean", filled, mask, "|b1", target)
     } else {
-      .ad_numeric_array(store, path, values, "|b1")
+      .ad_numeric_array(store, path, values, "|b1", target)
     }
     return(invisible(NULL))
   }
@@ -123,9 +130,9 @@
       mask <- is.na(values)
       filled <- values
       filled[mask] <- 0L
-      .ad_nullable(store, path, "nullable-integer", filled, mask, "<i4")
+      .ad_nullable(store, path, "nullable-integer", filled, mask, "<i4", target)
     } else {
-      .ad_numeric_array(store, path, values, "<i4")
+      .ad_numeric_array(store, path, values, "<i4", target)
     }
     return(invisible(NULL))
   }
@@ -139,7 +146,7 @@
         "replace it with NA, which is written as a missing value."
       )
     }
-    .ad_numeric_array(store, path, values, "<f8")
+    .ad_numeric_array(store, path, values, "<f8", target)
     return(invisible(NULL))
   }
   .abort(
@@ -150,21 +157,24 @@
 }
 
 # A data frame: the index as a string array named `_index`, and one element
-# per column, in `column-order`.
+# per column, in `column-order`. The cells' (`axis` "obs") are chunked as
+# every array of one value per cell (.chunk_elements_cell).
 .ad_dataframe <- function(store, path, frame, index, axis) {
+  target <- if (identical(axis, "obs")) .chunk_elements_cell else .chunk_elements_whole
   columns <- names(frame)
   .zarr_group(store, path, .encoding(
     "dataframe", "0.2.0",
     `_index` = "_index",
     `column-order` = I(columns)
   ))
-  .ad_string_array(store, .zarr_key(path, "_index"), index)
+  .ad_string_array(store, .zarr_key(path, "_index"), index, target)
   for (column in columns) {
     .ad_column(
       store,
       .zarr_key(path, column),
       frame[[column]],
-      paste0(axis, " column '", column, "'")
+      paste0(axis, " column '", column, "'"),
+      target
     )
   }
   invisible(NULL)
@@ -184,7 +194,7 @@
 # .sparse_index_dtype() says -- the rules cellucid-python writes by. `values`
 # are stored in
 # `dtype`. A `sliced` matrix -- the expression matrix, which the viewer reads
-# one gene's range at a time -- chunks its data and indices in 2^16 values;
+# one gene's range at a time -- chunks its data and indices in 2^14 values;
 # any other (the neighbour graph, read whole) in 2^18.
 .ad_sparse <- function(store, path, format, shape, pointers, indices, values,
                        dtype = "<f4", sliced = FALSE) {
@@ -211,7 +221,7 @@
     chunk_cols <- .chunk_length(n_cols, floor(.chunk_elements_whole / chunk_rows))
   } else {
     chunk_cols <- max(1, n_cols)
-    chunk_rows <- .chunk_length(n_rows, floor(.chunk_elements_whole / chunk_cols))
+    chunk_rows <- .chunk_length(n_rows, floor(.chunk_elements_cell / chunk_cols))
   }
   # Dense expression values are not shuffled (zarr-store.R).
   .zarr_matrix(store, path, matrix, dtype, chunk_rows, chunk_cols, .encoding("array", "0.2.0"),
@@ -225,7 +235,7 @@
   matrix <- matrix(values, ncol = 1L)
   .zarr_matrix(
     store, path, matrix, "|b1",
-    .chunk_length(nrow(matrix), .chunk_elements_whole), 1L,
+    .chunk_length(nrow(matrix), .chunk_elements_cell), 1L,
     .encoding("array", "0.2.0")
   )
 }
@@ -241,6 +251,8 @@
 .uns_strings <- function(value) .uns_leaf("strings", value)
 .uns_integers <- function(value) .uns_leaf("integers", value)
 .uns_floats32 <- function(value) .uns_leaf("floats32", value)
+# One float32 per cell (the stored outlier quantiles), chunked as obs is.
+.uns_cell_floats32 <- function(value) .uns_leaf("cellFloats32", value)
 
 .ad_uns_value <- function(store, path, value) {
   if (!inherits(value, "cellucid_uns_leaf")) {
@@ -257,7 +269,8 @@
     boolean = .zarr_scalar(store, path, value$value, "|b1", .encoding("numeric-scalar", "0.2.0")),
     strings = .ad_string_array(store, path, value$value),
     integers = .ad_numeric_array(store, path, value$value, "<i8"),
-    floats32 = .ad_numeric_array(store, path, value$value, "<f4")
+    floats32 = .ad_numeric_array(store, path, value$value, "<f4"),
+    cellFloats32 = .ad_numeric_array(store, path, value$value, "<f4", .chunk_elements_cell)
   )
   invisible(NULL)
 }

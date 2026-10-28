@@ -12,7 +12,8 @@
 #   WS   /_cellucid/ws                      the viewer channel
 #
 # An R object is served as a Cellucid-ready AnnData (or MuData) Zarr store
-# held in memory: the plan cellucid_prepare() writes (dataset-plan.R),
+# held in memory, its cells in priority order under the served seed
+# (viewer-api.R, .serve_object): the plan cellucid_prepare() writes (dataset-plan.R),
 # uncompressed (the browser reads it over loopback), every chunk made when the
 # browser asks for it, and the chunks made by a transform kept in a
 # least-recently-used cache bounded by `cache_bytes` (zarr-store.R). A file or
@@ -239,13 +240,32 @@
 # held in R's memory whole (a scheduling choice, not a limit on ranges).
 .range_block_bytes <- 8388608
 
+# One file's version: its size and a strong validator of its bytes, NULL when
+# it is no longer a readable file. The validator is the file's size,
+# modification time and status-change time (Windows: creation time), to the
+# microsecond R reads them at: a file rewritten in place has a new
+# modification time, and one replaced by another (moved over it, even with
+# its modification time copied, cp -p) a new status-change time. The browser
+# files what it keeps of a served file under it (the dataset list states it
+# beside the size, .datasets_document()), so a changed file is a new version.
+# cellucid-python's validator adds the inode, which base R does not read.
+.file_version <- function(path) {
+  info <- file.info(path, extra_cols = FALSE)
+  if (is.na(info$size) || isTRUE(info$isdir)) return(NULL)
+  micros <- function(time) sprintf("%.0f", round(as.numeric(time) * 1e6))
+  list(
+    size = info$size,
+    etag = paste0("\"", sprintf("%.0f", info$size), "-", micros(info$mtime), "-", micros(info$ctime), "\"")
+  )
+}
+
 # A file on disk, or a range of it. A whole file is streamed by httpuv from
 # disk; a range is read with one seek and one read.
 .file_response <- function(req, path, head_only) {
-  info <- file.info(path, extra_cols = FALSE)
-  if (is.na(info$size) || isTRUE(info$isdir)) return(.text_response(404L, paste0(basename(path), " is no longer readable")))
-  size <- info$size
-  etag <- paste0("\"", as.hexmode(as.integer(size %% 2^31)), "-", format(as.numeric(info$mtime) * 1e6, scientific = FALSE), "\"")
+  version <- .file_version(path)
+  if (is.null(version)) return(.text_response(404L, paste0(basename(path), " is no longer readable")))
+  size <- version$size
+  etag <- version$etag
   if (.not_modified(req, etag)) return(list(status = 304L, headers = list(ETag = etag), body = raw(0)))
   interval <- .range_interval(req, size, etag)
   if (isFALSE(interval)) return(.range_not_satisfiable(size))
@@ -378,7 +398,11 @@
   switch(route,
     `_cellucid/health` = return(.json_response(viewer$health)),
     `_cellucid/info` = return(.json_response(viewer$info)),
-    `_cellucid/datasets` = return(.json_response(viewer$datasets)),
+    `_cellucid/datasets` = {
+      listed <- .datasets_document(viewer)
+      if (is.null(listed)) return(.text_response(404L, paste0(basename(viewer$served$path), " is no longer readable")))
+      return(.json_response(listed))
+    },
     `_cellucid/protocol` = return(.json_response(.viewer_protocol_document()))
   )
   if (startsWith(route, "_cellucid/anndata/")) {
@@ -490,6 +514,9 @@
 .check_event_cells <- function(viewer, event) {
   n <- viewer$n_cells
   if (is.null(n)) return(event)
+  if (identical(event$type, "result") && event$payload$nObs != n) {
+    .refuse_frame("A result names a dataset of ", event$payload$nObs, " ", .plural(event$payload$nObs, "cell"), ", and this one has ", n, ".")
+  }
   cells <- switch(event$type,
     selection = event$payload$cells,
     hover = event$payload$cell,
@@ -545,11 +572,10 @@
   } else if (identical(type, "session_bundle")) {
     request <- viewer$session_requests[[payload$requestId]]
     if (is.null(request)) {
-      # Nobody waits for it any more (the wait timed out): dropped, and the
-      # channel stays open.
+      # Nobody asked for it any more (the request was withdrawn): dropped,
+      # and the channel stays open.
       return(invisible(NULL))
     }
-    viewer$session_requests[[payload$requestId]] <- NULL
     if (!.is_session_bundle(event$body)) {
       # The one waiting is told now, in the form its wait accepts.
       return(.deliver_event(viewer, list(type = "command_error", payload = list(
@@ -560,6 +586,47 @@
     path <- tempfile("cellucid-session-", fileext = ".cellucid-session")
     writeBin(event$body, path)
     payload <- list(requestId = payload$requestId, status = "ok", bytes = length(event$body), path = path)
+    # The request holds its answer until it is collected
+    # (cellucid_session_result()).
+    viewer$session_requests[[payload$requestId]] <- list(answer = payload)
+  } else if (type %in% c("result", "result_removed", "results") && !identical(payload$epoch, viewer$results_epoch)) {
+    # Another epoch -- a reloaded page, the viewer shown again elsewhere,
+    # another dataset opened in it -- starts afresh; its snapshot follows.
+    viewer$results_epoch <- payload$epoch
+    viewer$results <- list()
+    viewer$results_inventory <- NULL
+    viewer$results_dataset <- NULL
+  }
+  if (identical(type, "result")) {
+    # The newest revision of each result: everything the viewer holds in its
+    # epoch, as of the last event it sent (cellucid_results() reads it,
+    # never asks).
+    record <- .result_record(payload, viewer$cell_names)
+    key <- .result_key(record)
+    held <- viewer$results[[key]]
+    if (is.null(held) || held$revision <= record$revision) viewer$results[[key]] <- record
+    if (!is.null(viewer$results_inventory)) viewer$results_inventory <- union(viewer$results_inventory, key)
+    payload <- record
+  } else if (identical(type, "result_removed")) {
+    key <- paste(payload$kind, payload$id, sep = ":")
+    held <- viewer$results[[key]]
+    if (!is.null(held) && held$revision < payload$revision) {
+      viewer$results[[key]] <- NULL
+      if (!is.null(viewer$results_inventory)) viewer$results_inventory <- setdiff(viewer$results_inventory, key)
+    }
+  } else if (identical(type, "results")) {
+    # A snapshot's end: the complete set, which replaces what was kept, and
+    # the dataset it describes (NULL: another one is open in the viewer).
+    listed <- vapply(payload$items, function(item) paste(item$kind, item$id, sep = ":"), "")
+    viewer$results <- viewer$results[intersect(names(viewer$results), listed)]
+    viewer$results_inventory <- listed
+    viewer$results_dataset <- payload$dataset
+  } else if (identical(type, "command_error") && identical(payload$command, "requestSessionBundle")) {
+    # The viewer could not capture a session: every request still open
+    # learns why.
+    for (id in names(viewer$session_requests)) {
+      if (is.null(viewer$session_requests[[id]]$answer)) viewer$session_requests[[id]] <- list(failed = payload$reason)
+    }
   } else if (identical(type, "data_mapping")) {
     viewer$data_mapping <- payload
   } else if (identical(type, "ready")) {
@@ -571,7 +638,29 @@
       .warn("A cellucid_on(\"", type, "\") hook failed: ", conditionMessage(error))
     })
   }
+  # A command the viewer refused (or that could not be built once the viewer
+  # could take it) is said, unless a hook handles it: commands never wait.
+  if (identical(type, "command_error") && length(viewer$hooks[["command_error"]]) == 0L) {
+    .warn("The viewer did not take ", .command_r_callers[[payload$command]] %||% payload$command, ": ", payload$reason)
+  }
+  # What waited for this event goes now.
+  if (identical(type, "ready")) .send_pending_pushes(viewer)
+  if (identical(type, "data_mapping")) .send_pending_mapping(viewer)
   invisible(NULL)
+}
+
+# The R call behind each command, for what a refused one says.
+.command_r_callers <- list(
+  requestSessionBundle = "cellucid_request_session()", highlight = "cellucid_highlight()",
+  clearHighlights = "cellucid_clear_highlights()", setColorBy = "cellucid_color_by()",
+  setVisibility = "cellucid_set_visibility()", resetCamera = "cellucid_reset_camera()", freeze = "cellucid_freeze()",
+  setDataMapping = "cellucid_set_data_mapping()", setField = "cellucid_push()", setGeneSet = "cellucid_push_gene_set()"
+)
+
+# A command that waited for the viewer and could not be built once it could:
+# reported as the viewer reports a refused command (a command_error event).
+.report_local_command_error <- function(viewer, command, reason) {
+  .deliver_event(viewer, list(type = "command_error", payload = list(command = command, reason = substr(reason, 1L, 240L))))
 }
 
 # A .cellucid-session file starts with its format's signature (the web app's

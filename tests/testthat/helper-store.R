@@ -210,7 +210,10 @@ prepare_fixture <- function(out_path) {
       row.names = c("ENSG1", "ENSG2", "ENSG3", "ENSG4")
     ),
     gene_expression = expression,
-    connectivities = knn
+    connectivities = knn,
+    # The cells as given: these fixtures pin layouts independent of the cell
+    # order (test-priority-order.R pins the priority order).
+    priority_seed = NULL
   )
 }
 

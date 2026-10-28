@@ -16,8 +16,9 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ## View an object
 
 `cellucid_view()` opens a Seurat, SingleCellExperiment or SummarizedExperiment
-object in the Cellucid viewer: in the RStudio or Positron Viewer pane, or in
-your browser. Nothing is written to disk and no Python is needed.
+object in the Cellucid viewer: in the RStudio or Positron Viewer pane, in
+your browser, or, in a Jupyter notebook (IRkernel), in the cell's output.
+Nothing is written to disk.
 
 ```{r, eval=FALSE}
 library(cellucid)
@@ -47,14 +48,31 @@ cellucid_on(viewer, "selection", function(event) {
 selected <- cellucid_selection(viewer)
 subset(pbmc_small, cells = selected$cell_names)
 
-session <- cellucid_session(viewer, file = "pbmc.cellucid-session")
-# The highlight groups and fields made in the viewer, as meta.data columns:
-pbmc_small <- cellucid_apply_session(pbmc_small, viewer)
+# Every highlight group, label field, score and gene set made in the viewer,
+# as meta.data columns (and misc$cellucid$gene_sets), in one call:
+pbmc_small <- cellucid_pull(pbmc_small, viewer)
+# A column of yours, shown in the viewer as a field:
+cellucid_push(viewer, pbmc_small$RNA_snn_res.1, key = "clusters")
 cellucid_stop(viewer)
 ```
 
 The R console stays usable while the viewer is open: the server answers the
-viewer whenever R is idle.
+viewer whenever R is idle. Without a viewer, `cellucid_pull()` reads what the
+web app exports (obs-column CSV files, GMT gene sets, `.cellucid-session`
+files): `cellucid_pull(pbmc_small, "~/Downloads/cellucid-exports")`.
+
+## In a Jupyter notebook
+
+In an IRkernel notebook (JupyterLab, Notebook 7, VS Code, Google Colab's R
+runtime) the same `cellucid_view(pbmc_small)` shows the viewer in the cell's
+output: a notebook widget, the one cellucid-python's `show_anndata()` shows,
+reached through the notebook's own connection, so no port or server is
+involved. It needs the `IRkernel` and `IRdisplay` packages, and the Python
+package `anywidget` where the notebook server runs. R hears the viewer
+between cells: show the viewer in one cell, work in it, and call
+`cellucid_pull()` or `cellucid_selection()` in the next. Runnable notebooks,
+each with a Python twin and an "Open in Colab" badge:
+<https://docs.cellucid.com/en/latest/user_guide/r_package/f_notebooks_tutorials/index.html>.
 
 ## Serve from a cluster
 

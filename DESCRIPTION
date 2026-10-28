@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
 Title: Prepare and View Single-Cell Data in the Cellucid Viewer
-Version: 0.9.5
+Version: 0.9.6
 Config/cellucid/version-marker: CELLUCID_VERSION
 Authors@R: c(
     person(
@@ -22,7 +22,9 @@ Description: Writes single-cell embeddings, cell and gene metadata, gene
     or a file, in the 'Cellucid' viewer from a local 'httpuv' web server,
     with commands and events over a 'WebSocket'; the viewer's web
     application is downloaded from <https://www.cellucid.com> at first use
-    and kept in the user's cache folder.
+    and kept in the user's cache folder. In a 'Jupyter' notebook ('IRkernel')
+    the viewer is the cell's output, a notebook widget reached through the
+    kernel's own connection, with no server or port.
 License: BSD_3_clause + file LICENSE
 Encoding: UTF-8
 Depends:
@@ -38,6 +40,8 @@ Imports:
     utils
 Suggests:
     DelayedArray,
+    IRdisplay,
+    IRkernel,
     knitr,
     Matrix,
     rmarkdown,

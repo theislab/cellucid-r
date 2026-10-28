@@ -186,6 +186,8 @@ test_that("R and Python write the same AnnData from the same input", {
       args$out_path <- file.path(root, paste0("case", index, "-v", zarr_format, ".zarr"))
       args$format <- "zarr"
       args$zarr_format <- zarr_format
+      # Both writers at their default: the cells in priority order.
+      args$priority_seed <- NULL
       store <- suppressMessages(do.call(cellucid_prepare, args))
       pairs <- c(pairs, store, input)
     }

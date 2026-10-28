@@ -132,6 +132,7 @@ test_that("the drift is a vector field cellucid_prepare() stores as <field>_<bas
   transition <- matrix(c(0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1), nrow = 4, byrow = TRUE)
   drift <- cellucid_transition_drift(transition, embedding, normalize_rows = TRUE)
   store <- cellucid_prepare(
+    priority_seed = NULL,
     out_path = file.path(tempfile("cellucid_drift_"), "drift.zarr"),
     format = "zarr",
     embeddings = list(X_umap = embedding),

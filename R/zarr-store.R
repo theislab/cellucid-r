@@ -58,15 +58,18 @@
 # How many elements one chunk holds. A chunk is the unit of every read, so its
 # size is a scheduling choice: large enough that a whole-column read is a
 # handful of requests, small enough that reading one gene out of a sparse
-# matrix does not fetch much more than that gene. Arrays the viewer reads
-# whole (obs and var columns, the indexes, an embedding, the neighbour graph)
-# use 2^18 elements per chunk (1 MiB of float32); the arrays it reads by
-# slices (the data and indices of the expression matrix, which it reads one
-# gene's range at a time) use 2^16, so one gene costs at most a few hundred
-# kilobytes beyond its own values. These are the Python writer's constants
-# (SLICED_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS in prepare_data/_store.py).
+# matrix does not fetch much more than that gene. Arrays with one row per cell
+# (obs columns and index, embeddings, masks, cell maps, outlier quantiles) use
+# 2^16 elements per chunk, so a subsample -- the first rows of a store in
+# priority order -- reads little beyond its own cells; the other arrays read
+# whole (var, X's pointers, the neighbour graph) 2^18 (1 MiB of float32); the
+# data and indices of the expression matrix, read one gene's range (or its
+# first values) at a time, 2^14. These are the Python writer's constants
+# (CELL_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS, SLICED_CHUNK_ELEMENTS in
+# prepare_data/_store.py), with the measurements behind them.
 .chunk_elements_whole <- 262144
-.chunk_elements_sliced <- 65536
+.chunk_elements_cell <- 65536
+.chunk_elements_sliced <- 16384
 
 # --- JSON -------------------------------------------------------------------
 
@@ -583,6 +586,7 @@
 }
 
 .value_dim <- function(values) {
+  if (inherits(values, "cellucid_rows_in_order")) return(.value_dim(values$matrix))
   if (.is_transposed(values)) rev(dim(values$matrix)) else dim(values)
 }
 
@@ -594,8 +598,17 @@
 
 .is_transposed <- function(values) inherits(values, "cellucid_transposed")
 
-# Rows `rows` and columns `cols` of a matrix, or of a .transposed() one.
+# A matrix (or a .transposed() one) read with its rows in the order `order`
+# gives (1-based): row r of it is row order[r] of the matrix, each block taken
+# through the order, never a reordered copy.
+.rows_in_order <- function(matrix, order) structure(list(matrix = matrix, order = order), class = "cellucid_rows_in_order")
+
+# Rows `rows` and columns `cols` of a matrix, a .transposed() one, or one
+# read through .rows_in_order().
 .matrix_block <- function(matrix, rows, cols) {
+  if (inherits(matrix, "cellucid_rows_in_order")) {
+    return(.matrix_block(matrix$matrix, matrix$order[rows], cols))
+  }
   if (.is_transposed(matrix)) {
     return(t(matrix$matrix[cols, rows, drop = FALSE]))
   }

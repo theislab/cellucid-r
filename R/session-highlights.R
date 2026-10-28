@@ -154,10 +154,8 @@
       if (materialize) {
         if (column %in% existing) .abort("Column already exists: ", column)
         existing <- c(existing, column)
-        values <- logical(view$n_cells)
-        values[cells + 1L] <- TRUE
         plans[[length(plans) + 1L]] <- list(
-          name = column, values = values,
+          name = column, values = .membership_column(cells, NULL, view$n_cells),
           metadata = list(kind = "highlight", group_id = group_id, page_id = page_id)
         )
       }

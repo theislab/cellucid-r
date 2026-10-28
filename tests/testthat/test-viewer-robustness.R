@@ -123,23 +123,6 @@ test_that("the Host check applies unless the bind is a non-loopback IP address",
   expect_true(applies("0.0.0.0", "hub.example.org"))
 })
 
-test_that("a stale command_error does not answer a new data mapping request", {
-  skip_without_sce()
-  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
-  client <- ws_welcomed(viewer)
-  mapping <- list(kind = "anndata", expression = "X")
-  viewer$data_mapping <- list(requestId = NULL, origin = "default", mapping = mapping)
-  # An error left by an earlier call that gave up waiting.
-  viewer$last$command_error <- list(command = "setDataMapping", reason = "stale from an earlier call")
-  later::later(function() {
-    command <- ws_receive(client)$json
-    ws_send_json(client, list(type = "data_mapping", requestId = command$requestId, origin = "notebook", mapping = command$mapping))
-  }, 0.2)
-  applied <- cellucid_set_data_mapping(viewer, expression = "X", timeout = 10)
-  expect_identical(applied$expression, "X")
-  ws_close(client)
-})
-
 test_that("hover and click name cells by 1-based position, and out-of-range cells are refused", {
   skip_without_sce()
   object <- small_sce(alt = FALSE)

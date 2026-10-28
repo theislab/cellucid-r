@@ -33,6 +33,7 @@ cellucid_prepare <- function(
     normalize_embeddings = NULL,
     centroid_min_points = NULL,
     modality = NULL,
+    priority_seed = 0,
     zarr_format = NULL,
     force = FALSE
 ) {
@@ -65,11 +66,16 @@ cellucid_prepare <- function(
   .require_supplied_arguments(absent_required)
 
   format <- .validate_format(format)
+  if (!is.null(priority_seed)) priority_seed <- .subsample_uint32(priority_seed, "priority_seed")
   zarr_format <- .validate_zarr_format(zarr_format)
   force <- .validate_flag(force, "force")
   target <- .resolve_output_path(out_path, format = format, force = force)
   target$zarr_format <- zarr_format
 
+  # The cells in their original order: a file prepared from an object read
+  # in a stored priority order names every cell as that file did
+  # (R/priority.R).
+  if (!is.null(data)) data <- .in_original_order(data)
   components <- .dataset_components(data, list(
     embeddings = embeddings,
     dataset_id = dataset_id,
@@ -95,6 +101,8 @@ cellucid_prepare <- function(
     normalize_embeddings = normalize_embeddings,
     centroid_min_points = centroid_min_points
   ))
+  components$obs <- .without_positions(components$obs)
+  components$priority_seed <- priority_seed
   plan <- .plan_dataset(components)
   .write_output(target, write = plan$write)
   invisible(target$path)

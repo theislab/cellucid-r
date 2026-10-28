@@ -19,7 +19,7 @@ test_that("mudata reads the MuData store of a multimodal object", {
   python <- mudata_python()
   skip_if(is.null(python), "no Python with mudata (set CELLUCID_MUDATA_PYTHON)")
   object <- small_sce()
-  store <- suppressMessages(cellucid_prepare(file.path(tempfile(), "m.zarr"), "zarr", data = object, dataset_id = "m", dataset_name = "M"))
+  store <- suppressMessages(cellucid_prepare(file.path(tempfile(), "m.zarr"), "zarr", data = object, dataset_id = "m", dataset_name = "M", priority_seed = NULL))
   output <- suppressWarnings(system2(python, shQuote(c(testthat::test_path("python", "read_with_mudata.py"), store)), stdout = TRUE, stderr = FALSE))
   read <- jsonlite::fromJSON(output[length(output)], simplifyVector = FALSE)
   expect_identical(read$n_obs, ncol(object))

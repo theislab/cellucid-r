@@ -1,4 +1,69 @@
-# cellucid 0.9.5 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.6 <!-- CELLUCID_VERSION -->
+
+Version 0.9.6 is the CRAN submission release.
+
+It is a patch release on 0.9.5 and stays in step with the Python package of
+the same version. Stores written by `cellucid_prepare()` in 0.9.5 and sessions
+saved with 0.9.5 are read as before. The viewer protocol is schema 2: use this
+release with the web app of this release.
+
+## The R package
+
+- **`cellucid_subsample_cells()`** (native code) gives exactly the cells the
+  viewer and Python keep.
+- **`cellucid_prepare()` stores cells in priority order** (`priority_seed`,
+  default 0; `NULL` keeps the order given), with the same record, position
+  column and prefix counts as Python, byte for byte; smaller chunks for
+  shares; a cells × genes matrix is ordered without holding the whole block
+  (36M values: peak 1.31 GB, 1.22 GB without priority order).
+- **`cellucid_restore_original_order()`** for data frames, Seurat (every
+  assay, reduction, graph and identity reordered) and SingleCellExperiment.
+- **The notebook widget from R.** In Jupyter (IRkernel), `cellucid_view()`
+  shows the same widget as Python over IRkernel's comm, with no server or
+  port (needs IRkernel, IRdisplay and anywidget). Tested end to end in
+  JupyterLab; Google Colab's R runtime is supported but not yet tested
+  there. `cellucid_serve()` and `pane = "browser"` say in a notebook why they
+  cannot answer there.
+- **Served in priority order.** `cellucid_view()` / `cellucid_serve()` serve
+  an object in priority order without copying its matrix or neighbour graph
+  (1M cells: 0.3 GB beyond the object, was 1.4 GB); the same object served by
+  R and Python holds identical bytes. A file given by path is served as it
+  is, with a strong `ETag`; for a file not in priority order R says, as it
+  starts, how to send only a share's cells.
+- **Round trip.** `cellucid_pull(object, viewer or paths)` (Seurat
+  `meta.data`, SCE/SE `colData`, data frames; `NA` for cells not open),
+  `cellucid_push()`, `cellucid_push_gene_set()`, `cellucid_subset()`,
+  `cellucid_gene_sets()`, `cellucid_results()`, `cellucid_write_gmt()` /
+  `cellucid_read_gmt()`; `cellucid_highlight()` takes obs names and a label.
+- **One session API.** `cellucid_request_session()`, then
+  `cellucid_session_result()` or `cellucid_apply_session(object, request)`;
+  `cellucid_session()` is removed and `cellucid_apply_session()` takes a file
+  or a request, no longer a viewer. Sessions saved on a share apply.
+- `cellucid_set_data_mapping()` no longer waits or takes `timeout`; a
+  `command_error` no hook handles is a warning.
+
+## In the web app
+
+- **Subsampled reading.** *Cells to open* (Session › Open data) opens a seeded
+  share of a dataset's cells by the file's default method or by `uniform`,
+  `blocks`, `stratified` or `spatial`; only the parts of the file that hold
+  them are read, and the view, filters, analyses, genes, exports and sessions
+  work on those cells. A link can name a share (`cells=10%&sample=blocks&seed=0`).
+  `cellucid_subsample_cells()` gives exactly the same cells.
+- **Too large for the device, progressive opening, Apply in place.** A
+  dataset that would not fit opens fitted, with **Open all cells**; slow
+  openings show a first view at once and grow in place; a larger or smaller
+  share is applied in place, reading only the cells added.
+- **R objects and MatrixMarket folders** opened in the browser are read whole
+  once, converted in priority order and kept in the browser's storage, so they
+  open again in milliseconds; every kept file is checked as it is read.
+- **Analyses on a share** match an independent reference on the same cells;
+  results go *Stale* when the open cells change and are not saved, exported or
+  sent to R until run again.
+- **Up to 100 million cells in 3D** on a 16 GB laptop, with levels of detail
+  that are uniform samples of the cells.
+
+# cellucid 0.9.5
 
 Version 0.9.5 is the CRAN submission release.
 

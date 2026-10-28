@@ -9,7 +9,7 @@ attrs_of <- function(store, key) store_json(store, file.path(key, ".zattrs"))
 test_that("a Seurat object is written with its cells, embeddings, assay and graph", {
   skip_without_seurat()
   object <- pbmc_seurat()
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC"))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC", priority_seed = NULL))
   expect_identical(store_array(store, "obs/_index"), colnames(object))
   expect_identical(store_array(store, "var/_index"), rownames(object))
   expect_identical(attrs_of(store, "")$`encoding-type`, "anndata")
@@ -41,7 +41,7 @@ test_that("a Seurat object's own record names it, and arguments override the obj
     id = "pbmc-small", name = "PBMC small", citation = list(text = "Satija lab"),
     defaults = list(embedding2d = "X_tsne", latentKey = "X_pca")
   )
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, priority_seed = NULL))
   expect_identical(store_array(store, "uns/cellucid/id"), "pbmc-small")
   expect_identical(store_array(store, "uns/cellucid/name"), "PBMC small")
   expect_identical(store_array(store, "uns/cellucid/citation/text"), "Satija lab")
@@ -53,6 +53,7 @@ test_that("a Seurat object's own record names it, and arguments override the obj
   object@misc$cellucid$defaults <- NULL
   obs <- data.frame(kind = rep(c("x", "y"), length.out = ncol(object)), row.names = colnames(object))
   store <- suppressMessages(cellucid_prepare(
+    priority_seed = NULL,
     store_path(), "zarr", data = object, dataset_name = "Renamed", obs = obs,
     embeddings = list(X_custom = matrix(1, ncol(object), 2, dimnames = list(colnames(object), NULL)))
   ))
@@ -65,12 +66,12 @@ test_that("an object without an identity or an embedding says what to add", {
   skip_without_seurat()
   object <- pbmc_seurat()
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object),
+    cellucid_prepare(store_path(), "zarr", data = object, priority_seed = NULL),
     "dataset_id and dataset_name are required.*misc\\$cellucid"
   )
   object@reductions <- list()
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "holds no embedding.*RunUMAP"
   )
 })
@@ -80,15 +81,15 @@ test_that("an old or foreign object is refused with the line that fixes it", {
   object <- pbmc_seurat()
   object@version <- package_version("2.3.4")
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "UpdateSeuratObject"
   )
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = list(a = 1), dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), "zarr", data = list(a = 1), dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "must be a Seurat, SingleCellExperiment or SummarizedExperiment object; got a list object"
   )
   expect_error(
-    cellucid_prepare(store_path(), "zarr", modalities = "RNA", embeddings = list(X_umap = diag(2)), dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), "zarr", modalities = "RNA", embeddings = list(X_umap = diag(2)), dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "modalities chooses among the modalities of data"
   )
 })
@@ -99,7 +100,7 @@ test_that("Seurat v5 split layers are joined, on a copy", {
   object <- pbmc_seurat()
   object[["RNA"]] <- split(object[["RNA"]], f = object$groups)
   expect_true(any(grepl("^counts\\.", SeuratObject::Layers(object[["RNA"]]))))
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL))
   expect_identical(store_array(store, "obs/_index"), colnames(object))
   joined <- SeuratObject::JoinLayers(object[["RNA"]])
   data <- SeuratObject::LayerData(joined, "data")[, colnames(object)]
@@ -111,7 +112,7 @@ test_that("Seurat v5 split layers are joined, on a copy", {
 test_that("several assays are written as a Cellucid-ready MuData, the active one first", {
   skip_without_seurat()
   object <- pbmc_multimodal()
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL))
   root <- attrs_of(store, "")
   expect_identical(root$`encoding-type`, "MuData")
   expect_identical(root$axis, 0L)
@@ -121,25 +122,25 @@ test_that("several assays are written as a Cellucid-ready MuData, the active one
   expect_false(dir.exists(file.path(store, "uns/cellucid/defaults")))
 
   # modality names the modality the viewer opens with.
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modality = "ADT"))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modality = "ADT", priority_seed = NULL))
   expect_identical(store_array(store, "uns/cellucid/defaults/modality"), "ADT")
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modality = "ATAC"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modality = "ATAC", priority_seed = NULL),
     "modality must name one of the modalities: c\\(\"RNA\", \"ADT\"\\)"
   )
 
   # The genes of one feature space cannot be given for several.
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", gene_identifiers = "CD3E"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", gene_identifiers = "CD3E", priority_seed = NULL),
     "c\\(\"gene_identifiers\"\\) describe the genes of one feature space.*modalities = \"RNA\""
   )
 
   # modalities chooses and orders; one modality is a plain AnnData.
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modalities = "ADT"))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modalities = "ADT", priority_seed = NULL))
   expect_identical(attrs_of(store, "")$`encoding-type`, "anndata")
   expect_identical(store_array(store, "var/_index"), paste0("prot", 1:5))
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modalities = "ATAC"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", modalities = "ATAC", priority_seed = NULL),
     "modalities names c\\(\"ATAC\"\\), which data does not hold"
   )
 })
@@ -175,7 +176,7 @@ test_that("a SingleCellExperiment is written with its assays, reducedDims, altEx
   skip_without_sce()
   object <- small_sce()
   object@metadata$cellucid <- list(id = "sce", name = "SCE")
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, priority_seed = NULL))
   expect_identical(attrs_of(store, "")$`encoding-type`, "MuData")
   expect_identical(unlist(attrs_of(store, "mod")$`mod-order`), c("main", "ADT"))
   # reducedDims keep their case: X_UMAP, X_PCA; beside them mudata's masks of
@@ -203,10 +204,10 @@ test_that("a DelayedArray assay is read block by block", {
   object <- small_sce(alt = FALSE)
   expected <- SummarizedExperiment::assay(object, "logcounts")
   SummarizedExperiment::assay(object, "logcounts") <- DelayedArray::DelayedArray(expected)
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "d", dataset_name = "D"))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "d", dataset_name = "D", priority_seed = NULL))
   expect_equal(store_array(store, "X/data"), as_float32(Matrix::t(methods::as(expected, "CsparseMatrix"))@x))
   expect_message(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "d", dataset_name = "D"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "d", dataset_name = "D", priority_seed = NULL),
     "block by block"
   )
 })
@@ -219,15 +220,15 @@ test_that("a SummarizedExperiment needs an embedding, and an old SCE is refused"
     colData = SummarizedExperiment::colData(object)
   )
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = se, dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), "zarr", data = se, dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "SummarizedExperiment holds no embedding.*scater::runUMAP"
   )
   umap <- matrix(seq_len(2L * ncol(se)), ncol = 2L, dimnames = list(colnames(se), NULL))
-  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = se, dataset_id = "a", dataset_name = "A", embeddings = list(X_umap = umap)))
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = se, dataset_id = "a", dataset_name = "A", embeddings = list(X_umap = umap), priority_seed = NULL))
   expect_identical(store_array(store, "obs/_index"), colnames(se))
   object@int_metadata$version <- package_version("1.6.0")
   expect_error(
-    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "updateObject"
   )
 })

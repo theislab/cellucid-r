@@ -21,7 +21,7 @@ test_that("the served store of explicit inputs holds the prepared store's arrays
 test_that("a Seurat object's served store holds its prepared store's arrays", {
   skip_without_seurat()
   object <- pbmc_seurat()
-  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC"))
+  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC", priority_seed = NULL))
   store <- suppressMessages(memory_store_of(
     cellucid:::.dataset_components(object, list(dataset_id = "pbmc", dataset_name = "PBMC"))
   ))
@@ -31,7 +31,7 @@ test_that("a Seurat object's served store holds its prepared store's arrays", {
 test_that("a multimodal object's served MuData store holds its prepared store's arrays", {
   skip_without_seurat()
   object <- pbmc_multimodal()
-  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC"))
+  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC", priority_seed = NULL))
   store <- suppressMessages(memory_store_of(
     cellucid:::.dataset_components(object, list(dataset_id = "pbmc", dataset_name = "PBMC"))
   ))
@@ -42,7 +42,7 @@ test_that("a multimodal object's served MuData store holds its prepared store's 
 test_that("a SingleCellExperiment's served store holds its prepared store's arrays", {
   skip_without_sce()
   object <- small_sce()
-  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "sce", dataset_name = "SCE"))
+  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "sce", dataset_name = "SCE", priority_seed = NULL))
   store <- suppressMessages(memory_store_of(
     cellucid:::.dataset_components(object, list(dataset_id = "sce", dataset_name = "SCE"))
   ))
@@ -55,9 +55,10 @@ test_that("an object's genes x cells matrix is stored as the same cells x genes 
   # path takes cells x genes as it is. Both must write the same arrays.
   skip_without_sce()
   object <- small_sce(alt = FALSE)
-  from_object <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"))
+  from_object <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL))
   logcounts <- SummarizedExperiment::assay(object, "logcounts")
   explicit <- suppressMessages(cellucid_prepare(
+    priority_seed = NULL,
     store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A",
     gene_expression = Matrix::t(logcounts),
     var = as.data.frame(SummarizedExperiment::rowData(object))
@@ -73,7 +74,7 @@ test_that("the served store holds what the object held when it was planned", {
   # change -- stay those of the object as planned.
   skip_without_sce()
   object <- small_sce(alt = FALSE)
-  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A"))
+  folder <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL))
   store <- suppressMessages(memory_store_of(
     cellucid:::.dataset_components(object, list(dataset_id = "a", dataset_name = "A"))
   ))

@@ -188,3 +188,48 @@ test_that("the shared conformance fixture's mapping rules hold in R", {
     expect_identical(condition$code, case$expected$error, info = case$name)
   }
 })
+
+test_that("a session saved on a subsample applies at the original positions, the others NA", {
+  skip_without_seurat()
+  expected <- session_expected()
+  k <- length(expected$ctype)
+  n <- k + 76L
+  # The fixture session, as if saved on the first k of n cells.
+  bytes <- readBin(session_fixture(), "raw", file.size(session_fixture()))
+  magic <- length(charToRaw("CELLUCID_SESSION/2\n"))
+  manifest_length <- readBin(bytes[magic + 1:4], "integer", size = 4L, endian = "little")
+  manifest <- jsonlite::fromJSON(rawToChar(bytes[magic + 4L + seq_len(manifest_length)]), simplifyVector = FALSE)
+  kept <- seq_len(k) - 1
+  manifest$cells <- list(
+    spec = list(method = "uniform", nObs = n, k = k, seed = 0L),
+    kept = gsub("\n", "", jsonlite::base64_enc(cellucid:::.subsample_encode_cell_set(kept)), fixed = TRUE),
+    digest = cellucid:::.subsample_digest(n, kept)
+  )
+  encoded <- charToRaw(as.character(jsonlite::toJSON(manifest, auto_unbox = TRUE, null = "null", digits = NA)))
+  path <- tempfile(fileext = ".cellucid-session")
+  writeBin(c(bytes[seq_len(magic)], cellucid:::.encode_uint32(length(encoded)), encoded,
+             bytes[(magic + 4L + manifest_length + 1L):length(bytes)]), path)
+
+  cells <- c(format2_cells(), paste0("extra_", seq_len(76L)))
+  counts <- Matrix::Matrix(0, 1L, n, sparse = TRUE, dimnames = list("gene_0", cells))
+  object <- suppressWarnings(SeuratObject::CreateSeuratObject(counts))
+  object$ctype <- factor(c(unlist(expected$ctype), rep(unlist(expected$ctype)[[1L]], 76L)))
+  object[["umap"]] <- SeuratObject::CreateDimReducObject(
+    matrix(0, n, 2L, dimnames = list(colnames(object), c("UMAP_1", "UMAP_2"))), key = "UMAP_", assay = "RNA"
+  )
+  out <- cellucid_apply_session(object, path, expected_dataset_id = "format2")
+  meta <- methods::slot(out, "meta.data")
+  # The session's cell i is original position kept[i]: per-cell chunks name
+  # cells by original position, ascending, whatever order they were open in.
+  expect_identical(sort(which(meta$cellucid_highlight__highlight_3) - 1L),
+                   sort(as.integer(kept[unlist(expected$groups$highlight_3) + 1L])))
+  expect_true(all(is.na(meta$cellucid_highlight__highlight_3[(k + 1L):n])))
+  expect_identical(as.character(meta$regions[kept + 1L]), c("R1", "R2", "rest")[unlist(expected$regionsCodes) + 1L])
+  expect_true(all(is.na(meta$regions[(k + 1L):n])))
+
+  manifest$cells$digest <- strrep("0", 16L)
+  encoded <- charToRaw(as.character(jsonlite::toJSON(manifest, auto_unbox = TRUE, null = "null", digits = NA)))
+  writeBin(c(bytes[seq_len(magic)], cellucid:::.encode_uint32(length(encoded)), encoded,
+             bytes[(magic + 4L + manifest_length + 1L):length(bytes)]), path)
+  expect_error(cellucid_apply_session(object, path, expected_dataset_id = "format2"), "digest")
+})

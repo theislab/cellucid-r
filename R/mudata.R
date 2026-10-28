@@ -19,7 +19,9 @@
 #   /varmap/<m>  uint32, one per root var row: its 1-based row in <m>, else 0
 #   /mod         attribute mod-order: the modality names, in order
 #   /mod/<m>     a Cellucid-ready AnnData minus uns['cellucid']: X gene-major,
-#                obs (the modality's cells, no columns), var, empty layers,
+#                obs (the modality's cells; in priority order, by their
+#                cells' priority, with each row's original row), var, empty
+#                layers,
 #                obsm, obsp, varm, varp and uns
 #
 # R writes MuData as Zarr only (no .h5mu: no HDF5 library); cellucid-python's
@@ -52,13 +54,7 @@
     .ad_mask(store, .zarr_key("obsm", names[[index]]), measured)
   }
   .ad_dict(store, "obsp")
-  if (!is.null(shared$graph)) {
-    graph <- shared$graph
-    .ad_sparse(
-      store, "obsp/connectivities", "csr_matrix", dim(graph),
-      pointers = graph@p, indices = graph@i, values = graph@x
-    )
-  }
+  if (!is.null(shared$graph)) .ad_graph(store, "obsp/connectivities", shared$graph)
   .ad_dict(store, "varm")
   .ad_dict(store, "varp")
   .ad_uns_value(store, "uns", shared$uns)
@@ -69,7 +65,7 @@
     map <- integer(n_cells)
     rows <- if (is.null(space$positions)) seq_len(n_cells) else space$positions
     map[rows] <- seq_along(rows)
-    .ad_numeric_array(store, .zarr_key("obsmap", names[[index]]), map, "<u4")
+    .ad_numeric_array(store, .zarr_key("obsmap", names[[index]]), map, "<u4", .chunk_elements_cell)
   }
   .ad_dict(store, "varmap")
   offset <- 0L
@@ -87,9 +83,15 @@
     space <- spaces[[index]]
     prefix <- .zarr_key("mod", names[[index]])
     .zarr_group(store, prefix, .encoding("anndata", "0.1.0"))
+    # In priority order, each row's original row in the modality.
+    obs <- if (is.null(space$original)) {
+      no_columns(length(space$obs_index))
+    } else {
+      `names<-`(data.frame(.uint32_column(space$original)), .original_position_column)
+    }
     .write_anndata_group(
       store, prefix, space,
-      obs = no_columns(length(space$obs_index)), obs_index = space$obs_index,
+      obs = obs, obs_index = space$obs_index,
       matrices = list(), vectors = list(arrays = list()),
       graph = NULL, uns = structure(list(), names = character())
     )

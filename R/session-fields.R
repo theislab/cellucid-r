@@ -11,6 +11,9 @@
   .user_field_common_keys, "categories", "codesLength", "codesType", "sourcePages", "overlapStrategy",
   "overlapLabel", "intersectionLabels", "uncoveredLabel"
 )
+# A continuous field that holds its own values (a column a notebook pushed)
+# names their length and type; they are the chunk user-defined/values/<id>.
+.user_field_stored_keys <- c(.user_field_common_keys, "valuesLength", "valuesType")
 .codes_maximum <- c(Uint8Array = 255, Uint16Array = 65535, Uint32Array = 4294967295)
 
 # A field name as the viewer accepts one: no surrounding white space, no
@@ -154,8 +157,11 @@
 .plan_user_fields <- function(bundle, chunks, view, mapping, prefix, existing, materialize, include_deleted) {
   ids <- names(chunks)
   code_ids <- ids[startsWith(ids, .user_codes_prefix)]
+  value_ids <- ids[startsWith(ids, .user_values_prefix)]
   if (!"core/field-overlays" %in% ids) {
-    if (length(code_ids) > 0L) .abort("Session contains user-defined code chunks without core/field-overlays")
+    if (length(code_ids) > 0L || length(value_ids) > 0L) {
+      .abort("Session contains user-defined code or value chunks without core/field-overlays")
+    }
     return(list(plans = list(), overlays = NULL, existing = existing))
   }
   overlays <- .session_check_keys(.session_chunk(bundle, "core/field-overlays"), c("renames", "deletedFields", "userDefinedFields"), "core/field-overlays")
@@ -172,13 +178,19 @@
   plans <- list()
   field_ids <- character()
   referenced <- character()
+  referenced_values <- character()
   categorical_ids <- character()
   for (index in seq_along(fields)) {
     label <- paste0("core/field-overlays.userDefinedFields[", index - 1L, "]")
     field <- fields[[index]]
     if (!.is_json_object(field)) .abort(label, " must be an object")
     kind <- field[["kind"]]
-    .session_check_keys(field, if (identical(kind, "category")) .user_field_category_keys else .user_field_common_keys, label)
+    stored <- identical(kind, "continuous") && "valuesType" %in% names(field)
+    .session_check_keys(
+      field,
+      if (identical(kind, "category")) .user_field_category_keys else if (stored) .user_field_stored_keys else .user_field_common_keys,
+      label
+    )
     if (!.is_json_string(kind) || !kind %in% c("category", "continuous")) .abort(label, ".kind must be 'category' or 'continuous'")
     field_id <- .session_text(field[["id"]], paste0(label, ".id"))
     if (!grepl(.wire_id_pattern, field_id)) {
@@ -198,6 +210,35 @@
     }
     apply_it <- materialize && (include_deleted || !is_deleted) && !is_purged
     column <- paste0(prefix, key)
+    if (stored) {
+      if (!is.null(field[["sourceField"]]) || !identical(field[["valuesType"]], "Float32Array")) {
+        .abort(label, " stores Float32Array values and has no source")
+      }
+      .validate_operation(field[["operation"]], paste0(label, ".operation"))
+      if (!identical(as.numeric(field[["valuesLength"]]), as.numeric(view$n_cells))) {
+        .abort("User-defined field '", field_id, "' has valuesLength ", field[["valuesLength"]], ", expected ", view$n_cells)
+      }
+      if (is_purged) next
+      chunk_id <- paste0(.user_values_prefix, field_id)
+      if (!chunk_id %in% ids) .abort("User-defined field '", field_id, "' is missing required chunk '", chunk_id, "'")
+      if (!identical(chunks[[chunk_id]][["label"]], paste0("User-defined values: ", key))) {
+        .abort(chunk_id, " label must match user-defined field '", field_id, "'")
+      }
+      payload <- .session_chunk(bundle, chunk_id)
+      if (length(payload) != 4 * view$n_cells) .abort(chunk_id, " must hold ", view$n_cells, " float32 values")
+      values <- readBin(payload, "double", n = view$n_cells, size = 4L, endian = "little")
+      if (any(is.infinite(values))) .abort(chunk_id, " must hold finite values or NaN")
+      referenced_values <- c(referenced_values, chunk_id)
+      if (apply_it) {
+        if (column %in% existing) .abort("Column already exists: ", column)
+        existing <- c(existing, column)
+        plans[[length(plans) + 1L]] <- list(
+          name = column, values = .continuous_column(values, NULL, view$n_cells),
+          metadata = list(kind = "continuous", field_id = field_id, source = source, source_field = NULL)
+        )
+      }
+      next
+    }
     if (identical(kind, "continuous")) {
       source_field <- .validate_source_field(field[["sourceField"]], paste0(label, ".sourceField"))
       .validate_operation(field[["operation"]], paste0(label, ".operation"))
@@ -247,12 +288,15 @@
                .format_value_list(unique(labels[duplicated(labels)])))
       }
       existing <- c(existing, column)
-      codes[codes == -1] <- NA
       plans[[length(plans) + 1L]] <- list(
-        name = column, values = factor(labels[codes + 1], levels = labels),
+        name = column, values = .categorical_column(codes, labels, NULL, view$n_cells, missing_code = -1),
         metadata = list(kind = "category", field_id = field_id, source = source)
       )
     }
+  }
+  undeclared_values <- setdiff(value_ids, referenced_values)
+  if (length(undeclared_values) > 0L) {
+    .abort("Session contains undeclared user-defined value chunks: ", paste(sort(undeclared_values, method = "radix"), collapse = ", "))
   }
   undeclared <- setdiff(code_ids, referenced)
   if (length(undeclared) > 0L) {

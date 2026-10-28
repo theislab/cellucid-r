@@ -58,7 +58,7 @@
     codes <- partition$codes
     counts <- tabulate(codes[!is.na(codes)] + 1L, nbins = partition$n_categories)
     if (!any(counts >= min_points)) next
-    fields[[column]] <- .uns_floats32(.native_latent_outlier_quantiles(
+    fields[[column]] <- .uns_cell_floats32(.native_latent_outlier_quantiles(
       latent, codes, partition$n_categories, min_points
     ))
   }
