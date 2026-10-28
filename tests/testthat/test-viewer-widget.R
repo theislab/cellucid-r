@@ -87,7 +87,7 @@ test_that("the widget is an anywidget model of the shared front end, with no ser
   expect_identical(state$`_model_module`, "anywidget")
   expect_identical(state$`_binary`, "base64")
   expect_identical(state$web_source_url, "https://www.cellucid.com")
-  expect_identical(state$`_esm`, paste(readLines(system.file("widget", "widget.js", package = "cellucid"), warn = FALSE), collapse = "\n"))
+  expect_identical(state$`_esm`, paste(readLines(system.file("widget", "widget.js", package = "cellucid"), warn = FALSE, encoding = "UTF-8"), collapse = "\n"))
   layout <- sub("^IPY_MODEL_", "", state$layout)
   expect_identical(comms$opened[[layout]]$state$`_model_name`, "LayoutModel")
   view <- comms$displayed[[1L]]$`application/vnd.jupyter.widget-view+json`

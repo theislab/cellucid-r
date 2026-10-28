@@ -160,3 +160,10 @@
   .Call(C_cellucid_prefix_counts, matrix@p, matrix@i, as.double(levels), as.double(n_genes),
         cells_by_column, as.integer(map), as.integer(cells), as.integer(new_row))
 }
+
+# src/file_version.c: list(size, etag) of the regular file at `path`, read
+# from the file opened (the validator .file_version() states), or NULL when
+# it cannot be opened as one.
+.native_file_version <- function(path) {
+  .Call(C_cellucid_file_version, as.character(path))
+}

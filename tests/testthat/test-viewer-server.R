@@ -383,6 +383,41 @@ test_that("a file rewritten while it is served is a new version, in place or rep
   expect_identical(http_request(url)$status, 404L)
 })
 
+test_that("a served file's validator is read from the file opened, never from its path", {
+  # A name outside every single-byte code page: on Windows the file is opened by its UTF-16 name.
+  path <- file.path(tempfile("cellucid_version_"), "café α.h5ad")
+  dir.create(dirname(path))
+  writeBin(as.raw(0:255), path)
+  version <- cellucid:::.file_version(path)
+  expect_identical(version$size, 256)
+  # The size, modification time, status-change time and identity, as hex.
+  expect_match(version$etag, "^\"100-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+\"$")
+  expect_identical(cellucid:::.file_version(path), version)
+  # What a path's file.info() reports is not the validator (on Windows its
+  # ctime is the creation time, which a rewrite in place keeps): times it
+  # reports otherwise change nothing.
+  file_info <- base::file.info
+  testthat::local_mocked_bindings(
+    file.info = function(...) {
+      info <- file_info(...)
+      info$mtime <- info$mtime - 1
+      info$ctime <- info$ctime - 1
+      info
+    },
+    .package = "base"
+  )
+  expect_identical(cellucid:::.file_version(path), version)
+  # A copy with the same bytes, its modification time copied (cp -p), is
+  # another file.
+  copy <- file.path(dirname(path), "copy.h5ad")
+  expect_true(file.copy(path, copy, copy.date = TRUE))
+  expect_false(identical(cellucid:::.file_version(copy)$etag, version$etag))
+  # A folder, or a file that is gone, has no version.
+  expect_null(cellucid:::.file_version(dirname(path)))
+  unlink(copy)
+  expect_null(cellucid:::.file_version(copy))
+})
+
 test_that("a prepared store or file given by path is served from disk", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(file.path(tempfile(), "f.zarr"))
@@ -405,7 +440,7 @@ test_that("a prepared store or file given by path is served from disk", {
   expect_identical(part$body, whole$body[101:164])
   # The list states the validator the bytes are answered with: the version
   # the viewer files what it keeps of the file under.
-  expect_match(datasets$anndata$file$etag, '^"[0-9]+-[0-9]+-[0-9]+"$')
+  expect_match(datasets$anndata$file$etag, '^"[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+"$')
   expect_identical(whole$headers[["etag"]], datasets$anndata$file$etag)
 
   viewer <- test_viewer(folder, latent_key = "X_pca", obs_keys = c("cluster"))

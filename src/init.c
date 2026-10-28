@@ -37,6 +37,7 @@ SEXP cellucid_subsample_boxes(SEXP coordinates, SEXP dimensions, SEXP grid_size)
 SEXP cellucid_subsample_digest(SEXP n_obs, SEXP kept);
 SEXP cellucid_subsample_encode(SEXP kept);
 SEXP cellucid_subsample_decode(SEXP payload, SEXP n_obs);
+SEXP cellucid_file_version(SEXP path);
 
 static const R_CallMethodDef cellucid_call_methods[] = {
     {"cellucid_crc32", (DL_FUNC)&cellucid_crc32, 2},
@@ -64,6 +65,7 @@ static const R_CallMethodDef cellucid_call_methods[] = {
     {"cellucid_subsample_encode", (DL_FUNC)&cellucid_subsample_encode, 1},
     {"cellucid_subsample_decode", (DL_FUNC)&cellucid_subsample_decode, 2},
     {"cellucid_prefix_counts", (DL_FUNC)&cellucid_prefix_counts, 8},
+    {"cellucid_file_version", (DL_FUNC)&cellucid_file_version, 1},
     {NULL, NULL, 0}};
 
 void R_init_cellucid(DllInfo *dll) {

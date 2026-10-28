@@ -104,6 +104,16 @@ test_that("a verified web asset is served from disk, not re-read and re-hashed p
   )
   for (i in 1:3) cellucid:::.read_web_asset(build, "index.html")
   expect_identical(calls, 0L)
+  # Rewritten in place, the same size, its modification time put back: it
+  # is checked again.
+  index <- file.path(cache, "index.html")
+  modified <- file.mtime(index)
+  bytes <- readBin(index, "raw", file.size(index))
+  Sys.sleep(0.05)
+  writeBin(rev(bytes), index)
+  Sys.setFileTime(index, modified)
+  cellucid:::.read_web_asset(build, "index.html")
+  expect_identical(calls, 1L)
 })
 
 test_that("the Host check applies unless the bind is a non-loopback IP address", {

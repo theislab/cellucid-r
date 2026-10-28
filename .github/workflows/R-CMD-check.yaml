@@ -80,8 +80,14 @@ jobs:
       # packages still install what building and checking needs (knitr and
       # rmarkdown build the vignettes, testthat runs the tests), so they never
       # depend on what a runner image happens to ship.
+      # The package library is cached per suggested-package set: the cache's
+      # key names the system and R version, and a job whose exact key misses
+      # restores any cache of the same prefix, so with one shared prefix the
+      # `none` job restored the `all` job's library (SeuratObject,
+      # SingleCellExperiment) and the `all` job could restore SeuratObject 4.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          cache-version: ${{ matrix.config.suggests }}
           extra-packages: >-
             any::rcmdcheck
             ${{ matrix.config.suggests == 'seuratobject-4' && 'SeuratObject@4.1.4' || '' }}
@@ -90,8 +96,11 @@ jobs:
           dependencies: ${{ matrix.config.suggests == 'none' && '"hard"' || '"all"' }}
           needs: check
 
-      # Python with cellucid, anndata, zarr and mudata, for the cross-writer and
-      # interoperability tests (they skip without it).
+      # Python with cellucid, anndata, zarr and mudata, for the tests against
+      # Python (cross-writer, served cross-language and interoperability). The
+      # other jobs have none, and those tests skip there; here the variables
+      # below name it, so a test whose Python cannot import what it needs
+      # fails (require_python(), tests/testthat/helper-objects.R).
       - uses: actions/setup-python@v6
         if: matrix.config.suggests == 'all' && matrix.config.os == 'ubuntu-latest' && matrix.config.r == 'release'
         with:

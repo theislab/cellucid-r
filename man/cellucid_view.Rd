@@ -167,8 +167,9 @@ which serves \code{.h5ad}, \code{.h5mu}, Loom, Cell Ranger and AnnData and
 MuData Zarr files in priority order. An \code{.rds}, \code{.rda} or
 MatrixMarket folder is read whole once by the browser. A file served as it
 is is listed to the viewer with its size and a strong \code{ETag} -- its
-size, modification time and status-change time (Windows: creation time),
-read when the viewer asks -- the validator its bytes are answered with: the
+size, modification time, status-change time and identity (inode; on
+Windows NTFS's change time and file index), read from the file opened when
+the viewer asks -- the validator its bytes are answered with: the
 browser keeps what it read of the file (its byte cache, gene indexes, an
 \code{.rds} converted once) under that version across visits, and a file
 rewritten while it is served, in place or replaced, is a new version, never

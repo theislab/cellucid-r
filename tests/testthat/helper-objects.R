@@ -131,19 +131,64 @@ expect_same_arrays <- function(folder, served) {
   invisible(served)
 }
 
-# A Python with zarr-python 3 (CELLUCID_ANNDATA_PYTHON, CELLUCID_PYTHON or
-# python3), or NULL; never on CRAN.
-zarr_python <- function() {
-  if (!identical(Sys.getenv("NOT_CRAN"), "true")) return(NULL)
-  candidates <- c(Sys.getenv("CELLUCID_ANNDATA_PYTHON"), Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import zarr, sys; sys.exit(int(zarr.__version__.split('.')[0]) < 3)")),
-      stdout = FALSE, stderr = FALSE
-    ))
+# --- The Python reference implementations ------------------------------------
+#
+# The checks against Python (cellucid-python's writer and server, anndata,
+# mudata, zarr-python) run in the interpreter an environment variable names,
+# else python3 on the PATH, and never on CRAN. Where the variable is set the
+# check must run: the CI job that installs the Python side
+# (.github/workflows/R-CMD-check.yaml) sets CELLUCID_PYTHON,
+# CELLUCID_ANNDATA_PYTHON and CELLUCID_MUDATA_PYTHON, so there an interpreter
+# that cannot import what a check needs is an error, not a skip. Where none is
+# set (every other job, a user's machine) a test without a Python is skipped,
+# saying what it needs.
+
+# The first interpreter of those `variables` name, then python3, that runs
+# `check` (Python source; it exits 0), or NULL.
+find_python <- function(check, variables) {
+  candidates <- c(Sys.getenv(variables), Sys.which("python3"))
+  for (candidate in unique(candidates[nzchar(candidates)])) {
+    status <- suppressWarnings(system2(candidate, c("-c", shQuote(check)), stdout = FALSE, stderr = FALSE))
     if (identical(status, 0L)) return(candidate)
   }
   NULL
+}
+
+# An error when `variables[[1]]`, the one that names this check's Python, is
+# set: it names an interpreter without `needs`.
+refuse_named_python <- function(variables, needs) {
+  named <- Sys.getenv(variables[[1L]])
+  if (nzchar(named)) {
+    stop(variables[[1L]], " names '", named, "', which has no ", needs, ".", call. = FALSE)
+  }
+}
+
+# The Python of a test that needs one: skipped on CRAN, and without one.
+require_python <- function(check, variables, needs) {
+  testthat::skip_on_cran()
+  python <- find_python(check, variables)
+  if (is.null(python)) {
+    refuse_named_python(variables, needs)
+    testthat::skip(paste0("no Python with ", needs, " (set ", variables[[1L]], ")"))
+  }
+  python
+}
+
+# The Python of a check a test adds when one is found (NULL: left out, and
+# always on CRAN).
+optional_python <- function(check, variables, needs) {
+  if (!identical(Sys.getenv("NOT_CRAN"), "true")) return(NULL)
+  python <- find_python(check, variables)
+  if (is.null(python)) refuse_named_python(variables, needs)
+  python
+}
+
+# A Python with zarr-python 3, for expect_same_arrays().
+zarr_python <- function() {
+  optional_python(
+    "import zarr, sys; sys.exit(int(zarr.__version__.split('.')[0]) < 3)",
+    c("CELLUCID_ANNDATA_PYTHON", "CELLUCID_PYTHON"), "zarr-python 3"
+  )
 }
 
 memory_store_of <- function(components, cache_bytes = 268435456) {

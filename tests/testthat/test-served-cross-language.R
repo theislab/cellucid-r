@@ -16,30 +16,12 @@
 # summed, a value that is not finite refused.
 #
 # The Python side runs in the interpreter named by CELLUCID_PYTHON (else
-# python3) with cellucid and anndata importable. On CRAN the test is skipped;
-# where CELLUCID_PYTHON is set or CI runs, a missing interpreter fails it.
-
-served_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import cellucid._served_store, anndata")), stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
-}
+# python3) with cellucid and anndata importable (require_python(),
+# helper-objects.R): skipped on CRAN and where there is none, an error where
+# CELLUCID_PYTHON names one without them.
 
 require_served_python <- function() {
-  skip_on_cran()
-  python <- served_python()
-  if (is.null(python)) {
-    if (nzchar(Sys.getenv("CELLUCID_PYTHON")) || nzchar(Sys.getenv("CI"))) {
-      fail(paste0("No Python with cellucid and anndata at CELLUCID_PYTHON ('", Sys.getenv("CELLUCID_PYTHON"), "')."))
-    }
-    skip("no Python with cellucid and anndata: set CELLUCID_PYTHON")
-  }
-  python
+  require_python("import cellucid._served_store, anndata", "CELLUCID_PYTHON", "cellucid and anndata")
 }
 
 # What Python serves for the object `spec` describes: each key's metadata or

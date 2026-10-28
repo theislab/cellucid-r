@@ -242,21 +242,19 @@
 
 # One file's version: its size and a strong validator of its bytes, NULL when
 # it is no longer a readable file. The validator is the file's size,
-# modification time and status-change time (Windows: creation time), to the
-# microsecond R reads them at: a file rewritten in place has a new
-# modification time, and one replaced by another (moved over it, even with
-# its modification time copied, cp -p) a new status-change time. The browser
-# files what it keeps of a served file under it (the dataset list states it
-# beside the size, .datasets_document()), so a changed file is a new version.
-# cellucid-python's validator adds the inode, which base R does not read.
+# modification time, status-change time and identity (inode; on Windows its
+# file index, and NTFS's change time), read from the file opened
+# (src/file_version.c), as cellucid-python's _file_version() reads them: a
+# file rewritten in place has a new status-change time, even with its
+# modification time put back, and one replaced by another (moved over it,
+# even with its modification time copied: cp -p, rsync -t) a new identity
+# and status-change time. file.info() cannot say this: it has no inode, and
+# on Windows its ctime is the creation time, which a rewrite in place keeps.
+# The browser files what it keeps of a served file under the validator (the
+# dataset list states it beside the size, .datasets_document()), so a
+# changed file is a new version.
 .file_version <- function(path) {
-  info <- file.info(path, extra_cols = FALSE)
-  if (is.na(info$size) || isTRUE(info$isdir)) return(NULL)
-  micros <- function(time) sprintf("%.0f", round(as.numeric(time) * 1e6))
-  list(
-    size = info$size,
-    etag = paste0("\"", sprintf("%.0f", info$size), "-", micros(info$mtime), "-", micros(info$ctime), "\"")
-  )
+  .native_file_version(path)
 }
 
 # A file on disk, or a range of it. A whole file is streamed by httpuv from

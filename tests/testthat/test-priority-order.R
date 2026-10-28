@@ -225,11 +225,25 @@ test_that("cellucid_restore_original_order() puts a file's cells back in the ord
   expect_identical(S4Vectors::metadata(back)$cellucid, list(id = "kept"))
 })
 
+# Every matrix of a Seurat assay, by name: an Assay5's layers (SeuratObject
+# 5), a version 3 Assay's counts, data and scale.data (SeuratObject 4 and 5;
+# SeuratObject 4 has no layers).
+assay_matrices <- function(assay) {
+  if (methods::is(assay, "Assay5")) {
+    names <- SeuratObject::Layers(assay)
+    return(stats::setNames(lapply(names, function(layer) as.matrix(SeuratObject::LayerData(assay, layer))), names))
+  }
+  names <- c("counts", "data", "scale.data")
+  stats::setNames(lapply(names, function(slot) as.matrix(methods::slot(assay, slot))), names)
+}
+
 test_that("cellucid_restore_original_order() reorders every part of a Seurat object", {
   skip_without_seurat()
   object <- pbmc_multimodal()
-  # A version 3 assay beside the version 5 ones, where the installed SeuratObject has both.
-  object[["V3"]] <- SeuratObject::CreateAssayObject(counts = SeuratObject::LayerData(object[["ADT"]], "counts"))
+  # A version 3 assay beside the others: with SeuratObject 5 they are
+  # version 5 assays, so both kinds are reordered.
+  adt <- assay_matrices(object[["ADT"]])$counts
+  object[["V3"]] <- SeuratObject::CreateAssayObject(counts = Matrix::Matrix(adt, sparse = TRUE))
   n <- ncol(object)
   priority <- priority_of(n, seed = 11)
   stored <- cellucid:::.seurat_in_cell_order(object, priority$positions + 1)
@@ -239,13 +253,7 @@ test_that("cellucid_restore_original_order() reorders every part of a Seurat obj
   back <- cellucid_restore_original_order(stored)
   expect_identical(colnames(back), colnames(object))
   for (assay in SeuratObject::Assays(object)) {
-    for (layer in SeuratObject::Layers(object[[assay]])) {
-      expect_identical(
-        as.matrix(SeuratObject::LayerData(back[[assay]], layer)),
-        as.matrix(SeuratObject::LayerData(object[[assay]], layer)),
-        info = paste(assay, layer)
-      )
-    }
+    expect_identical(assay_matrices(back[[assay]]), assay_matrices(object[[assay]]), info = assay)
   }
   for (reduction in SeuratObject::Reductions(object)) {
     expect_identical(SeuratObject::Embeddings(back, reduction), SeuratObject::Embeddings(object, reduction), info = reduction)

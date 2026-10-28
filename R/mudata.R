@@ -84,11 +84,10 @@
     prefix <- .zarr_key("mod", names[[index]])
     .zarr_group(store, prefix, .encoding("anndata", "0.1.0"))
     # In priority order, each row's original row in the modality.
-    obs <- if (is.null(space$original)) {
-      no_columns(length(space$obs_index))
-    } else {
-      `names<-`(data.frame(.uint32_column(space$original)), .original_position_column)
-    }
+    # The column is set into the frame, not given to data.frame(): before R
+    # 4.3, data.frame() refuses a classed vector it has no method for.
+    obs <- no_columns(length(space$obs_index))
+    if (!is.null(space$original)) obs[[.original_position_column]] <- .uint32_column(space$original)
     .write_anndata_group(
       store, prefix, space,
       obs = obs, obs_index = space$obs_index,

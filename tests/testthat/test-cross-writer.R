@@ -6,18 +6,12 @@
 # encodings, dtypes, shapes, chunks, codecs, fill values and every value.
 # The test runs wherever a Python with cellucid, anndata and zarr is found:
 # the interpreter named by the CELLUCID_PYTHON environment variable, else
-# python3 on the PATH. It is skipped otherwise, and on CRAN.
+# python3 on the PATH (require_python(), helper-objects.R). It is skipped
+# otherwise, and on CRAN; where CELLUCID_PYTHON names an interpreter without
+# them it fails.
 
 cellucid_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import cellucid, anndata, zarr, scipy")),
-      stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
+  require_python("import cellucid, anndata, zarr, scipy", "CELLUCID_PYTHON", "cellucid, anndata and zarr")
 }
 
 # --- The R input, described in JSON -----------------------------------------
@@ -165,10 +159,8 @@ cross_writer_cases <- function() {
 }
 
 test_that("R and Python write the same AnnData from the same input", {
-  skip_on_cran()
   skip_if_not_installed("Matrix")
   python <- cellucid_python()
-  skip_if(is.null(python), "no Python with cellucid, anndata and zarr")
   script <- testthat::test_path("python", "cross_writer.py")
   root <- tempfile("cellucid_cross_")
   dir.create(root)
@@ -226,24 +218,18 @@ test_that("R and Python write the same AnnData from the same input", {
 # A multimodal object: R's Cellucid-ready MuData against Python's
 # cellucid.prepare(data = mdata) of the same MuData. It runs wherever a Python
 # with cellucid (with MuData support) and mudata is found:
-# CELLUCID_MUDATA_PYTHON, else CELLUCID_PYTHON, else python3.
+# CELLUCID_MUDATA_PYTHON, else CELLUCID_PYTHON, else python3; it fails where
+# CELLUCID_MUDATA_PYTHON names an interpreter without them.
 cross_writer_mudata_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_MUDATA_PYTHON"), Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import cellucid, mudata, inspect, sys; sys.exit(0 if 'data' in inspect.signature(cellucid.prepare).parameters else 1)")),
-      stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
+  require_python(
+    "import cellucid, mudata, inspect, sys; sys.exit(0 if 'data' in inspect.signature(cellucid.prepare).parameters else 1)",
+    c("CELLUCID_MUDATA_PYTHON", "CELLUCID_PYTHON"), "cellucid (MuData support) and mudata"
+  )
 }
 
 test_that("R and Python write the same MuData from the same multimodal input", {
-  skip_on_cran()
   skip_without_sce()
   python <- cross_writer_mudata_python()
-  skip_if(is.null(python), "no Python with cellucid (MuData support) and mudata (set CELLUCID_MUDATA_PYTHON)")
   root <- tempfile("cellucid_cross_mudata_")
   dir.create(root)
   on.exit(unlink(root, recursive = TRUE), add = TRUE)

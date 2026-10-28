@@ -1,21 +1,18 @@
 # The store is read back by Python's anndata, the reference implementation of
 # the format, and compared with what R put in, value for value. The test runs
 # wherever a Python with anndata is found: the interpreter named by the
-# CELLUCID_ANNDATA_PYTHON environment variable, else python3 on the PATH. It
-# is skipped otherwise, and on CRAN.
+# CELLUCID_ANNDATA_PYTHON environment variable, else CELLUCID_PYTHON, else
+# python3 on the PATH (require_python(), helper-objects.R). It is skipped
+# otherwise, and on CRAN; where CELLUCID_ANNDATA_PYTHON names an interpreter
+# without them it fails.
 
 # A Python whose anndata reads both Zarr formats: zarr-python 3 (zarr-python 2
 # reads Zarr format 2 only, and answers a format 3 store "nothing found").
 anndata_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_ANNDATA_PYTHON"), Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import anndata, zarr; assert int(zarr.__version__.split('.')[0]) >= 3")),
-      stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
+  require_python(
+    "import anndata, zarr; assert int(zarr.__version__.split('.')[0]) >= 3",
+    c("CELLUCID_ANNDATA_PYTHON", "CELLUCID_PYTHON"), "anndata and zarr-python 3"
+  )
 }
 
 # The outlier quantiles of the categorical obs columns with a category of 3
@@ -77,10 +74,8 @@ interop_expected <- function(args, x_dtype = "float32") {
 }
 
 test_that("Python's anndata reads the folder and the .zarr.zip, Zarr format 2 and 3, without a warning", {
-  skip_on_cran()
   skip_if_not_installed("Matrix")
   python <- anndata_python()
-  skip_if(is.null(python), "no Python with anndata and zarr-python 3")
   script <- testthat::test_path("python", "read_with_anndata.py")
 
   args <- prepare_fixture(file.path(tempfile("cellucid_interop_"), "fixture.zarr"))
@@ -119,10 +114,8 @@ test_that("Python's anndata reads the folder and the .zarr.zip, Zarr format 2 an
 })
 
 test_that("Python's anndata reads integer counts above 2^24 back exactly, as float64", {
-  skip_on_cran()
   skip_if_not_installed("Matrix")
   python <- anndata_python()
-  skip_if(is.null(python), "no Python with anndata and zarr-python 3")
   script <- testthat::test_path("python", "read_with_anndata.py")
 
   args <- prepare_fixture(file.path(tempfile("cellucid_interop_"), "counts.zarr"))

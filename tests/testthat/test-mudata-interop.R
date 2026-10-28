@@ -1,23 +1,17 @@
 # A Cellucid-ready MuData written by R is a standard MuData: Python's mudata
 # reads it, modality by modality, with the values R put in. The test runs
 # wherever a Python with mudata is found: the interpreter named by
-# CELLUCID_MUDATA_PYTHON, else CELLUCID_PYTHON, else python3 on the PATH. It
-# is skipped otherwise, and on CRAN.
+# CELLUCID_MUDATA_PYTHON, else CELLUCID_PYTHON, else python3 on the PATH
+# (require_python(), helper-objects.R). It is skipped otherwise, and on CRAN;
+# where CELLUCID_MUDATA_PYTHON names an interpreter without mudata it fails.
 
 mudata_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_MUDATA_PYTHON"), Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(candidate, c("-c", shQuote("import mudata")), stdout = FALSE, stderr = FALSE))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
+  require_python("import mudata", c("CELLUCID_MUDATA_PYTHON", "CELLUCID_PYTHON"), "mudata")
 }
 
 test_that("mudata reads the MuData store of a multimodal object", {
-  skip_on_cran()
   skip_without_sce()
   python <- mudata_python()
-  skip_if(is.null(python), "no Python with mudata (set CELLUCID_MUDATA_PYTHON)")
   object <- small_sce()
   store <- suppressMessages(cellucid_prepare(file.path(tempfile(), "m.zarr"), "zarr", data = object, dataset_id = "m", dataset_name = "M", priority_seed = NULL))
   output <- suppressWarnings(system2(python, shQuote(c(testthat::test_path("python", "read_with_mudata.py"), store)), stdout = TRUE, stderr = FALSE))
