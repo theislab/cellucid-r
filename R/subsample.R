@@ -75,10 +75,11 @@
 
 # The subsample size a fraction of n_obs cells stands for, exactly: the
 # fraction as the rational its shortest round-trip decimal names (as the web
-# app's String(x) and Python's repr; found in C, src/subsample.c, with a
-# correctly rounded strtod, which R's own text conversion is not on every
-# build), round-half-up(n_obs * fraction) in integer arithmetic (decimal
-# digits in doubles, every step exact), at least 1 and at most n_obs.
+# app's String(x) and Python's repr, a tie to the even digit; found in exact
+# integer arithmetic in C, src/subsample.c, since neither R's own text
+# conversion nor the C library's printf gives it on every build),
+# round-half-up(n_obs * fraction) in integer arithmetic (decimal digits in
+# doubles, every step exact), at least 1 and at most n_obs.
 .subsample_count_from_fraction <- function(fraction, n_obs) {
   if (!is.numeric(fraction) || length(fraction) != 1L || !is.finite(fraction) || fraction <= 0 || fraction > 1) {
     .abort("fraction must be one number in (0, 1].")

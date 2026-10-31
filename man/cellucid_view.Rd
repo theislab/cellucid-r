@@ -221,8 +221,9 @@ before any byte is served; \code{\link{cellucid_clear_web_cache}()} removes it.
 
 Several viewers run at once, each on its own port. \code{cellucid_stop()}
 tells an open page to freeze (it keeps its last view, as
-\code{\link{cellucid_freeze}()} does), closes the viewer's channel and frees
-its port, as cellucid-python's \code{stop()} does; \code{cellucid_stop_all()}
+\code{\link{cellucid_freeze}()} does), closes the viewer's channel, waits for
+the page to answer the close (at most a second, so that the close reaches it)
+and frees its port, as cellucid-python's \code{stop()} does; \code{cellucid_stop_all()}
 stops every viewer of the session.
 
 A Viewer pane that renders without WebGL stays blank: view it with

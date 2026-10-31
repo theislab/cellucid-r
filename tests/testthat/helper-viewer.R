@@ -107,6 +107,7 @@ ws_open <- function(viewer, path = "/_cellucid/ws", origin = viewer$url, host = 
   end <- handshake_end(client$buffer)
   head <- rawToChar(client$buffer[seq_len(end)])
   client$status <- as.integer(sub("^HTTP/1\\.1 ([0-9]+).*", "\\1", strsplit(head, "\r\n")[[1L]][[1L]]))
+  client$head <- head
   client$buffer <- if (length(client$buffer) > end) client$buffer[(end + 1L):length(client$buffer)] else raw(0)
   client
 }
@@ -142,7 +143,14 @@ ws_send_json <- function(client, value) {
 # whose `code` is set.
 ws_receive <- function(client, timeout = 10) {
   frame <- NULL
-  run_loop_until(function() {
+  # A frame that never comes says what did: the bytes held, if any.
+  received <- function(error) {
+    held <- client$buffer
+    stop("No whole frame from the server (", conditionMessage(error), " after ", timeout, " s); ", length(held), " bytes held",
+         if (length(held) > 0L) paste0(": ", paste(utils::head(as.character(held), 48L), collapse = " ")), ".",
+         call. = FALSE)
+  }
+  tryCatch(run_loop_until(function() {
     client$buffer <- c(client$buffer, readBin(client$connection, "raw", 65536L))
     buffer <- client$buffer
     if (length(buffer) < 2L) return(FALSE)
@@ -162,13 +170,40 @@ ws_receive <- function(client, timeout = 10) {
     frame <<- list(opcode = as.integer(buffer[[1L]]) %% 16L, payload = payload)
     client$buffer <- if (length(buffer) > at + n - 1L) buffer[(at + n):length(buffer)] else raw(0)
     TRUE
-  }, timeout = timeout)
+  }, timeout = timeout), error = received)
   if (frame$opcode == 8L && length(frame$payload) >= 2L) {
     frame$code <- as.integer(frame$payload[[1L]]) * 256L + as.integer(frame$payload[[2L]])
   }
   if (frame$opcode == 1L) frame$json <- jsonlite::fromJSON(rawToChar(frame$payload), simplifyVector = FALSE)
   if (frame$opcode == 2L) frame$json <- binary_command(frame$payload)
   frame
+}
+
+# The close frame the server sends a socket it refused (421, 403): httpuv
+# upgrades the connection after writing the refusal all the same -- its 101
+# head, and the refusal's body before or after it -- and the server closes
+# the socket as it opens (.on_server_ws_open()). Waiting for that close also
+# lets the open run before the client goes: a socket closed first has its
+# open skipped by httpuv but its close delivered, which warns "object '...'
+# not found" from httpuv's own handler in whichever test turns the event
+# loop next.
+ws_refused_close <- function(client) {
+  body <- as.integer(sub("(?s).*\r\ncontent-length: *([0-9]+).*", "\\1", tolower(client$head), perl = TRUE))
+  frames <- NULL
+  run_loop_until(function() {
+    client$buffer <- c(client$buffer, readBin(client$connection, "raw", 65536L))
+    at <- grepRaw("HTTP/1.1 101 ", client$buffer, fixed = TRUE)
+    if (length(at) == 0L) return(FALSE)
+    end <- handshake_end(client$buffer[at:length(client$buffer)])
+    if (end == 0L) return(FALSE)
+    after <- client$buffer[-seq_len(at + end - 1L)]
+    rest <- body - (at - 1L)
+    if (length(after) < rest) return(FALSE)
+    frames <<- if (rest > 0L) after[-seq_len(rest)] else after
+    TRUE
+  })
+  client$buffer <- frames
+  ws_receive(client)
 }
 
 # A binary command frame read as the viewer reads it: its header, padded to a

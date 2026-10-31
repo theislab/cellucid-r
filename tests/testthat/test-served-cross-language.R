@@ -18,10 +18,20 @@
 # The Python side runs in the interpreter named by CELLUCID_PYTHON (else
 # python3) with cellucid and anndata importable (require_python(),
 # helper-objects.R): skipped on CRAN and where there is none, an error where
-# CELLUCID_PYTHON names one without them.
+# CELLUCID_PYTHON names one without them. The check imports what
+# python/served_store.py imports, so a cellucid-python of another commit
+# (CI installs the one R-CMD-check.yaml pins as CELLUCID_PYTHON_COMMIT) is
+# named as such, not met halfway through a test.
 
 require_served_python <- function() {
-  require_python("import cellucid._served_store, anndata", "CELLUCID_PYTHON", "cellucid and anndata")
+  require_python(
+    paste(
+      "import anndata, numpy, pandas, scipy.sparse;",
+      "from cellucid._served_store import SERVED_ENTRY_CHUNK_ELEMENTS, PriorityStore;",
+      "from cellucid.prepare_data._store import CELL_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS"
+    ),
+    "CELLUCID_PYTHON", "anndata and the served store of cellucid-python's matching commit"
+  )
 }
 
 # What Python serves for the object `spec` describes: each key's metadata or

@@ -5,12 +5,12 @@
  * them; tests/testthat/test-subsample-conformance.R holds all three to one
  * fixture. Hashes are uint32 arithmetic, allocations exact 64-bit integer
  * arithmetic, and every float operation of the spatial grid one IEEE 754
- * binary64 operation in the specified order (never contracted into a fused
- * multiply-add). Positions cross to R 0-based, as doubles (a dataset holds up
+ * binary64 operation in the specified order, each result stored to a
+ * volatile so that no compiler contracts two into a fused multiply-add (GCC
+ * ignores C's FP_CONTRACT pragma, and fuses across statements where the
+ * target has the instruction, as arm64 does). Positions cross to R 0-based, as doubles (a dataset holds up
  * to 2^32 - 1 cells, more than an R integer counts).
  */
-
-#pragma STDC FP_CONTRACT OFF
 
 #include <R.h>
 #include <Rinternals.h>
@@ -371,49 +371,196 @@ SEXP cellucid_subsample_decode(SEXP payload, SEXP n_obs) {
 /*
  * The shortest decimal that names a share x in (0, 1]: the fewest
  * significant digits whose text is read back as x, and among those the
- * nearest to x -- the text Python's repr and the web app's String(x) give,
- * which the share's rational is taken from (R/subsample.R). R's own
- * conversion of text to a double is not correctly rounded on every build
- * (it reads "0.09946616017259657" one ulp low), so the round trip is tested
- * with the C library's strtod, which is. At each length the correctly
- * rounded text is tried first; when it does not read back, its neighbour on
- * x's side may (x a power of two: its rounding interval is narrower below
- * it, so "5.960464477539062e-08" is another double and
- * "5.960464477539063e-08" is 2^-24).
+ * nearest to x, the one whose last digit is even when two are as near --
+ * the text Python's repr and the web app's String(x) give, which the share's
+ * rational is taken from (R/subsample.R). It is found in exact integer
+ * arithmetic, never through the C library: R's own conversion of text to a
+ * double is not correctly rounded on every build (it reads
+ * "0.09946616017259657" one ulp low), and the C libraries' printf breaks a
+ * tie as each likes (Windows' writes 2^-25 to 17 digits as
+ * "2.9802322387695313e-08", where the specification's text, the even one,
+ * is "...312"; read back, the two name shares either side of 1.5 cells in
+ * 50,331,648).
+ *
+ * x = m * 2^e exactly, and every text that reads back as x lies in its
+ * rounding interval: from halfway down to the double below to halfway up to
+ * the double above, both ends included when m is even (a text exactly
+ * halfway is read as the even neighbour). In units of 2^(e - 2) x is 4m, the
+ * interval [4m - 2, 4m + 2] (from 4m - 1 for a power of two, whose double
+ * below is nearer). At each length the nearest decimal is the candidate,
+ * and its neighbour on x's other side when the nearest is outside; each is
+ * compared with the interval's ends exactly, as big integers.
  */
+
+/* An unsigned big integer, 32-bit limbs least significant first. Every
+ * number compared here is below 2^1200 (x at least 2^-1074, the ends scaled
+ * by at most 10^341 or 2^1076); 48 limbs hold 2^1536. */
+#define BIG_LIMBS 48
+
+typedef struct {
+  uint32_t limb[BIG_LIMBS];
+  int n; /* limbs in use; 0 is zero */
+} big_number;
+
+static void big_set(big_number *a, uint64_t value) {
+  a->n = 0;
+  while (value > 0) {
+    a->limb[a->n++] = (uint32_t)(value & 0xffffffffu);
+    value >>= 32;
+  }
+}
+
+static void big_multiply(big_number *a, uint32_t factor) {
+  uint64_t carry = 0;
+  for (int i = 0; i < a->n; i++) {
+    uint64_t product = (uint64_t)a->limb[i] * factor + carry;
+    a->limb[i] = (uint32_t)(product & 0xffffffffu);
+    carry = product >> 32;
+  }
+  if (carry > 0) {
+    if (a->n == BIG_LIMBS) error("a share's decimal does not fit the exact arithmetic");
+    a->limb[a->n++] = (uint32_t)carry;
+  }
+}
+
+static void big_times_ten_to(big_number *a, int power) {
+  for (; power >= 9; power -= 9) big_multiply(a, 1000000000u);
+  static const uint32_t small[9] = {1u, 10u, 100u, 1000u, 10000u, 100000u, 1000000u, 10000000u, 100000000u};
+  if (power > 0) big_multiply(a, small[power]);
+}
+
+static void big_times_two_to(big_number *a, int power) {
+  if (a->n == 0) return;
+  int words = power / 32, bits = power % 32;
+  if (a->n + words + 1 > BIG_LIMBS) error("a share's decimal does not fit the exact arithmetic");
+  uint32_t spill = 0;
+  if (bits > 0) {
+    for (int i = 0; i < a->n; i++) {
+      uint32_t limb = a->limb[i];
+      a->limb[i] = (limb << bits) | spill;
+      spill = limb >> (32 - bits);
+    }
+  }
+  for (int i = a->n - 1; i >= 0; i--) a->limb[i + words] = a->limb[i];
+  for (int i = 0; i < words; i++) a->limb[i] = 0;
+  a->n += words;
+  if (spill > 0) a->limb[a->n++] = spill;
+}
+
+static int big_compare(const big_number *a, const big_number *b) {
+  if (a->n != b->n) return a->n < b->n ? -1 : 1;
+  for (int i = a->n - 1; i >= 0; i--) {
+    if (a->limb[i] != b->limb[i]) return a->limb[i] < b->limb[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/* The sign of q * 10^p - u * 2^-t. */
+static int compare_decimal(uint64_t q, int p, uint64_t u, int t) {
+  big_number left, right;
+  big_set(&left, q);
+  big_set(&right, u);
+  if (p >= 0) {
+    big_times_ten_to(&left, p);
+  } else {
+    big_times_ten_to(&right, -p);
+  }
+  big_times_two_to(&left, t);
+  return big_compare(&left, &right);
+}
+
+static uint64_t ten_to(int power) {
+  uint64_t value = 1;
+  while (power-- > 0) value *= 10;
+  return value;
+}
+
+/* q (`digits` digits) * 10^exponent in the form "d.ddde-XX" (C's %.*e). */
+static SEXP decimal_text(uint64_t q, int digits, int exponent) {
+  char shown[24], text[48];
+  for (int i = digits - 1; i >= 0; i--) {
+    shown[i] = (char)('0' + (int)(q % 10));
+    q /= 10;
+  }
+  int at = 0;
+  text[at++] = shown[0];
+  if (digits > 1) {
+    text[at++] = '.';
+    memcpy(text + at, shown + 1, (size_t)(digits - 1));
+    at += digits - 1;
+  }
+  snprintf(text + at, sizeof text - (size_t)at, "e%+03d", exponent);
+  return mkString(text);
+}
+
 SEXP cellucid_shortest_decimal(SEXP x) {
   if (TYPEOF(x) != REALSXP || XLENGTH(x) != 1) error("a share must be one number");
   double value = REAL(x)[0];
   if (!(value > 0 && value <= 1)) error("a share must be in (0, 1]");
-  char text[64];
-  for (int digits = 1; digits <= 17; digits++) {
-    snprintf(text, sizeof text, "%.*e", digits - 1, value);
-    if (strtod(text, NULL) == value) return mkString(text);
-    /* The neighbour on x's side: one unit of the last digit. */
-    char *e = strchr(text, 'e');
-    int exponent = atoi(e + 1);
-    long long mantissa = 0;
-    for (const char *p = text; p < e; p++) {
-      if (*p >= '0' && *p <= '9') mantissa = mantissa * 10 + (*p - '0');
-    }
-    long long neighbour = strtod(text, NULL) < value ? mantissa + 1 : mantissa - 1;
-    long long lowest = 1;
-    for (int i = 1; i < digits; i++) lowest *= 10;
-    if (neighbour >= lowest * 10) {
-      /* 9.99 up one unit is 1.00 of the next power of ten: fewer digits, tried already. */
-      continue;
-    }
-    if (neighbour < lowest && digits > 1) continue; /* 1.00 down one unit: fewer digits, tried already */
-    char shown[32];
-    snprintf(shown, sizeof shown, "%lld", neighbour);
-    char candidate[64];
-    if (digits > 1) {
-      snprintf(candidate, sizeof candidate, "%c.%se%+03d", shown[0], shown + 1, exponent);
-    } else {
-      snprintf(candidate, sizeof candidate, "%ce%+03d", shown[0], exponent);
-    }
-    if (strtod(candidate, NULL) == value) return mkString(candidate);
+  /* value = m * 2^e: m below 2^53, e at least -1074 (a subnormal's m is
+   * smaller, its e -1074). */
+  int e;
+  double fraction = frexp(value, &e);
+  uint64_t m = (uint64_t)ldexp(fraction, 53);
+  e -= 53;
+  if (e < -1074) {
+    m >>= -1074 - e;
+    e = -1074;
   }
-  snprintf(text, sizeof text, "%.16e", value);
-  return mkString(text);
+  int t = 2 - e; /* units of 2^-t: value is 4m */
+  int even = (m % 2) == 0;
+  uint64_t here = 4 * m, high = 4 * m + 2;
+  uint64_t low = (m == (UINT64_C(1) << 52) && e > -1074) ? 4 * m - 1 : 4 * m - 2;
+  /* k: 10^k <= value < 10^(k + 1). */
+  int k = (int)floor(log10(value));
+  while (compare_decimal(1, k, here, t) > 0) k--;
+  while (compare_decimal(1, k + 1, here, t) <= 0) k++;
+  for (int digits = 1; digits <= 17; digits++) {
+    /* The nearest decimal of `digits` digits: q * 10^p, q = value / 10^p
+     * rounded half to even. */
+    int p = k - digits + 1;
+    big_number scaled;
+    big_set(&scaled, here);
+    big_times_ten_to(&scaled, -p); /* p <= 0: value <= 1, so k <= 0 */
+    /* q = scaled >> t, and the bits shifted out against one half. */
+    uint64_t q = 0;
+    for (int bit = 63; bit >= 0; bit--) {
+      int position = t + bit, word = position / 32;
+      if (word < scaled.n && ((scaled.limb[word] >> (position % 32)) & 1u)) q |= UINT64_C(1) << bit;
+    }
+    int half_word = (t - 1) / 32;
+    int above_half = 0, at_half = half_word < scaled.n && ((scaled.limb[half_word] >> ((t - 1) % 32)) & 1u);
+    if (at_half) {
+      for (int position = 0; position < t - 1 && !above_half; position++) {
+        int word = position / 32;
+        if (word < scaled.n && ((scaled.limb[word] >> (position % 32)) & 1u)) above_half = 1;
+      }
+    }
+    if (at_half && (above_half || (q % 2) == 1)) q++;
+    int exponent = k;
+    if (q == ten_to(digits)) {
+      q /= 10;
+      p++;
+      exponent++;
+    }
+    uint64_t lowest = ten_to(digits - 1), limit = ten_to(digits);
+    uint64_t candidates[2] = {q, 0};
+    int n_candidates = 1;
+    /* The neighbour on value's other side: a decimal of `digits` digits too
+     * (9.99 up one unit is 1.00 of the next power of ten, and 1.00 down one
+     * 9.99 of the one below: fewer or as many digits, tried already). */
+    int side = compare_decimal(q, p, here, t);
+    if (side < 0 && q + 1 < limit) candidates[n_candidates++] = q + 1;
+    if (side > 0 && q > lowest) candidates[n_candidates++] = q - 1;
+    for (int c = 0; c < n_candidates; c++) {
+      int from_low = compare_decimal(candidates[c], p, low, t);
+      int to_high = compare_decimal(candidates[c], p, high, t);
+      if ((even ? from_low >= 0 : from_low > 0) && (even ? to_high <= 0 : to_high < 0)) {
+        return decimal_text(candidates[c], digits, exponent);
+      }
+    }
+  }
+  /* 17 significant digits always name a double: never reached. */
+  error("no decimal of 17 digits names the share");
+  return R_NilValue;
 }

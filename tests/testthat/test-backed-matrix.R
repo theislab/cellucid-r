@@ -57,7 +57,10 @@ backed_kinds <- function(values) {
     kinds$`BPCells, cells together` <- bpcells_of(values, "col")
     kinds$`BPCells, genes together` <- bpcells_of(values, "row")
   }
-  if (requireNamespace("DelayedArray", quietly = TRUE)) kinds$DelayedArray <- DelayedArray::DelayedArray(values)
+  if (requireNamespace("DelayedArray", quietly = TRUE)) {
+    kinds$`DelayedArray, sparse` <- DelayedArray::DelayedArray(values)
+    kinds$`DelayedArray, dense` <- DelayedArray::DelayedArray(as.matrix(values))
+  }
   kinds
 }
 
@@ -194,10 +197,21 @@ test_that("a backed assay holding a value that cannot be stored is refused when 
   broken <- values
   broken[2, 3] <- NA
   broken[4, 5] <- Inf
-  expect_error(
-    suppressMessages(cellucid_prepare(store_path(), "zarr", data = backed_sce(DelayedArray::DelayedArray(broken), umap), dataset_id = "d", dataset_name = "D")),
-    "must contain only finite values.*1 NA, 1 \\+Inf"
-  )
+  broken[6, 7] <- NaN
+  # Every NA and NaN is counted, on a sparse backend and on a dense one
+  # (DelayedArray's own coercion to a dgCMatrix dropped both before
+  # Bioconductor 3.19: R/backed-matrix.R, .delayed_block_dgcmatrix()), and
+  # in blocks of a few cells too.
+  whole <- cellucid:::.backed_block_values
+  for (seed in list(broken, as.matrix(broken))) {
+    for (block_values in c(whole, 30)) {
+      local_mocked_bindings(.backed_block_values = block_values)
+      expect_error(
+        suppressMessages(cellucid_prepare(store_path(), "zarr", data = backed_sce(DelayedArray::DelayedArray(seed), umap), dataset_id = "d", dataset_name = "D")),
+        "must contain only finite values.*1 NaN, 1 NA, 1 \\+Inf"
+      )
+    }
+  }
   broken <- values
   broken[2, 3] <- 1e39
   expect_error(

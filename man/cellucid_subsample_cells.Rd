@@ -22,8 +22,8 @@ until \code{\link{cellucid_restore_original_order}} puts it back, as
 every cell or more keeps every cell.}
 \item{fraction}{The share of cells to keep, in (0, 1]; the count is
 \code{n * fraction} rounded half up, at least 1, computed exactly from the
-fraction's shortest round-trip decimal text (found in C with a correctly
-rounded conversion), never as a floating-point product, as the web app and
+fraction's shortest round-trip decimal text (found in exact integer
+arithmetic, the same text on every platform), never as a floating-point product, as the web app and
 Python compute it. Any count from 1 is a
 selection here; the web app opens a subsample of at least 2 cells, since one
 cell has no coordinate variation to draw.}

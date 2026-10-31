@@ -47,6 +47,10 @@ release with the web app of this release.
   "omp_pause_resource() failed to relinquish resources" once a block (SparseArray
   on an OpenMP runtime that cannot release its threads, such as macOS's): that
   one warning is muffled there, and every other warning is still raised.
+  A DelayedArray block is read with `read_block()` (sparse when its backend
+  is) rather than coerced to a `dgCMatrix`: up to Bioconductor 3.18 (R 4.1 to
+  4.3) that coercion dropped `NA` and `NaN`, so they were written as zeros
+  instead of refused.
 - **Genes asked while the viewer lays a matrix out.** An object's expression
   matrices are laid out for the viewer on every core, and a gene asked before
   the layout ends is made from its progress: the values already laid out are
@@ -67,6 +71,23 @@ release with the web app of this release.
   or a request, no longer a viewer. Sessions saved on a share apply.
 - `cellucid_set_data_mapping()` no longer waits or takes `timeout`; a
   `command_error` no hook handles is a warning.
+- **The same subsample size on every platform.** `cellucid_subsample_cells(
+  fraction = )` takes the fraction's shortest decimal in exact integer
+  arithmetic, a tie going to the even digit as in Python and the web app: on
+  Windows the C library wrote 2^-25 as `...313`, and 2^-25 of 50,331,648
+  cells came out 2 cells instead of 1.
+- **`cellucid_stop()` delivers the close after the freeze.** It sends the open
+  page `freeze`, then closes the channel (1001) and waits for the page to
+  answer the close (at most a second) before stopping the server: httpuv
+  writes the second of two frames sent together a turn of its loop later,
+  and stopping at once dropped the close.
+- **A refused WebSocket is closed.** httpuv opens a WebSocket whose handshake
+  the server refused (a page on another origin, 403; a `Host` that does not
+  name the server, 421) all the same; the server now closes it at once (1008)
+  instead of leaving it open until it failed to say hello.
+- Windows: the package builds again with R 4.1's 32-bit toolchain (Rtools 4.0
+  does not declare `GetTickCount64()`; the layouts' clock is the performance
+  counter), with no compiler warning.
 
 ## In the web app
 

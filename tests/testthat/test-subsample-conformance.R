@@ -48,6 +48,25 @@ test_that("ranks and sizes are the specification's", {
   }
 })
 
+test_that("a fraction's shortest decimal is the one Python's repr gives, ties to the even digit, on every platform", {
+  # Found in exact integer arithmetic (src/subsample.c), not by the C
+  # library's printf, which breaks a tie as each likes: Windows' wrote 2^-25
+  # as "...313", and the fixture's 2^-25 of 50,331,648 cells then came out 2.
+  shortest <- function(x) cellucid:::.native_shortest_decimal(x)
+  expect_identical(shortest(2^-25), "2.9802322387695312e-08")
+  expect_identical(shortest(2^-24), "5.960464477539063e-08")
+  expect_identical(shortest(2^-53), "1.1102230246251565e-16")
+  expect_identical(shortest(2^-60), "8.673617379884035e-19")
+  expect_identical(shortest(2^-1074), "5e-324")
+  expect_identical(shortest(2^-1022), "2.2250738585072014e-308")
+  expect_identical(shortest(2^-1022 - 2^-1074), "2.225073858507201e-308")
+  expect_identical(shortest(0.1), "1e-01")
+  expect_identical(shortest(1 / 3), "3.333333333333333e-01")
+  expect_identical(shortest(0x1.9769d41p-4), "9.946616017259657e-02") # R reads "0.0994...57" one ulp low on some builds
+  expect_identical(shortest(1 - 2^-53), "9.999999999999999e-01")
+  expect_identical(shortest(1), "1e+00")
+})
+
 test_that("every case keeps the cells the fixture lists, with its digest", {
   document <- cellucid_read_fixture("subsample_conformance.json")
   for (case in document$cases) {

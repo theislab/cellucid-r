@@ -123,14 +123,21 @@ test_that("chunks made by a transform are kept within the cache budget", {
   expect_true(all(names(cache$sizes) %in% keys[transformed]))
 })
 
+# The layouts' scratch files in R's session folder. Linux and macOS remove a
+# scratch file's name as soon as it is mapped; Windows keeps the name of an
+# open file and removes it when the file is closed (FILE_FLAG_DELETE_ON_CLOSE,
+# src/chunks.c), which the viewer stopping does -- and the system does
+# however R ends.
+layout_scratch <- function() list.files(tempdir(), pattern = "^cellucid-layout-")
+
 test_that("a served expression matrix is laid out once in the background, its chunks made from the matrix until then", {
   skip_without_sce()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S", cache_bytes = 2000)
   store <- viewer$store
   # Laid out (test_viewer waits): X's chunks are slices of the layout, the
-  # cache never holds them, and no scratch file is left in the folder.
+  # cache never holds them, and no scratch file is named in the folder.
   expect_identical(cellucid:::.native_layout_state(store$layouts, 0L)[[1L]], 2)
-  expect_identical(list.files(tempdir(), pattern = "^cellucid-layout-"), character())
+  if (.Platform$OS.type != "windows") expect_identical(layout_scratch(), character())
   laid <- lapply(c("X/data/0", "X/indices/0"), function(key) http_request(served_url(viewer, key)))
   expect_identical(vapply(laid, `[[`, 0L, "status"), c(200L, 200L))
   expect_false(any(startsWith(as.character(names(store$cache$sizes)), "X")))
@@ -147,10 +154,17 @@ test_that("a served expression matrix is laid out once in the background, its ch
 
 test_that("stopping a viewer stops its layouts and lets their files go", {
   skip_without_sce()
+  before <- layout_scratch()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
   layouts <- viewer$store$layouts
+  # Its scratch files (two a matrix laid out): named only on Windows, while
+  # they are open.
+  named <- setdiff(layout_scratch(), before)
+  expect_gt(length(viewer$store$layout_labels), 0L)
+  expect_length(named, if (.Platform$OS.type == "windows") 2L * length(viewer$store$layout_labels) else 0L)
   cellucid_stop(viewer)
   expect_error(cellucid:::.native_layout_state(layouts, 0L), "stopped")
+  expect_identical(intersect(layout_scratch(), named), character())
 })
 
 test_that("a Host that does not name the server is refused, and so is a foreign WebSocket", {
@@ -159,15 +173,21 @@ test_that("a Host that does not name the server is refused, and so is a foreign 
   expect_identical(http_request(paste0(viewer$url, "/_cellucid/health"), list(Host = "attacker.example"))$status, 421L)
   expect_identical(http_request(paste0(viewer$url, "/_cellucid/health"), list(Host = "127.0.0.1:1"))$status, 421L)
   expect_identical(http_request(paste0(viewer$url, "/_cellucid/health"), list(Host = paste0("localhost:", viewer$port)))$status, 200L)
+  # Each refused socket is closed by the server as httpuv opens it, never
+  # left to say hello (ws_refused_close(), helper-viewer.R).
   foreign <- ws_open(viewer, origin = "https://attacker.example")
   expect_identical(foreign$status, 403L)
+  expect_identical(ws_refused_close(foreign)$code, 1008L)
   ws_close(foreign)
   anonymous <- ws_open(viewer, origin = NULL)
   expect_identical(anonymous$status, 403L)
+  expect_identical(ws_refused_close(anonymous)$code, 1008L)
   ws_close(anonymous)
   rebound <- ws_open(viewer, host = "attacker.example")
   expect_identical(rebound$status, 421L)
+  expect_identical(ws_refused_close(rebound)$code, 1008L)
   ws_close(rebound)
+  expect_null(viewer$socket)
 })
 
 test_that("cross-origin reads are open to the hosted app and loopback pages only, as in Python", {

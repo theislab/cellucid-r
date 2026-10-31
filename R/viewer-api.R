@@ -486,7 +486,7 @@ cellucid_serve <- function(
   app <- list(
     call = function(req) .on_call(viewer, req),
     onHeaders = function(req) .on_headers(viewer, req),
-    onWSOpen = function(ws) .on_ws_open(viewer, ws)
+    onWSOpen = function(ws) .on_server_ws_open(viewer, ws)
   )
   candidates <- if (port_given || port == 0L) port else seq.int(port, 65535L)
   server <- NULL
@@ -582,8 +582,17 @@ cellucid_stop <- function(viewer) {
     }
     viewer$running <- FALSE
     if (!is.null(viewer$socket)) {
-      try(viewer$socket$close(.viewer_close_codes[["goingAway"]], "The R session stopped the viewer"), silent = TRUE)
+      socket <- viewer$socket
       viewer$socket <- NULL
+      # The server stops only once the page has answered the close (or did
+      # not, .viewer_close_seconds): httpuv writes the freeze and the close a
+      # turn of its loop apart, and stopping it first drops the close. A
+      # notebook widget's channel has no server and closes at once.
+      answered <- is.null(viewer$server)
+      if (!answered) try(socket$onClose(function() answered <<- TRUE), silent = TRUE)
+      try(socket$close(.viewer_close_codes[["goingAway"]], "The R session stopped the viewer"), silent = TRUE)
+      deadline <- proc.time()[["elapsed"]] + .viewer_close_seconds
+      while (!answered && proc.time()[["elapsed"]] < deadline) later::run_now(0.01)
     }
     failure <- tryCatch({
       # A notebook widget's viewer has no server.

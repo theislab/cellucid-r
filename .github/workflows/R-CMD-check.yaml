@@ -52,6 +52,12 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
+      # The cellucid-python commit the tests against Python install (see
+      # "Install the Python reference writers"). Update it with every change
+      # to what both packages write or serve, to a cellucid-python commit
+      # already on GitHub (cellucid-python's docs: R package > developer docs
+      # > Testing and CI).
+      CELLUCID_PYTHON_COMMIT: e0a682ac45a687403903e3e8a5b21ec917bf427f
       # Without the suggested packages the checks that need them skip, naming
       # what is missing.
       _R_CHECK_FORCE_SUGGESTS_: ${{ matrix.config.suggests == 'none' && 'false' || 'true' }}
@@ -106,10 +112,21 @@ jobs:
         with:
           python-version: '3.12'
 
+      # cellucid-python at the commit this package's cross-language tests
+      # were last run against (CELLUCID_PYTHON_COMMIT, in the job's env
+      # above), never its moving main nor a PyPI release: the two packages
+      # write and serve the same bytes only at matching commits, and main
+      # lags or leads this repository whenever one is pushed before the
+      # other (R's commit a48b011 met a main without the served store's
+      # SERVED_ENTRY_CHUNK_ELEMENTS). A commit that is not on GitHub yet
+      # fails here by name: push cellucid-python first.
       - name: Install the Python reference writers
         if: matrix.config.suggests == 'all' && matrix.config.os == 'ubuntu-latest' && matrix.config.r == 'release'
         run: |
-          python -m pip install "cellucid[mudata] @ git+https://github.com/theislab/cellucid-python" anndata zarr mudata
+          python -m pip install "cellucid[mudata] @ git+https://github.com/theislab/cellucid-python@${CELLUCID_PYTHON_COMMIT}" anndata zarr mudata || {
+            echo "::error::cellucid-python ${CELLUCID_PYTHON_COMMIT} could not be installed: push that commit to theislab/cellucid-python, or set CELLUCID_PYTHON_COMMIT to one that is there."
+            exit 1
+          }
           echo "CELLUCID_PYTHON=$(which python)" >> "$GITHUB_ENV"
           echo "CELLUCID_ANNDATA_PYTHON=$(which python)" >> "$GITHUB_ENV"
           echo "CELLUCID_MUDATA_PYTHON=$(which python)" >> "$GITHUB_ENV"

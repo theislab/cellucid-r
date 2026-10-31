@@ -101,10 +101,29 @@
         rows = block_rows, col0 = col0
       ))
     }
-    block <- .without_omp_pause_warning(methods::as(block, "dgCMatrix"))
+    block <- .without_omp_pause_warning(.delayed_block_dgcmatrix(block))
     list(index = block@i, pointers = as.double(block@p), values = block@x, by_rows = FALSE, rows = block_rows, col0 = col0)
   }
   list(n = length(starts), read = read)
+}
+
+# A block of a DelayedArray as a dgCMatrix holding every value the backend
+# stores, NA and NaN included, so that the counting pass refuses them as it
+# refuses them in a matrix held in memory: read in one piece (read_block()),
+# as the backend's sparse form when it is sparse, then converted. Not
+# DelayedArray's own coercion to a dgCMatrix: up to Bioconductor 3.18
+# (DelayedArray 0.20 to 0.28, R 4.1 to 4.3) it went through dense blocks and
+# which(block != 0), which drops NA and NaN, so a missing value was written
+# as a zero.
+.delayed_block_dgcmatrix <- function(block) {
+  if (any(dim(block) == 0L)) return(Matrix::sparseMatrix(i = integer(), j = integer(), x = double(), dims = dim(block)))
+  read <- DelayedArray::read_block(
+    block, DelayedArray::RegularArrayGrid(dim(block))[[1L]], as.sparse = DelayedArray::is_sparse(block)
+  )
+  if (is.matrix(read)) {
+    return(methods::as(methods::as(methods::as(read, "dMatrix"), "generalMatrix"), "CsparseMatrix"))
+  }
+  methods::as(read, "dgCMatrix")
 }
 
 # SparseArray's conversion of a block to a dgCMatrix asks OpenMP to let its

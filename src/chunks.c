@@ -851,9 +851,16 @@ void cellucid_unmap_scratch(struct scratch_map *m) {
   m->bytes = NULL;
 }
 
+/* Monotonic seconds. On Windows the performance counter, which every
+ * Windows has: GetTickCount64() is declared only for Vista's API level, which
+ * Rtools 4.0's toolchains (R 4.1) do not target by default, so the 32-bit
+ * build failed to link it. */
 static double now_seconds(void) {
 #ifdef _WIN32
-  return (double)GetTickCount64() / 1000.0;
+  LARGE_INTEGER count, frequency;
+  QueryPerformanceCounter(&count);
+  QueryPerformanceFrequency(&frequency);
+  return (double)count.QuadPart / (double)frequency.QuadPart;
 #else
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);

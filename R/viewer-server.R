@@ -30,7 +30,8 @@
 # console waiting at its prompt), so the console stays usable while a viewer
 # is open. Every request is checked first (onHeaders): a Host header that
 # does not name this server is answered 421 (DNS rebinding), and a WebSocket
-# upgrade from another origin 403.
+# upgrade from another origin 403 -- and its socket, which httpuv opens all
+# the same, closed at once (.on_server_ws_open()).
 
 .viewer_registry <- new.env(parent = emptyenv())
 
@@ -417,9 +418,33 @@
 .viewer_hello_seconds <- 60
 .viewer_keepalive_seconds <- 20
 
+# How long cellucid_stop() lets an open page answer the channel's close before
+# the server stops. httpuv writes a frame after another on its next turn of
+# its event loop (a frame's empty last buffer leaves its write unfinished
+# until then), and stopping the server drops what is not written yet: the
+# freeze and the close sent together lost the close (seen on macOS CI and
+# every time under Rosetta). A page answers the close at once and the wait
+# ends then; this bounds it for a page that never answers.
+.viewer_close_seconds <- 1
+
 # The requestId prefix of the keep-alive pings: their pongs keep the
 # connection busy and are not events of the caller's.
 .keepalive_prefix <- "keepalive-"
+
+# A WebSocket the server opened. httpuv upgrades a connection whose
+# handshake onHeaders answered all the same (it writes the 421 or 403, then
+# its own 101, and opens the socket), so a refused socket is closed here
+# before it can say anything: a page on another origin, or a rebound Host,
+# never holds a channel. (A notebook widget's socket is no HTTP connection:
+# .widget_socket() goes to .on_ws_open() directly.)
+.on_server_ws_open <- function(viewer, ws) {
+  refusal <- .on_headers(viewer, ws$request)
+  if (!is.null(refusal)) {
+    ws$close(.viewer_close_codes[["protocolViolation"]], refusal$body)
+    return(invisible(NULL))
+  }
+  .on_ws_open(viewer, ws)
+}
 
 .on_ws_open <- function(viewer, ws) {
   path <- ws$request$PATH_INFO %||% ""
