@@ -1,23 +1,60 @@
-# Reading a .cellucid-session file (session format 2), the file the viewer
+# Reading a .cellucid-session file (session format 3), the file the viewer
 # saves and cellucid_session_result() collects: the web app's framing
 # (app/session/bundle/format.js) and cellucid-python's reader
 # (session_bundle.py), check for check and message for message.
 #
-#   CELLUCID_SESSION/2\n          the signature
+#   CELLUCID_SESSION/3\n          the signature
 #   u32 LE, manifest JSON         createdAt, datasetFingerprint, source,
-#                                 requires, chunks (each chunk's metadata)
+#                                 requires, chunks (each chunk's metadata),
+#                                 cells (a subsample), genes (a gene sample)
 #   [u32 LE, chunk bytes] ...     one frame per chunk, in the manifest's order
 #
 # The manifest is read and checked in full when the file is opened; a chunk's
 # bytes are read, inflated and parsed only when asked for, so a session that
 # holds analysis results of hundreds of megabytes costs only what is used.
 
-.session_format_version <- 2L
-.session_magic <- charToRaw(paste0("CELLUCID_SESSION/", .session_format_version, "\n"))
+.session_format_version <- 3L
+.session_signature_prefix <- "CELLUCID_SESSION/"
+.session_magic <- charToRaw(paste0(.session_signature_prefix, .session_format_version, "\n"))
 .not_a_session_file_message <- paste0(
   "This file is not a Cellucid session file of format ", .session_format_version,
   " (it does not start with CELLUCID_SESSION/", .session_format_version, ")."
 )
+
+# The web app's sentence for a session file of another format version
+# (bundle/format.js otherSessionFormatMessage, cellucid-python's
+# other_session_format_message): saved by an earlier Cellucid, whose cell
+# check this version cannot verify, or by a newer one.
+.other_session_format_message <- function(version) {
+  if (version < .session_format_version) {
+    paste0(
+      "This session was saved by an earlier version of Cellucid (session format ", version, "): ",
+      "the check that it marks the same cells cannot be verified, so it was not opened. ",
+      "Re-create it in this version of Cellucid."
+    )
+  } else {
+    paste0(
+      "This session was saved by a newer version of Cellucid (session format ", version, "), ",
+      "which this version cannot read. Open it in that version of Cellucid."
+    )
+  }
+}
+
+# Why a file whose first bytes are `magic` (as many as this format's
+# signature holds, fewer for a shorter file) is not read: another session
+# format's signature, or none (bundle/format.js sessionSignatureRefusal).
+.session_signature_refusal <- function(magic) {
+  text <- rawToChar(magic[magic != as.raw(0L)])
+  prefix <- .session_signature_prefix
+  rest <- if (startsWith(text, prefix)) substring(text, nchar(prefix) + 1L) else NA_character_
+  digits <- if (is.na(rest)) NA_character_ else regmatches(rest, regexpr("^[0-9]+(?=\n|$)", rest, perl = TRUE))
+  version <- if (length(digits) == 1L && !is.na(digits)) as.numeric(digits) else NA_real_
+  if (is.na(version) || version == 0 || version == .session_format_version) {
+    .not_a_session_file_message
+  } else {
+    .other_session_format_message(version)
+  }
+}
 .session_max_frame_bytes <- 4294967295
 .session_max_safe_integer <- 9007199254740991
 
@@ -186,9 +223,11 @@
 .validate_session_manifest <- function(manifest) {
   if (!.is_json_object(manifest)) .session_manifest_error("expected an object")
   # `cells` is present only for a session saved on a subsample (which cells
-  # were open: R/subsample.R, .session_cells()).
+  # were open: R/subsample.R, .session_cells()); `genes` only for one saved
+  # while genes were read for a sample of the open cells (.session_genes()).
   expected <- c("createdAt", "datasetFingerprint", "source", "requires", "chunks",
-                if ("cells" %in% names(manifest)) "cells")
+                if ("cells" %in% names(manifest)) "cells",
+                if ("genes" %in% names(manifest)) "genes")
   if (!setequal(names(manifest), expected) || anyDuplicated(names(manifest))) {
     .abort("Invalid session manifest fields (", .session_key_report(names(manifest), expected), ")")
   }
@@ -201,6 +240,9 @@
   .validate_session_requires(manifest[["requires"]])
   if ("cells" %in% names(manifest)) {
     .session_cells(manifest[["cells"]], manifest[["datasetFingerprint"]][["cellCount"]])
+  }
+  if ("genes" %in% names(manifest)) {
+    .session_genes(manifest[["genes"]], manifest[["datasetFingerprint"]][["cellCount"]])
   }
   chunks <- manifest[["chunks"]]
   if (!.is_json_array(chunks)) .session_manifest_error("chunks must be an array")
@@ -251,7 +293,7 @@
   con <- file(path, "rb")
   on.exit(close(con), add = TRUE)
   magic <- readBin(con, "raw", length(.session_magic))
-  if (!identical(magic, .session_magic)) .abort(.not_a_session_file_message)
+  if (!identical(magic, .session_magic)) .abort(.session_signature_refusal(magic))
   manifest_length <- .read_u32(con)
   if (manifest_length <= 0) .abort("Invalid session manifest length: ", manifest_length)
   if (length(.session_magic) + 4 + manifest_length > size) {

@@ -35,6 +35,7 @@ Imports:
     jsonlite,
     later,
     methods,
+    parallel,
     stats,
     tools,
     utils

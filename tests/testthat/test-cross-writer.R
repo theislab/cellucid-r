@@ -246,6 +246,21 @@ test_that("R and Python write the same MuData from the same multimodal input", {
   expect_identical(output[length(output)], "ok", info = paste(output, collapse = "\n"))
 })
 
+# A store's file as the writer means it: a metadata document byte for byte, a
+# chunk by its bytes once inflated (a Blosc frame decoded). The deflate data
+# is the platform's zlib's, which differs between zlib releases for some
+# inputs (1.3.2 against 1.2.12): the bytes a writer stores are compared, not
+# the zlib that compressed them (R/zarr-store.R).
+stored_content <- function(path) {
+  bytes <- readBin(path, "raw", file.size(path))
+  if (basename(path) %in% c(".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json") || grepl("\\.json$", path)) {
+    return(bytes)
+  }
+  if (length(bytes) >= 16L && bytes[[1L]] == as.raw(2L) && bytes[[2L]] == as.raw(1L)) return(blosc_decode(bytes))
+  inflated <- tryCatch(memDecompress(bytes, type = "gzip"), error = function(error) NULL)
+  if (is.null(inflated)) bytes else inflated
+}
+
 test_that("the MuData cases cellucid-python checks itself against are what this package writes", {
   skip_on_cran()
   skip_without_sce()
@@ -269,7 +284,7 @@ test_that("the MuData cases cellucid-python checks itself against are what this 
       paths <- if (identical(ending, ".json")) paste0(name, ending) else file.path(paste0(name, ending), written)
       for (path in paths) {
         expect_identical(
-          unname(tools::md5sum(file.path(root, path))), unname(tools::md5sum(file.path(fixtures, path))),
+          stored_content(file.path(root, path)), stored_content(file.path(fixtures, path)),
           info = paste(name, path, "(regenerate with fixtures/cross_writer_mudata/generate.R)")
         )
       }

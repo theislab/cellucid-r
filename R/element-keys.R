@@ -76,31 +76,56 @@
 
 # --- The vector-field key rule ---------------------------------------------
 
+# The namespace of one obsm key: a MuData modality's arrays are named
+# '<modality>:<key>' (the web app's MuData view, cellucid-python's prepare()
+# and cellucid_prepare() alike), each modality's names its own; a key without
+# ':' is the dataset's own (prefix ""). The key rules (.parse_vector_field_key,
+# the default and best-guess embeddings) apply within one namespace: the web
+# app's obsmNamespace and cellucid-python's obsm_namespace. Returns
+# list(prefix, local).
+.obsm_namespace <- function(key) {
+  colon <- regexpr(":", key, fixed = TRUE)[[1L]]
+  if (colon > 1L && colon < nchar(key)) {
+    return(list(prefix = substr(key, 1L, colon), local = substr(key, colon + 1L, nchar(key))))
+  }
+  list(prefix = "", local = key)
+}
+
 # scVelo's naming convention, the rule the web app applies when a store opens
 # (parseVectorFieldKey) and cellucid-python's parse_vector_field_key: an obsm
 # key '<field>_<basis>' is the vector field '<field>' drawn over the embedding
 # 'X_<basis>' ('velocity_umap' over 'X_umap', 'velocity_branches' over
-# 'X_branches'). A key that starts with 'X_' names an embedding, never a
-# vector field. Otherwise every split at one '_' into a non-empty field and a
-# non-empty basis is tried from the left, and the first whose 'X_<basis>' is
-# among `obsm_keys` wins: the longest basis. Matching is exact and
-# case-sensitive. Returns list(field, basis), or NULL for an ordinary array.
-# The shared data-mapping conformance fixture pins it (vectorFieldKeys).
+# 'X_branches'), within one namespace (.obsm_namespace): a modality's
+# 'rna:velocity_umap' is the field 'rna:velocity' over 'rna:X_umap'. A key
+# whose own name starts with 'X_' names an embedding, never a vector field.
+# Otherwise every split of the name at one '_' into a non-empty field and a
+# non-empty basis is tried from the left, and the first whose 'X_<basis>' (in
+# the same namespace) is among `obsm_keys` wins: the longest basis. Matching
+# is exact and case-sensitive. Returns list(field, basis, embedding), the
+# field keeping its namespace, or NULL for an ordinary array. The shared
+# data-mapping conformance fixture pins it (vectorFieldKeys).
 .embedding_key_prefix <- "X_"
 
 .parse_vector_field_key <- function(key, obsm_keys) {
-  if (startsWith(key, .embedding_key_prefix)) {
+  namespace <- .obsm_namespace(key)
+  local <- namespace$local
+  if (startsWith(local, .embedding_key_prefix)) {
     return(NULL)
   }
-  characters <- strsplit(key, "", fixed = TRUE)[[1L]]
+  characters <- strsplit(local, "", fixed = TRUE)[[1L]]
   n <- length(characters)
   for (split in which(characters == "_")) {
     if (split == 1L || split == n) {
       next
     }
     basis <- paste(characters[(split + 1L):n], collapse = "")
-    if (paste0(.embedding_key_prefix, basis) %in% obsm_keys) {
-      return(list(field = paste(characters[seq_len(split - 1L)], collapse = ""), basis = basis))
+    embedding <- paste0(namespace$prefix, .embedding_key_prefix, basis)
+    if (embedding %in% obsm_keys) {
+      return(list(
+        field = paste0(namespace$prefix, paste(characters[seq_len(split - 1L)], collapse = "")),
+        basis = basis,
+        embedding = embedding
+      ))
     }
   }
   NULL

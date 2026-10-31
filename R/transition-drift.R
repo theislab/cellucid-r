@@ -9,10 +9,16 @@
 # stores it as obsm[['T_fwd_umap']] and checks that key by the same
 # vector-field key rule (.resolve_vector_fields()).
 #
-# The arithmetic is Python's, operation for operation: the product T %*% E in
+# The arithmetic is Python's, the same operations: the product T %*% E in
 # double precision, divided by the row sums of T when normalize_rows is TRUE,
-# minus E. tests/testthat/fixtures/transition_drift_conformance.json, shared
-# byte for byte with cellucid-python, pins the result.
+# minus E. The order a BLAS (R's %*%, NumPy's @), a sparse kernel or rowSums()
+# adds terms in is not fixed and FMA use differs, so the doubles agree to
+# about an ulp, and the float32 stored differs in rare one-ulp cases (about
+# n * d * 2^-29 values: 0.04 at 10M cells x 2 dimensions).
+# tests/testthat/fixtures/transition_drift_conformance.json, shared byte for
+# byte with cellucid-python and computed with exact rational arithmetic, pins
+# the result: bit for bit where the sums are exact, else within the
+# computation's forward-error bound.
 cellucid_transition_drift <- function(transition_matrix, embedding, normalize_rows) {
   if (missing(transition_matrix)) {
     .abort("transition_matrix is required: a cells x cells transition matrix.")
@@ -28,6 +34,8 @@ cellucid_transition_drift <- function(transition_matrix, embedding, normalize_ro
   }
   normalize_rows <- .validate_flag(normalize_rows, "normalize_rows")
   coordinates <- .as_cell_matrix(embedding, "embedding")
+  # The drift moves every cell by its neighbours' positions: each needs one.
+  .require_finite_float32(coordinates, "embedding")
   if (nrow(coordinates) < 1L) {
     .abort("embedding must contain at least one row.")
   }

@@ -144,10 +144,11 @@ test_that("every gene-major block is the matching slice of the transpose, at any
 })
 
 test_that("a served store made of many small gene-major blocks, evicted from its cache, holds the prepared arrays", {
-  # Over 2^16 values, so X's data and indices span several chunks; a cache
-  # of a few kilobytes makes every block one chunk, and evicts it.
+  # Over two served chunks of values (2^18 each), so X's data and indices
+  # span several chunks; a cache smaller than a block makes every block one
+  # chunk, and evicts it.
   skip_if_not_installed("Matrix")
-  matrix <- spread_matrix(n_genes = 211L, n_cells = 9000L, per_cell = 17L)
+  matrix <- spread_matrix(n_genes = 401L, n_cells = 9000L, per_cell = 240L)
   colnames(matrix) <- paste0("c", seq_len(ncol(matrix)))
   rownames(matrix) <- paste0("g", seq_len(nrow(matrix)))
   components <- list(
@@ -169,4 +170,48 @@ test_that("a served store made of many small gene-major blocks, evicted from its
   transposed <- Matrix::t(matrix)
   expect_identical(store_array(folder, "X/indices"), transposed@i)
   expect_equal(store_array(folder, "X/data"), transposed@x, tolerance = 1e-7)
+})
+
+test_that("a range of a served chunk is made alone, the same bytes as the chunk's", {
+  # An expression matrix's entries come in chunks of .chunk_elements_served
+  # (a request over loopback costs more than a small chunk moves); a Range of
+  # one -- a gene, a subsample's first entries of a gene -- makes only the
+  # values it covers, and the last chunk past the array is its padding.
+  skip_if_not_installed("Matrix")
+  matrix <- spread_matrix(n_genes = 401L, n_cells = 5000L, per_cell = 240L)
+  colnames(matrix) <- paste0("c", seq_len(ncol(matrix)))
+  rownames(matrix) <- paste0("g", seq_len(nrow(matrix)))
+  components <- cellucid:::.dataset_components(NULL, list(
+    embeddings = list(X_umap = matrix(seq_len(2L * ncol(matrix)) / 3, ncol = 2L, dimnames = list(colnames(matrix), NULL))),
+    gene_expression = cellucid:::.feature_major(matrix),
+    dataset_id = "ranges", dataset_name = "Ranges"
+  ))
+  store <- suppressMessages(memory_store_of(components, cache_bytes = 268435456))
+  served <- cellucid:::.chunk_elements_served
+  n_values <- length(matrix@x)
+  expect_gt(n_values, served)
+  made <- numeric(0)
+  slice <- cellucid:::.native_raw_slice
+  testthat::local_mocked_bindings(.native_raw_slice = function(bytes, offset, count, total) {
+    made <<- c(made, count)
+    slice(bytes, offset, count, total)
+  }, .package = "cellucid")
+  for (part in c("indices", "data")) {
+    last <- (n_values - 1) %/% served
+    for (chunk in c(0, last)) {
+      key <- paste0("X/", part, "/", chunk)
+      body <- cellucid:::.store_body(store, key)
+      expect_identical(body$size, served * 4)
+      whole <- body$read(0, body$size)
+      for (range in list(c(6, 401), c(0, 4), c(served * 4 - 5, served * 4), c(4096 * 4 + 3, 9000 * 4 + 1))) {
+        made <- numeric(0)
+        expect_identical(body$read(range[[1]], range[[2]]), whole[(range[[1]] + 1):range[[2]]], info = key)
+        # No more than the values the bytes cover was made.
+        expect_lte(max(c(0, made)), (ceiling(range[[2]] / 4) - range[[1]] %/% 4) * 4)
+      }
+    }
+    tail <- cellucid:::.store_get(store, paste0("X/", part, "/", last))
+    held <- n_values - last * served
+    expect_true(all(tail[(held * 4 + 1):length(tail)] == as.raw(0)))
+  }
 })

@@ -86,9 +86,10 @@ viewer <- cellucid_serve(sce)
 #> Stop it with cellucid_stop().
 ```
 
-Port 8765 is the default because Google sign-in (community annotation) accepts
-only that local address; when it is taken, the next free port is used and the
-message says so. Behind RStudio Server or Posit Workbench, name the proxy's
+Port 8765 is the default because Google accepts only that local address for
+opening Google Drive files; when it is taken, the next free port is used and
+the message says so. (Community annotation signs in with GitHub, which works
+only on www.cellucid.com.) Behind RStudio Server or Posit Workbench, name the proxy's
 host with `allowed_hosts = "rstudio.example.org"`.
 
 ## What the viewer reads

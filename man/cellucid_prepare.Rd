@@ -68,8 +68,12 @@ matrix with one row per cell, such as \code{list(X_umap = umap, X_pca = pca)}.
 A numeric \code{data.frame}, a \pkg{Matrix} matrix, or a plain numeric vector
 (one column) is accepted too. Each one is stored whole, every column, as a
 float32 array at its own coordinates; the viewer chooses the columns it plots
-and scales them to its view. Every value must be finite and within the float32
-range. Each key becomes a path in the store, see the note on names below.}
+and scales them to its view. Every value must be within the float32 range. A
+row holding \code{NA} or \code{NaN} (or an infinity) is a cell the embedding
+does not place (one computed on some of the cells): it is written as given, the
+viewer leaves it out of that embedding's views, and in the latent space it gets
+no outlier quantile; at least one cell must have finite coordinates. Each key
+becomes a path in the store, see the note on names below.}
 \item{dataset_id}{Portable identifier of the dataset, stored as
 \code{uns['cellucid']['id']}: 1--180 ASCII letters, numbers, \code{.},
 \code{_}, or \code{-}, beginning with a letter or number, not ending with
@@ -84,8 +88,11 @@ column is stored, see the note on column encodings below.}
 \code{gene_expression}. Every column is stored. Supplying it without
 \code{gene_expression} is an error.}
 \item{gene_expression}{Optional cells x genes matrix: a \pkg{Matrix} sparse
-matrix (stored as a gene-major \code{csc_matrix}) or a dense numeric matrix
-(stored as a dense array in tall, gene-major chunks). Values must be finite and
+matrix (stored as a gene-major \code{csc_matrix}), a dense numeric matrix
+(stored as a dense array in tall, gene-major chunks), or a matrix held outside
+R's memory -- a \pkg{BPCells} matrix or a \pkg{DelayedArray} backend such as
+\pkg{HDF5Array} -- read block by block (see Details) and stored as a
+\code{csc_matrix}. Values must be finite and
 within the float32 range, and are stored as float32 -- or the whole matrix as
 float64 when every value is a whole number and one exceeds \code{2^24} in
 magnitude: integer counts float32 cannot hold exactly. That is decided on
@@ -97,8 +104,10 @@ Cellucid never transposes the matrix, so transpose a genes x cells matrix with
 \item{connectivities}{Optional cells x cells neighbour graph, a \pkg{Matrix}
 sparse matrix or a numeric matrix, stored as
 \code{obsp['connectivities']} (a float32 \code{csr_matrix}). It must be exactly
-symmetric, with a zero diagonal and finite, non-negative weights; a stored zero
-is not an edge and is dropped.}
+symmetric, with finite, non-negative weights; a stored zero is not an edge and
+is dropped, and so is the diagonal (a self-loop is no edge: Seurat's
+\code{RNA_snn} has 1 there). A directed graph (Seurat's \code{RNA_nn}) is
+refused.}
 \item{vector_fields}{Optional per-cell vectors drawn over an embedding, keyed by
 field and then by the embedding each array belongs to:
 \code{list(velocity = list(X_umap = v2, X_umap_3d = v3, X_branches = vb))}. Each
@@ -154,10 +163,8 @@ shows, in this order. Every column is stored either way. Stored as
 \code{defaults['obsKeys']}.}
 \item{var_gene_id_column}{Optional launch default: the \code{var} column whose
 values name the genes in the viewer, such as gene symbols beside Ensembl row
-names. \code{NULL} leaves the choice to the viewer: the \code{var} row names,
-or, when they are database identifiers (such as Ensembl ids) and a \code{var}
-column holds gene symbols (such as CELLxGENE's \code{feature_name}), that
-column, the identifiers staying searchable beside it. A column of text or
+names. \code{NULL}: the \code{var} row names name them; Data mapping in the
+viewer can choose a column later. A column of text or
 a factor names genes as it is, an integer column by its digits; a double or
 logical column cannot name genes and is refused. Stored as
 \code{defaults['geneIdColumn']}.}
@@ -288,7 +295,9 @@ logical column is a boolean array, or a nullable boolean when it holds
 when it holds \code{NA}; a double column is float64 whether or not its values
 are whole numbers, with \code{NA} stored as NaN, and must hold no infinite
 value. Any other column, a
-\code{Date} for example, is refused with the conversion that makes it storable.
+\code{Date} for example, is refused with the conversion that makes it storable
+when it is given in \code{obs}; a column of an object given as \code{data} is
+left out instead, with a message naming it, as cellucid-python leaves it out.
 
 Note on names: cell names are the row names \code{obs},
 \code{gene_expression}, and the embeddings agree on; where several are set they
@@ -340,11 +349,13 @@ applies to the other:
   written;
   \item \code{var}: \code{meta.features} (Assay5 \code{meta.data}) with the
   variable features as \code{highly_variable}; \code{rowData};
-  \item \code{obsp/connectivities}: the first symmetric neighbour graph, its
-  diagonal removed: Seurat's \code{<active assay>_snn}, then any other
-  \code{_snn} graph, then any other graph; a \code{colPair} named
-  \code{connectivities}, then one named like \code{snn}, then any other; a
-  graph passed over (not symmetric, or not over every cell) is named;
+  \item \code{obsp/connectivities}: the first symmetric neighbour graph the
+  viewer's default rule would open with, its diagonal removed: one named
+  \code{connectivities}, then Seurat's \code{<active assay>_snn}, then any
+  other shared-nearest-neighbour graph (\code{<assay>_snn}, or \code{SNN}, in
+  any case; a \code{colPair} the same), in code-point order; a graph passed
+  over (not symmetric, or not over every cell) or left out (\code{RNA_nn}) is
+  named;
   \item identity and launch defaults: the object's own record,
   \code{misc$cellucid} or \code{metadata(x)$cellucid}, shaped as
   \code{uns['cellucid']}: \code{list(id = , name = , description = ,
@@ -353,8 +364,19 @@ applies to the other:
   \code{project.name} other than \code{"SeuratProject"} names it too.
 }
 Matrices kept outside R's memory (BPCells, HDF5Array and other DelayedArray
-backends) are read into memory block by block, each block a set of whole
-cells. Seurat objects
+backends) stay there and are read a block at a time (about \eqn{2^{24}}
+positions: whole cells, or whole genes when the backend keeps genes together),
+never whole and never as one \code{dgCMatrix}: one pass counts each gene's
+values (and refuses a value that cannot be stored), then each value is placed
+at its gene's position, its cell's row beside it, and each gene sorted by row
+(on every core; its prefix counts read from its sorted rows). The genes one
+pass places hold at most a quarter of the machine's memory (8 bytes a stored
+value, 12 for float64 counts), and the pass reads only their rows; a larger
+matrix takes one pass per quarter, twice when it is written, X's values being
+written before its cells. Nothing else of the matrix is held, and
+there is no limit on its stored values (more than \eqn{2^{31} - 1} are
+written with 64-bit pointers). The bytes are those the same values in a
+\code{dgCMatrix} give. Seurat objects
 made before 3.0, and SingleCellExperiment objects before 1.8, are refused with
 the line that updates them.
 

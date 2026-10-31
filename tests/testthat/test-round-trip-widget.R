@@ -9,10 +9,10 @@ round_trip_comms <- function() {
   comms <- new.env(parent = emptyenv())
   comms$handlers <- list()
   comms$sent <- list()
-  wire <- function(value) jsonlite::fromJSON(as.character(jsonlite::toJSON(value, auto_unbox = TRUE, null = "null")))
+  wire <- function(value) jsonlite::fromJSON(as.character(jsonlite::toJSON(value, auto_unbox = TRUE, null = "null", json_verbatim = TRUE)))
   comms$api <- list(
     open = function(comm_id, data, on_msg) comms$handlers[[comm_id]] <- on_msg,
-    send = function(comm_id, data) comms$sent[[length(comms$sent) + 1L]] <- c(list(comm_id = comm_id), wire(data)),
+    send = function(comm_id, data, buffers = list()) comms$sent[[length(comms$sent) + 1L]] <- c(list(comm_id = comm_id), wire(data), list(buffers = buffers)),
     display = function(bundle, metadata) invisible(NULL)
   )
   comms$post <- function(model_id, content) comms$handlers[[model_id]](wire(list(method = "custom", content = content)))
@@ -70,7 +70,7 @@ test_that("a lasso, then cellucid_pull() in the next cell: nothing waits", {
     list(key = "annotation", categories = I(c("B", "T")), origin = "user"),
     NULL, c(0, 1, 255, 0, 1, 0), "uint8", revision = 2))
   page_binary(comms, viewer, widget_result("geneSet", "gene_set_1",
-    list(name = "T", description = "", genes = I("CD3E"), symbols = I("CD3E"), origin = "markers"), numeric(0), revision = 3))
+    list(name = "T", description = "", genes = I("CD3E"), symbols = NULL, origin = "markers"), numeric(0), revision = 3))
   page_text(comms, viewer, list(type = "results", epoch = "0123456789abcdef", dataset = viewer$dataset_id, revision = 3, nObs = 6, items = list(
     list(kind = "highlight", id = "highlight_1", revision = 1),
     list(kind = "categorical", id = "user_cat_1", revision = 2),
@@ -88,7 +88,7 @@ test_that("a lasso, then cellucid_pull() in the next cell: nothing waits", {
   # Pushing sends at once.
   cellucid_push(viewer, c(1.5, NA, 2, 3, 4, 5), key = "score")
   sent <- comms$to("binary")
-  frame <- jsonlite::base64_dec(sent[[length(sent)]]$content$b64)
+  frame <- sent[[length(sent)]]$buffers[[1L]]
   header_length <- readBin(frame[1:4], "integer", size = 4L, endian = "little")
   expect_identical(jsonlite::fromJSON(rawToChar(frame[4L + seq_len(header_length)]))$key, "score")
 
@@ -97,7 +97,7 @@ test_that("a lasso, then cellucid_pull() in the next cell: nothing waits", {
   expect_error(cellucid_session_result(request), "Run cellucid_session_result\\(\\) again in a later cell")
   asked <- Filter(function(m) grepl("requestSessionBundle", m$content$text %||% ""), comms$to("text"))
   id <- jsonlite::fromJSON(asked[[1L]]$content$text)$requestId
-  bundle <- c(charToRaw("CELLUCID_SESSION/2\n"), as.raw(c(2, 0, 0, 0)), charToRaw("{}"))
+  bundle <- c(cellucid:::.session_magic, as.raw(c(2, 0, 0, 0)), charToRaw("{}"))
   head <- charToRaw(as.character(jsonlite::toJSON(list(type = "session_bundle", requestId = id), auto_unbox = TRUE)))
   page_binary(comms, viewer, c(cellucid:::.encode_uint32(length(head)), head, bundle))
   path <- cellucid_session_result(request)

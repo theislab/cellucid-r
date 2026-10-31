@@ -112,14 +112,45 @@ test_that("chunks made by a transform are kept within the cache budget", {
   expect_lte(cache$used, 2000)
   expect_gt(length(cache$sizes), 0L)
   expect_identical(cache$used, sum(cache$sizes))
-  # Chunks of text and of a matrix, and the gene-major blocks of X, are
-  # kept; a chunk of a numeric vector, a slice of it, never is.
+  # Chunks of text and of a matrix are kept; a chunk of a numeric vector, a
+  # slice of it, never is, nor X's gene-major arrays (laid out once, outside
+  # the cache: .laid_out_arrays()).
   transformed <- vapply(keys, function(key) {
     meta <- jsonlite::fromJSON(rawToChar(cellucid:::.store_get(viewer$store, sub("/[^/]+$", "/.zarray", key))))
     identical(meta$dtype, "|O") || length(meta$shape) == 2L
   }, logical(1L))
   expect_true(any(!transformed))
-  expect_true(all(names(cache$sizes) %in% c(keys[transformed], "X\0010")))
+  expect_true(all(names(cache$sizes) %in% keys[transformed]))
+})
+
+test_that("a served expression matrix is laid out once in the background, its chunks made from the matrix until then", {
+  skip_without_sce()
+  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S", cache_bytes = 2000)
+  store <- viewer$store
+  # Laid out (test_viewer waits): X's chunks are slices of the layout, the
+  # cache never holds them, and no scratch file is left in the folder.
+  expect_identical(cellucid:::.native_layout_state(store$layouts, 0L)[[1L]], 2)
+  expect_identical(list.files(tempdir(), pattern = "^cellucid-layout-"), character())
+  laid <- lapply(c("X/data/0", "X/indices/0"), function(key) http_request(served_url(viewer, key)))
+  expect_identical(vapply(laid, `[[`, 0L, "status"), c(200L, 200L))
+  expect_false(any(startsWith(as.character(names(store$cache$sizes)), "X")))
+  # While a matrix is laid out, a chunk (or a range of one) is made from the
+  # matrix itself: the same bytes, never a wait.
+  testthat::local_mocked_bindings(.native_layout_state = function(layouts, index) c(1, 250, 1000, 3), .package = "cellucid")
+  during <- lapply(c("X/data/0", "X/indices/0"), function(key) http_request(served_url(viewer, key)))
+  expect_identical(vapply(during, `[[`, 0L, "status"), c(200L, 200L))
+  expect_identical(lapply(during, `[[`, "body"), lapply(laid, `[[`, "body"))
+  ranged <- http_request(served_url(viewer, "X/indices/0"), list(Range = "bytes=4-11"))
+  expect_identical(ranged$status, 206L)
+  expect_identical(ranged$body, laid[[2L]]$body[5:12])
+})
+
+test_that("stopping a viewer stops its layouts and lets their files go", {
+  skip_without_sce()
+  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
+  layouts <- viewer$store$layouts
+  cellucid_stop(viewer)
+  expect_error(cellucid:::.native_layout_state(layouts, 0L), "stopped")
 })
 
 test_that("a Host that does not name the server is refused, and so is a foreign WebSocket", {
@@ -137,6 +168,22 @@ test_that("a Host that does not name the server is refused, and so is a foreign 
   rebound <- ws_open(viewer, host = "attacker.example")
   expect_identical(rebound$status, 421L)
   ws_close(rebound)
+})
+
+test_that("cross-origin reads are open to the hosted app and loopback pages only, as in Python", {
+  allowed <- function(origin) {
+    headers <- cellucid:::.cors_headers(list(HTTP_ORIGIN = origin))
+    identical(headers[["Access-Control-Allow-Origin"]], origin)
+  }
+  for (origin in c("https://www.cellucid.com", "https://cellucid.com", "http://localhost:3000", "http://127.0.0.1:8000")) {
+    expect_true(allowed(origin), info = origin)
+  }
+  # No other page on a cellucid.com name: the documentation site runs its
+  # host's scripts and must not read a served dataset.
+  for (origin in c("https://docs.cellucid.com", "https://preview.cellucid.com", "http://www.cellucid.com",
+                   "https://www.cellucid.com.example.org", "https://theislab.github.io", "null")) {
+    expect_false(allowed(origin), info = origin)
+  }
 })
 
 test_that("allowed_hosts lets a proxy's name through", {
@@ -257,12 +304,12 @@ test_that("a session bundle arrives as the file it asked for", {
   answer <- function() {
     command <- ws_receive(client)$json
     header <- charToRaw(paste0("{\"type\":\"session_bundle\",\"requestId\":\"", command$requestId, "\"}"))
-    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("CELLUCID_SESSION/2\nbody")))
+    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("CELLUCID_SESSION/3\nbody")))
   }
   later::later(answer, 0.2)
   target <- tempfile(fileext = ".cellucid-session")
   path <- cellucid_session_result(cellucid_request_session(viewer), file = target, timeout = 10)
-  expect_identical(readLines(path, warn = FALSE), c("CELLUCID_SESSION/2", "body"))
+  expect_identical(readLines(path, warn = FALSE), c("CELLUCID_SESSION/3", "body"))
   expect_length(viewer$session_requests, 0L)
   # A bundle without the signature is reported to the one waiting for it.
   bad <- function() {
@@ -275,7 +322,7 @@ test_that("a session bundle arrives as the file it asked for", {
   # is also said as it arrives (as every refused command is).
   expect_warning(
     expect_error(cellucid_session_result(cellucid_request_session(viewer), timeout = 10),
-                 "invalid session bundle.*CELLUCID_SESSION/2.*Ask again with cellucid_request_session\\(\\)"),
+                 "invalid session bundle.*CELLUCID_SESSION/3.*Ask again with cellucid_request_session\\(\\)"),
     "The viewer did not take cellucid_request_session\\(\\): The viewer sent an invalid session bundle"
   )
   ws_close(client)
@@ -290,7 +337,7 @@ test_that("waiting on a viewer that never answers stops with what to do", {
   expect_length(viewer$session_requests, 1L)
 })
 
-test_that("stopping closes the channel and frees the port for a new viewer", {
+test_that("stopping freezes the page, closes the channel and frees the port for a new viewer", {
   skip_without_sce()
   object <- small_sce(alt = FALSE)
   viewer <- cellucid_serve(object, dataset_id = "s", dataset_name = "S", port = 0L, web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL, quiet = TRUE)
@@ -298,6 +345,8 @@ test_that("stopping closes the channel and frees the port for a new viewer", {
   client <- ws_welcomed(viewer)
   expect_true(viewer$viewer_id %in% vapply(cellucid_viewers(), function(v) v$viewer_id, ""))
   cellucid_stop(viewer)
+  # The open page is told to freeze (it keeps its last view), as Python's stop() tells it.
+  expect_identical(ws_receive(client)$json$type, "freeze")
   expect_identical(ws_receive(client)$code, 1001L)
   ws_close(client)
   expect_false(viewer$running)

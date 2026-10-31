@@ -15,14 +15,16 @@ fake_comms <- function() {
   comms$display_metadata <- list()
   # IRkernel writes with jsonlite::toJSON(auto_unbox = TRUE) and reads with
   # jsonlite::fromJSON() (vectors simplified): every message goes through both.
-  wire <- function(value) jsonlite::fromJSON(as.character(jsonlite::toJSON(value, auto_unbox = TRUE, null = "null")))
+  wire <- function(value) jsonlite::fromJSON(as.character(jsonlite::toJSON(value, auto_unbox = TRUE, null = "null", json_verbatim = TRUE)))
   comms$api <- list(
     open = function(comm_id, data, on_msg) {
       comms$opened[[comm_id]] <- wire(data)
       comms$handlers[[comm_id]] <- on_msg
     },
-    send = function(comm_id, data) {
-      comms$sent[[length(comms$sent) + 1L]] <- c(list(comm_id = comm_id), wire(data))
+    # The message's binary buffers travel beside its JSON, as raw vectors.
+    send = function(comm_id, data, buffers = list()) {
+      stopifnot(is.list(buffers), all(vapply(buffers, is.raw, TRUE)))
+      comms$sent[[length(comms$sent) + 1L]] <- c(list(comm_id = comm_id), wire(data), list(buffers = buffers))
     },
     display = function(bundle, metadata) {
       comms$displayed[[length(comms$displayed) + 1L]] <- wire(bundle)
@@ -114,9 +116,13 @@ test_that("the page reads the documents and the store through the widget, by ran
     list(id = 3L, method = "GET", path = "_cellucid/datasets", range = NULL),
     list(id = 4L, method = "GET", path = "_cellucid/nothing", range = NULL)
   )))
-  answers <- comms$to("out-1", "answers")[[1L]]$content$answers
+  message <- comms$to("out-1", "answers")[[1L]]
+  answers <- message$content$answers
   expect_identical(answers$status, c(200L, 200L, 200L, 404L))
-  body <- function(row) jsonlite::fromJSON(rawToChar(jsonlite::base64_dec(answers$b64[[row]])), simplifyVector = FALSE)
+  # Each body is a binary buffer of the message, named by its index; none is base64.
+  expect_null(answers$b64)
+  expect_identical(answers$buffer, 0:3)
+  body <- function(row) jsonlite::fromJSON(rawToChar(message$buffers[[answers$buffer[[row]] + 1L]]), simplifyVector = FALSE)
   expect_identical(body(1)$n_cells, 6L)
   info <- body(2)
   expect_identical(info$runtime, "r")
@@ -131,12 +137,15 @@ test_that("the page reads the documents and the store through the widget, by ran
     list(id = 6L, method = "GET", path = paste0(url, root_key), range = "bytes=0-9"),
     list(id = 7L, method = "HEAD", path = paste0(url, root_key), range = NULL)
   )))
-  answers <- comms$to("out-1", "answers")[[2L]]$content$answers
-  whole <- jsonlite::base64_dec(answers$b64[[1L]])
+  message <- comms$to("out-1", "answers")[[2L]]
+  answers <- message$content$answers
+  whole <- message$buffers[[1L]]
   expect_identical(answers$status, c(200L, 206L, 200L))
-  expect_identical(jsonlite::base64_dec(answers$b64[[2L]]), whole[1:10])
+  expect_identical(answers$buffer, c(0L, 1L, -1L))
+  expect_identical(message$buffers[[2L]], whole[1:10])
   expect_identical(answers$headers$`Content-Range`[[2L]], paste0("bytes 0-9/", length(whole)))
-  expect_identical(answers$b64[[3L]], "")
+  # A HEAD has no body, and no buffer.
+  expect_length(message$buffers, 2L)
 })
 
 test_that("the channel runs over the comm: commands first, then events and hooks", {
@@ -159,11 +168,12 @@ test_that("the channel runs over the comm: commands first, then events and hooks
   comms$post(model_of(viewer), list(t = "binary", v = "out-1", s = 0L, last = FALSE, b64 = jsonlite::base64_enc(frame[1:7])))
   comms$post(model_of(viewer), list(t = "binary", v = "out-1", s = 0L, last = TRUE, b64 = jsonlite::base64_enc(frame[8:length(frame)])))
   expect_identical(seen$selection$cells, c(1L, 5L, 6L))
-  # A command that names cells goes as a binary frame, base64.
+  # A command that names cells goes as a binary frame: the message's buffer.
   cellucid_highlight(viewer, c(2L, 3L))
   binary <- comms$to("out-1", "binary")
   expect_length(binary, 1L)
-  expect_identical(binary_command(jsonlite::base64_dec(binary[[1L]]$content$b64))$cells, c(1L, 2L))
+  expect_null(binary[[1L]]$content$b64)
+  expect_identical(binary_command(binary[[1L]]$buffers[[1L]])$cells, c(1L, 2L))
 })
 
 test_that("a cell cannot wait for the viewer, and says what to do instead", {
@@ -192,6 +202,51 @@ test_that("a second output replaces the first, and stopping closes the channel a
   expect_identical(comms$to("out-2", "answers")[[1L]]$content$answers$status, 410L)
 })
 
+test_that("a comm message with buffers is the kernel's own four parts, then each buffer as a frame", {
+  # A stand-in for IRkernel's Kernel: its reply and signing functions.
+  kernel <- list(
+    new_reply = function(msg_type, parent) list(header = list(msg_type = msg_type), parent_header = parent$header, identities = list(charToRaw("id")), metadata = structure(list(), names = character())),
+    sign_msg = function(parts) paste(vapply(parts, length, 0L), collapse = "-")
+  )
+  bodies <- list(as.raw(0:255), raw(3))
+  for (data in list(
+    list(method = "custom", content = list(t = "answers")),
+    structure("{\"method\":\"custom\",\"content\":{\"t\":\"answers\"}}", class = "json")
+  )) {
+    parts <- cellucid:::.comm_msg_parts(kernel, list(header = list(msg_id = "p")), "comm-1", data, bodies)
+    expect_length(parts, 9L)
+    expect_identical(parts[[1L]], charToRaw("id"))
+    expect_identical(parts[[2L]], charToRaw("<IDS|MSG>"))
+    # Signed over header, parent header, metadata and content, as msg_to_wire signs.
+    expect_identical(rawToChar(parts[[3L]]), paste(vapply(parts[4:7], length, 0L), collapse = "-"))
+    expect_identical(parts[8:9], bodies)
+    expect_identical(jsonlite::fromJSON(rawToChar(parts[[4L]]))$msg_type, "comm_msg")
+    expect_identical(jsonlite::fromJSON(rawToChar(parts[[5L]]))$msg_id, "p")
+    expect_identical(rawToChar(parts[[6L]]), "{}")
+    content <- jsonlite::fromJSON(rawToChar(parts[[7L]]))
+    expect_identical(content$comm_id, "comm-1")
+    expect_identical(content$data$content$t, "answers")
+  }
+})
+
+test_that("the answers' JSON is jsonlite's, every string escaped", {
+  headers <- list(`Content-Type` = "application/json", ETag = "\"v-1\"", `X-Odd` = "back\\slash\ttab", `Content-Length` = 12L)
+  json <- cellucid:::.widget_answer_json(17, 206L, headers, 3L)
+  expect_identical(jsonlite::fromJSON(json, simplifyVector = FALSE), list(
+    id = 17L, status = 206L,
+    headers = list(`Content-Type` = "application/json", ETag = "\"v-1\"", `X-Odd` = "back\\slash\ttab", `Content-Length` = "12"),
+    buffer = 3L
+  ))
+  expect_identical(jsonlite::fromJSON(cellucid:::.widget_answer_json(2^40, 404L, list(), -1L), simplifyVector = FALSE),
+                   list(id = 2^40, status = 404L, headers = structure(list(), names = character()), buffer = -1L))
+})
+
+test_that("the widget has IRkernel take two fetch messages of the page at once", {
+  comms <- fake_comms()
+  viewer <- widget_viewer(comms)
+  expect_identical(comms$opened[[viewer$widget$model_id]]$state$`_fetch_messages`, 2L)
+})
+
 test_that("the widget address is exact", {
   for (url in c("https://www.cellucid.com/", "ftp://x.org", "https://x.org/?a=1", "https://u:p@x.org", "x")) {
     expect_error(cellucid:::.validate_widget_source_url(url), "web_source_url")
@@ -201,7 +256,7 @@ test_that("the widget address is exact", {
 
 # The widget's front end, byte for byte the Python package's: pinned here and
 # in cellucid-python's tests/test_notebook_widget_contract.py.
-.widget_js_sha256 <- "e296bc2cfba93560f24d35792fe84934b707f5bf3fca82083fa4c39db9ebbc04"
+.widget_js_sha256 <- "75258ef90ac240b3902dded04695a7b51efbd7755606076d598b6a64c49a466b"
 .widget_css_sha256 <- "3b9acad3ebc04ece34acf580446a72ed7f73f3497b747539a11bc33fe281d82b"
 
 test_that("the widget's front end is the Python package's, byte for byte", {

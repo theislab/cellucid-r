@@ -30,6 +30,32 @@ release with the web app of this release.
   R and Python holds identical bytes. A file given by path is served as it
   is, with a strong `ETag`; for a file not in priority order R says, as it
   starts, how to send only a share's cells.
+- **BPCells and DelayedArray matrices are never read whole.** A matrix held
+  outside R's memory (a Seurat v5 BPCells layer, an HDF5Array or other
+  DelayedArray assay, or one passed as `gene_expression`) is read a block at a
+  time by `cellucid_prepare()`, `cellucid_view()` and `cellucid_serve()`: one
+  pass counts its values, then each gene's values are placed by cell and sorted
+  in C, a quarter of the machine's memory at a time, each pass reading only its
+  genes' rows. It is no longer joined into one `dgCMatrix` of doubles (12-24
+  bytes a value), and the 2^31 - 1 value limit is gone. The bytes written are
+  those of the same values in memory. Measured (16 GB Apple M1 Pro): 1M cells
+  x 2.2 billion values from BPCells prepared in 413 s at 7.3 GB peak (refused
+  before; joined it needed 26-53 GB); 1M cells x 400M values served (laid out)
+  in 18 s; 100k cells x 220M values prepared in 64 s at 3.8 GB peak, against
+  67 s and 6.1 GB for the same matrix converted to a dgCMatrix first.
+  A DelayedArray block's conversion no longer warns
+  "omp_pause_resource() failed to relinquish resources" once a block (SparseArray
+  on an OpenMP runtime that cannot release its threads, such as macOS's): that
+  one warning is muffled there, and every other warning is still raised.
+- **Genes asked while the viewer lays a matrix out.** An object's expression
+  matrices are laid out for the viewer on every core, and a gene asked before
+  the layout ends is made from its progress: the values already laid out are
+  copied and those of the cells not reached yet found by one scan of the
+  matrix's values in its own order, on every core, the layout standing
+  meanwhile; a burst of genes waits for the layout once that is sooner. `cellucid_prepare()` makes a genes x cells matrix's gene-major
+  arrays on every core as well. In a notebook, the widget has at most two of
+  the page's fetch messages with IRkernel at once, the rest gathered into the
+  next (IRkernel spends about 1.7 ms on each message it reads).
 - **Round trip.** `cellucid_pull(object, viewer or paths)` (Seurat
   `meta.data`, SCE/SE `colData`, data frames; `NA` for cells not open),
   `cellucid_push()`, `cellucid_push_gene_set()`, `cellucid_subset()`,
@@ -184,15 +210,22 @@ read by the matching web app; prepare the data again with this release.
   cost far more than the bytes it saved (files `cellucid_prepare()` writes
   stay compressed). Every chunk is made only when the viewer asks for it, in
   one native pass from its R vector (`src/chunks.c`); only chunks made by a
-  transform (text, a matrix block, a gene-major block) are kept, in a
-  least-recently-used cache of `cache_bytes`. An object's genes x cells sparse
-  matrix is never transposed: reading a gene makes the block of genes around
-  it (about eight values a cell) with one binary search a cell, and the
-  block is kept within `cache_bytes`. On 1,000,000 cells x 5,000 genes (150
-  values a cell) in a real browser, the first gene takes 0.34 s, a 100-gene
-  batch 0.13 s, and R's heap peaks 600 MB over the object; on the
-  561,947-cell Suo atlas, 0.22 s, 0.05 s and 315 MB. A 100,000-cell object starts serving in 0.7 s and shows
-  its first view (cells, annotations, UMAP) in 0.1 s more. A file is
+  transform (text, a dense matrix block) are kept, in a least-recently-used
+  cache of `cache_bytes`. An object's sparse expression matrices are laid out
+  gene-major once, in the background from the moment the viewer starts (`X`
+  first), on a native thread into memory-mapped scratch files removed as
+  soon as they are mapped (never a copy in R's memory), as cellucid-python
+  does; a gene asked for before is made at once from the object (the block
+  of genes around it, one binary search a cell), exactly as it will be laid
+  out. A served expression matrix's entries come in chunks of 2^18 values
+  (1 MiB: a browser's `fetch` over loopback moves 46-79 MB/s in requests of
+  64 KiB, 300-510 MB/s in requests of 1 MiB), and a `Range` of a chunk is
+  made alone. On 1,000,000 cells (100 values a cell) in Chromium, the first
+  picture takes 1.7 s, 100 genes 0.63 s and a differential expression read
+  of 50 genes over 133,334 cells 0.17 s (blocks of genes made within
+  `cache_bytes` had taken 2.6 s, 38.8 s and 30.5 s). A 100,000-cell object
+  starts serving in 0.7 s and shows its first view (cells, annotations, UMAP)
+  in 0.1 s more. A file is
   served from disk with exact `Range` answers. The server (`httpuv`) runs in
   the background, so the console stays usable; it mirrors the routes of
   cellucid-python's server, refuses a `Host` that does not name it (421;

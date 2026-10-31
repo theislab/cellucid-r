@@ -86,8 +86,9 @@ results left out (\code{skipped}).}
 \item{which}{A highlight group, by id (\code{"highlight_3"}) or by its label;
 \code{"visible"} for the visible cells; \code{NULL} for the last selection.}
 \item{symbols}{\code{FALSE} names each gene set's genes by identifier -- the
-var index, \code{rownames(object)} (Ensembl ids for a CELLxGENE dataset);
-\code{TRUE} by the names the viewer shows for them.}
+var index, \code{rownames(object)}; \code{TRUE} by the names the viewer shows
+for them: those of the var column its data mapping names the genes by (such
+as \code{feature_name}), else the identifiers themselves.}
 }
 \value{
 \code{cellucid_pull()}: the object with the columns added (R copies on
@@ -98,7 +99,8 @@ none). When the viewer opened a subsample, a cell it did not open is
 \code{NA}: unknown, not "not selected". The gene sets go to
 \code{misc$cellucid$gene_sets} (Seurat), \code{metadata(x)$cellucid$gene_sets},
 or the \code{cellucid} attribute of a data frame -- each its \code{genes} by
-identifier (the var index), and from a viewer the \code{symbols} shown --
+identifier (the var index), and from a viewer whose data mapping names the
+genes by a var column the \code{symbols} shown --
 beside \code{pulled}, the record of each column written: where it came from
 (\code{pulled_from}: \code{"viewer"} or the file's name) and the result it
 holds (\code{kind}, \code{id}). A gene set name used twice is

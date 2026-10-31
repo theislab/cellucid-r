@@ -79,7 +79,7 @@
   debug_snapshot = c("type", "requestId", "ts", "locationHref", "origin", "serverUrl", "connected", "userAgent"),
   command_error = c("type", "command", "reason"),
   data_mapping = c("type", "requestId", "origin", "mapping"),
-  color_by = c("type", "field", "source", "label"),
+  color_by = c("type", "field", "source", "symbol", "cells_read"),
   result_removed = c("type", "epoch", "revision", "kind", "id"),
   results = c("type", "epoch", "dataset", "revision", "nObs", "items")
 )
@@ -207,13 +207,19 @@
       if (!isTRUE(event$ctrl) && !isFALSE(event$ctrl)) bad("ctrl must be true or false")
     },
     color_by = {
-      if (is.null(event$field) != is.null(event$source) || is.null(event$field) != is.null(event$label)) {
-        bad("names a field, its source and its label, or none")
-      }
+      if (is.null(event$field) != is.null(event$source)) bad("names a field and its source, or neither")
       if (!is.null(event$field)) {
         if (!.is_exact_text(event$field, whitespace = TRUE)) bad("field must be exact text")
-        if (!.is_exact_text(event$label, whitespace = TRUE)) bad("label must be exact text")
         if (!event$source %in% c("obs", "var")) bad("source must be obs or var")
+      }
+      if (!is.null(event$symbol)) {
+        if (!identical(event$source, "var")) bad("names a symbol only for a gene")
+        if (!.is_exact_text(event$symbol, whitespace = TRUE)) bad("symbol must be exact text")
+      }
+      # A gene read for a sample of the open cells: the first `cells_read` of them.
+      if (!is.null(event$cells_read)) {
+        if (!identical(event$source, "var")) bad("names the cells read only for a gene")
+        if (!.is_count(event$cells_read)) bad("cells_read must be a count")
       }
     },
     result_removed = {
@@ -499,9 +505,9 @@
     geneSet = {
       if (!.is_exact_text(meta$name, whitespace = TRUE) || !is.character(meta$description)) bad("names its gene set")
       if (!.is_text_list(meta$genes, whitespace = FALSE)) bad("lists its genes, each once")
-      if (!is.list(meta$symbols) || length(meta$symbols) != length(meta$genes) ||
-          !all(vapply(meta$symbols, function(symbol) is.character(symbol) && length(symbol) == 1L, TRUE))) {
-        bad("names a symbol for each of its genes")
+      if (!is.null(meta$symbols) && (!is.list(meta$symbols) || length(meta$symbols) != length(meta$genes) ||
+          !all(vapply(meta$symbols, function(symbol) is.character(symbol) && length(symbol) == 1L, TRUE)))) {
+        bad("names a symbol for each of its genes, or none")
       }
       if (!identical(as.integer(cells), 0L) || !is.null(values)) bad("of a gene set names no cells and no values")
     },

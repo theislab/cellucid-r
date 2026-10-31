@@ -31,6 +31,8 @@ test_viewer <- function(data, ..., env = parent.frame()) {
   # Stopped when the calling test's frame exits (on.exit() registered in
   # that frame, as withr::defer() does).
   do.call(base::on.exit, list(bquote(cellucid_stop(.(viewer))), TRUE, FALSE), envir = env)
+  # Its expression matrices laid out (in the background), so every key answers.
+  if (!is.null(viewer$store)) cellucid:::.store_laid_out(viewer$store, timeout = 300)
   viewer
 }
 

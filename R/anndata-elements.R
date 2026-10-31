@@ -194,13 +194,14 @@
 # .sparse_index_dtype() says -- the rules cellucid-python writes by. `values`
 # are stored in
 # `dtype`. A `sliced` matrix -- the expression matrix, which the viewer reads
-# one gene's range at a time -- chunks its data and indices in 2^14 values;
-# any other (the neighbour graph, read whole) in 2^18.
+# one gene's range at a time -- chunks its data and indices in 2^14 values
+# when written, 2^18 when served (.sliced_chunk_elements()); any other (the
+# neighbour graph, read whole) in 2^18.
 .ad_sparse <- function(store, path, format, shape, pointers, indices, values,
                        dtype = "<f4", sliced = FALSE) {
   pointer_dtype <- if (.value_length(values) >= 2147483648) "<i8" else "<i4"
   index_dtype <- .sparse_index_dtype(format, shape)
-  target <- if (sliced) .chunk_elements_sliced else .chunk_elements_whole
+  target <- if (sliced) .sliced_chunk_elements(store) else .chunk_elements_whole
   .zarr_group(store, path, .encoding(format, "0.1.0", shape = I(as.numeric(shape))))
   # The expression values (sliced) are not shuffled (zarr-store.R).
   .zarr_vector(store, .zarr_key(path, "data"), values, dtype, target = target, shuffle = !sliced)
@@ -250,7 +251,6 @@
 .uns_boolean <- function(value) .uns_leaf("boolean", value)
 .uns_strings <- function(value) .uns_leaf("strings", value)
 .uns_integers <- function(value) .uns_leaf("integers", value)
-.uns_floats32 <- function(value) .uns_leaf("floats32", value)
 # One float32 per cell (the stored outlier quantiles), chunked as obs is.
 .uns_cell_floats32 <- function(value) .uns_leaf("cellFloats32", value)
 
@@ -269,7 +269,6 @@
     boolean = .zarr_scalar(store, path, value$value, "|b1", .encoding("numeric-scalar", "0.2.0")),
     strings = .ad_string_array(store, path, value$value),
     integers = .ad_numeric_array(store, path, value$value, "<i8"),
-    floats32 = .ad_numeric_array(store, path, value$value, "<f4"),
     cellFloats32 = .ad_numeric_array(store, path, value$value, "<f4", .chunk_elements_cell)
   )
   invisible(NULL)

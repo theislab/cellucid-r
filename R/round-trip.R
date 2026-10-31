@@ -727,15 +727,23 @@ cellucid_read_gmt <- function(file) {
 # file it serves from disk), an object in a file's stored order is still told
 # by its priority record.
 .require_viewer_order <- function(data, viewer) {
-  stored <- !is.null(.stored_order_of(data)$positions)
+  # In a verified stored order that moves a cell: a record that does not
+  # describe the cells leaves each its own original position. The names must
+  # be the viewer's in order, repeated names included; the record tells an
+  # object in a file's stored order whatever its names.
+  positions <- .stored_order_of(data)$positions
+  stored <- !is.null(positions) && !identical(as.double(positions), as.double(seq_along(positions) - 1))
   names <- viewer$cell_names
   given <- .object_cells(data)
-  if (!is.null(names) && !is.null(given) && !anyDuplicated(names) && !anyDuplicated(given)) {
-    if (length(given) != length(names) || identical(as.character(given), as.character(names))) return(invisible())
-    missing <- is.na(match(given, names))
-    if (any(missing)) {
-      .abort(sum(missing), " of this object's cells are not cells of the viewer's dataset (first: '",
-             given[missing][[1L]], "'): pass the object the viewer shows.")
+  if (!is.null(names) && !is.null(given)) {
+    if (length(given) != length(names)) return(invisible())
+    if (identical(as.character(given), as.character(names)) && !stored) return(invisible())
+    if (!anyDuplicated(names) && !anyDuplicated(given)) {
+      missing <- is.na(match(given, names))
+      if (any(missing)) {
+        .abort(sum(missing), " of this object's cells are not cells of the viewer's dataset (first: '",
+               given[missing][[1L]], "'): pass the object the viewer shows.")
+      }
     }
   } else if (!stored) {
     return(invisible())
@@ -776,14 +784,14 @@ cellucid_subset <- function(data, viewer, which = NULL) {
   if (is.data.frame(data)) data[cells, , drop = FALSE] else data[, cells]
 }
 
-# Each gene set's genes by identifier -- the var index, rownames(object)
-# (Ensembl ids for a CELLxGENE dataset) -- or, with symbols = TRUE, by the
-# names the viewer shows for them.
+# Each gene set's genes by identifier -- the var index, rownames(object) --
+# or, with symbols = TRUE, by the names the viewer shows for them: those of
+# the var column its data mapping names the genes by, else the identifiers.
 cellucid_gene_sets <- function(viewer, symbols = FALSE) {
   .require_viewer(viewer)
   .validate_flag(symbols, "symbols")
   sets <- .gene_sets_of(cellucid_results(viewer))
-  stats::setNames(lapply(sets, function(set) set$entry[[if (symbols) "symbols" else "genes"]]),
+  stats::setNames(lapply(sets, function(set) if (symbols) set$entry$symbols %||% set$entry$genes else set$entry$genes),
                   vapply(sets, `[[`, "", "name"))
 }
 

@@ -32,7 +32,8 @@ viewer refuses it with a \code{command_error} event.}
 \item{name}{The gene set's name; a set of the same name pushed before is
 replaced.}
 \item{genes}{The genes, in order, by identifier (\code{rownames(object)}) or
-by the symbol the viewer shows (identifiers first); each is kept once.}
+by the name the viewer shows (a var column's, when its data mapping names the
+genes by one; identifiers first); each is kept once.}
 \item{description}{The gene set's description.}
 \item{gene_sets}{A named list: each set's name and its genes.}
 \item{file}{The GMT file to write or read.}

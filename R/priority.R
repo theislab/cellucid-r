@@ -117,6 +117,12 @@
   space$positions <- if (!is.null(placed) && !(length(placed) == n && identical(placed, seq_len(n)))) placed
   space$original <- rows - 1
   space$prefix_levels <- if (is.null(placed)) priority$levels else findInterval(priority$levels, placed)
+  # A matrix held outside R's memory counts its prefix counts as it is placed
+  # (backed-matrix.R), so they cost no pass of their own.
+  if (isTRUE(space$expression$backed)) {
+    space$expression$prefix_levels <- space$prefix_levels
+    space$expression$placed <- new.env(parent = emptyenv())
+  }
   space
 }
 
@@ -131,6 +137,7 @@
 # n_genes x length(levels) matrix of counts, NULL for a dense X.
 .expression_prefix_counts <- function(expression, levels) {
   if (!expression$sparse) return(NULL)
+  if (isTRUE(expression$backed)) return(.backed_prefix_counts(expression, levels))
   n_genes <- .expression_dims(expression)[[2L]]
   matrix <- expression$matrix
   cells <- if (is.null(expression$cells)) integer(0) else expression$cells - 1L
@@ -160,6 +167,13 @@
 # order. Then `positions` is that order (0-based original position of each
 # row), computed from the seed. Anything else is data Cellucid did not write:
 # `positions` NULL (each row its own original position), `notice` says why.
+# The web app applies the same record checks and checks the column where
+# opening reads it, its first chunk of rows, computing the rest from the seed
+# (reading every row would cost each opening 4-8 bytes a cell): a file subset,
+# combined or reordered after it was written fails both. Only a permutation of
+# the rows after the first chunk that leaves the first chunk in place is
+# refused here and read in the seed's order by the web; no reorder anndata,
+# Seurat or Scanpy performs does that.
 .stored_order <- function(record, n, column) {
   unused <- function(reason) {
     list(positions = NULL, notice = paste0(
@@ -318,6 +332,10 @@ cellucid_restore_original_order <- function(x) {
   column <- .original_position_column
   record <- .object_record(x)
   record$priority <- NULL
+  # The stored outlier quantiles: one value per cell, in the cells' order
+  # (spec: "the stored outlier quantiles follow the cells").
+  fields <- record$outlierQuantiles$fields
+  for (key in names(fields)) record$outlierQuantiles$fields[[key]] <- .cells_of_values(fields[[key]], rows)
   if (length(record) == 0L) record <- NULL
   if (is.data.frame(x)) {
     restored <- x[rows, , drop = FALSE]
@@ -325,11 +343,44 @@ cellucid_restore_original_order <- function(x) {
   } else if (inherits(x, "Seurat")) {
     restored <- .seurat_in_cell_order(x, rows)
     restored[[column]] <- NULL
+    # Prefix counts describe the stored order only (an importer keeps varm
+    # as feature metadata).
+    for (name in names(restored@assays)) {
+      assay <- restored@assays[[name]]
+      slot <- if (methods::.hasSlot(assay, "meta.data")) "meta.data" else "meta.features"
+      features <- methods::slot(assay, slot)
+      if (.prefix_counts_key %in% names(features)) {
+        features[[.prefix_counts_key]] <- NULL
+        methods::slot(assay, slot) <- features
+        restored@assays[[name]] <- assay
+      }
+    }
   } else {
     restored <- x[, rows]
     SummarizedExperiment::colData(restored)[[column]] <- NULL
+    # Prefix counts describe the stored order only: a rowData column, or one
+    # of a varm column of rowData, as importers keep varm.
+    features <- SummarizedExperiment::rowData(restored)
+    if (.prefix_counts_key %in% names(features)) features[[.prefix_counts_key]] <- NULL
+    if ("varm" %in% names(features) && .prefix_counts_key %in% names(features$varm)) {
+      varm <- features$varm
+      varm[[.prefix_counts_key]] <- NULL
+      features$varm <- varm
+    }
+    SummarizedExperiment::rowData(restored) <- features
   }
   .object_with_record(restored, record)
+}
+
+# One value per cell of a record (a vector, or a leaf as cellucid writes it),
+# at `rows`; anything else as it is.
+.cells_of_values <- function(values, rows) {
+  if (inherits(values, "cellucid_uns_leaf")) {
+    leaf <- unclass(values)
+    if (length(leaf$value) == length(rows)) leaf$value <- leaf$value[rows]
+    return(structure(leaf, class = class(values)))
+  }
+  if (is.null(dim(values)) && length(values) == length(rows)) values[rows] else values
 }
 
 # A cell metadata frame without a position column cellucid_prepare() was

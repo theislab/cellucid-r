@@ -8,6 +8,12 @@
   .Call(C_cellucid_crc32, bytes, as.double(previous))
 }
 
+# src/deflate.c: each raw vector of `chunks` as one zlib stream at `level`
+# (what memCompress(type = "gzip") makes), compressed on `threads` threads.
+.native_deflate_chunks <- function(chunks, level, threads) {
+  .Call(C_cellucid_deflate_chunks, chunks, as.integer(level), as.integer(threads))
+}
+
 # src/random.c: `n` bytes from the operating system's cryptographic random
 # generator; R's own generator (and the caller's .Random.seed) is not used.
 .native_random_bytes <- function(n) {
@@ -85,11 +91,12 @@
 # as list(cell index bytes, value bytes), made without transposing the matrix
 # or copying the rows it keeps (R/expression-input.R).
 # `cells`: the 0-based columns in the order the output rows take them
-# (integer(0): the matrix's own).
+# (integer(0): the matrix's own); `threads`: the threads the cells are
+# shared among (the same bytes on any number).
 .native_gene_major_block <- function(matrix, map, origin, pointers, first, last, index_size, dtype,
-                                     cells = integer(0)) {
+                                     cells = integer(0), threads = 1L) {
   .Call(C_cellucid_gene_major_block, matrix@i, matrix@p, matrix@x, map, origin, pointers, as.integer(cells),
-        as.double(first), as.double(last), as.integer(index_size), dtype)
+        as.double(first), as.double(last), as.integer(index_size), dtype, as.integer(threads))
 }
 
 # src/chunks.c: positions first .. last - 1 (0-based) of the column-compressed
@@ -112,6 +119,94 @@
 # then zeros to `total` bytes.
 .native_raw_slice <- function(bytes, offset, count, total) {
   .Call(C_cellucid_raw_slice, bytes, as.double(offset), as.double(count), as.double(total))
+}
+
+# src/chunks.c: a served store's expression matrices laid out gene-major in
+# the background (R/expression-input.R, .laid_out_arrays()): start the jobs
+# (each a list of a pass's arguments) with two scratch paths a job, each on
+# `threads` threads (`park` >= 0 stands every thread that many units into
+# its share until unparked: tests); stop them; one job's state, c(state (0
+# waiting, 1 running, 2 done, 3 failed), units done, units, seconds, units
+# requests passed over themselves, values they copied from the layout);
+# bytes offset .. offset + count - 1 of part 1 (cell indices) or 2 (values)
+# of a job laid out, zero-padded to `total`; positions first .. last - 1 of
+# a job as list(cell index bytes, value bytes) whatever its state (made from
+# the layout's progress until it ends).
+.native_layouts_start <- function(jobs, paths, threads = 1L, park = -1) {
+  .Call(C_cellucid_layouts_start, jobs, enc2native(paths), as.integer(threads), as.double(park))
+}
+.native_layouts_unpark <- function(layouts) {
+  invisible(.Call(C_cellucid_layouts_unpark, layouts))
+}
+.native_layouts_stop <- function(layouts) {
+  invisible(.Call(C_cellucid_layouts_stop, layouts))
+}
+.native_layout_state <- function(layouts, index) {
+  .Call(C_cellucid_layout_state, layouts, as.integer(index))
+}
+.native_layout_slice <- function(layouts, index, part, offset, count, total) {
+  .Call(C_cellucid_layout_slice, layouts, as.integer(index), as.integer(part), as.double(offset), as.double(count),
+        as.double(total))
+}
+.native_layout_block <- function(layouts, index, first, last) {
+  .Call(C_cellucid_layout_block, layouts, as.integer(index), as.double(first), as.double(last))
+}
+
+# src/backed.c: an expression matrix held outside R's memory, read a block
+# at a time (R/backed-matrix.R; a block is list(index, pointers, values,
+# by_rows, rows, col0): compressed arrays whose major lines are its columns,
+# the matrix's columns col0 .. (0-based), or its rows (`by_rows`), and the
+# 1-based source rows of its rows). A tally counts each row's stored values
+# and their extent; .native_backed_counted() returns list(count, low, high,
+# whole, c(seen, NaN, NA, +Inf, -Inf, zeros)). A prefix tally counts each
+# output gene's values below each prefix level (`genes`: each block row's
+# 0-based output gene or -1, `new_row`: each column's 0-based output row or
+# -1). A target holds the gene-major arrays of the output genes reaching into
+# positions low .. high - 1 (in memory, or in the two scratch files `paths`),
+# placed gene by gene (.native_backed_place(), then .native_backed_finish(),
+# which sorts each gene by row and returns its prefix counts), sliced into
+# chunks, and released.
+.native_backed_tally <- function(n_rows) {
+  .Call(C_cellucid_backed_tally, as.double(n_rows))
+}
+.native_backed_count <- function(tally, block) {
+  invisible(.Call(C_cellucid_backed_count, tally, block$index, block$pointers, block$values, block$by_rows,
+                  as.integer(block$rows - 1L), as.double(block$col0)))
+}
+.native_backed_counted <- function(tally) {
+  .Call(C_cellucid_backed_counted, tally)
+}
+.native_backed_prefix_tally <- function(n_genes, levels) {
+  .Call(C_cellucid_backed_prefix_tally, as.double(n_genes), as.double(levels))
+}
+.native_backed_prefix_count <- function(tally, block, genes, new_row) {
+  invisible(.Call(C_cellucid_backed_prefix_count, tally, block$index, block$pointers, block$values, block$by_rows,
+                  genes, as.double(block$col0), new_row))
+}
+.native_backed_prefix_counted <- function(tally) {
+  .Call(C_cellucid_backed_prefix_counted, tally)
+}
+.native_backed_target <- function(pointers, low, high, n_cells, index_size, dtype, paths = character(0)) {
+  .Call(C_cellucid_backed_target, as.double(pointers), as.double(low), as.double(high), as.double(n_cells),
+        as.integer(index_size), dtype, enc2native(paths))
+}
+.native_backed_target_genes <- function(target) {
+  .Call(C_cellucid_backed_target_genes, target)
+}
+.native_backed_place <- function(target, first_gene, last_gene, block, genes, new_row, threads = 1L) {
+  invisible(.Call(C_cellucid_backed_place, target, as.double(first_gene), as.double(last_gene), block$index,
+                  block$pointers, block$values, block$by_rows, genes, as.double(block$col0), new_row,
+                  as.integer(threads)))
+}
+.native_backed_finish <- function(target, first_gene, last_gene, levels = NULL, threads = 1L) {
+  .Call(C_cellucid_backed_finish, target, as.double(first_gene), as.double(last_gene),
+        if (is.null(levels)) NULL else as.double(levels), as.integer(threads))
+}
+.native_backed_slice <- function(target, part, first, count, total) {
+  .Call(C_cellucid_backed_slice, target, as.integer(part), as.double(first), as.double(count), as.double(total))
+}
+.native_backed_release <- function(target) {
+  invisible(.Call(C_cellucid_backed_release, target))
 }
 
 # src/chunks.c: one binary command frame -- the header's length, the header
@@ -149,6 +244,9 @@
 .native_subsample_decode <- function(bytes, n_obs) {
   .Call(C_cellucid_subsample_decode, bytes, as.double(n_obs))
 }
+.native_shortest_decimal <- function(share) {
+  .Call(C_cellucid_shortest_decimal, as.double(share))
+}
 
 # src/priority.c: each gene's stored values in the cells before each prefix
 # level (R/priority.R). `matrix` is a dgCMatrix, genes x cells
@@ -166,4 +264,32 @@
 # it cannot be opened as one.
 .native_file_version <- function(path) {
   .Call(C_cellucid_file_version, as.character(path))
+}
+
+# src/file_version.c: list(size, etag, bytes) of the regular file at `path`:
+# its version and `length` bytes from 0-based `offset`, read from the one file
+# opened (fewer bytes when it ended first), or NULL when it is not a readable
+# regular file.
+.native_file_range <- function(path, offset, length) {
+  .Call(C_cellucid_file_range, as.character(path), as.double(offset), as.double(length))
+}
+
+# src/process.c: whether process `pid` runs on this machine (never signalled).
+.native_process_alive <- function(pid) {
+  .Call(C_cellucid_process_alive, as.double(pid))
+}
+
+# The physical memory of this machine in bytes, NA where the system does not
+# say (src/process.c).
+.native_physical_memory <- function() {
+  .Call(C_cellucid_physical_memory)
+}
+
+# The machine's memory every size taken from it starts from (a served store's
+# cache, a placing pass of a backed matrix): its physical memory, or 8 GiB
+# where the system does not say (the device the web app takes a browser that
+# reports nothing to be), as cellucid-python's machine_memory_bytes().
+.machine_memory_bytes <- function() {
+  machine <- .native_physical_memory()
+  if (is.na(machine) || machine <= 0) 8 * 2^30 else machine
 }

@@ -9,10 +9,10 @@
 # input_formats.json; all three repositories pin the same SHA-256. It names
 # every format the viewer opens by its id, the name endings of each layout it
 # arrives in, the container signatures and the folder markers. The id is what
-# a dataset that states none is named after ("<format>_<name>") and what a
-# server reports as the store's kind.
+# a dataset that states none is named after ("<format>_<name>_<structure>")
+# and what a server reports as the store's kind.
 
-.input_formats_sha256 <- "ed44816fc5299aea7b87a8f7e805a704779517e04a2dd5b9b6340ced511ba7e7"
+.input_formats_sha256 <- "7c1e079c33dcd7d1abb17e4996e6e6cf35f1968327a9097701dd9a1ca860c902"
 
 registry_path <- function() system.file("input_formats.json", package = "cellucid", mustWork = TRUE)
 
@@ -69,6 +69,26 @@ test_that("a path is classified as the registry and the web app classify it", {
     embeddings = list(X_umap = diag(2)), dataset_id = "s", dataset_name = "S"
   ))
   expect_identical(classify(zip)[c("kind", "layout")], list(kind = "zarr", layout = "zip"))
+})
+
+test_that("a gzip-compressed copy is refused with how to serve it, as cellucid serve refuses it", {
+  # GEO ships many .h5ad files gzipped: the web app reads such a copy whole,
+  # but a served file is read in parts, which a gzip stream has none of.
+  folder <- tempfile("cellucid_gz_")
+  dir.create(folder)
+  copy <- file.path(folder, "GSE1_cite.h5ad.gz")
+  connection <- gzfile(copy, "wb")
+  writeBin(c(as.raw(c(0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a)), raw(64)), connection)
+  close(connection)
+  expect_error(
+    cellucid:::.classify_path(copy),
+    "GSE1_cite.h5ad.gz is a gzip-compressed copy of AnnData (.h5ad): it cannot be read in parts. Decompress it (gunzip GSE1_cite.h5ad.gz)",
+    fixed = TRUE
+  )
+  # A format read as one stream names its compressed endings itself.
+  rds <- file.path(folder, "object.rds.gz")
+  saveRDS(list(1), rds)
+  expect_identical(cellucid:::.classify_path(rds)$kind, "rds")
 })
 
 test_that("an h5Seurat file is refused in the registry's words before it is served", {

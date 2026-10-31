@@ -15,3 +15,5 @@
 ^cellucid-logo\.svg$
 ^\.git$
 ^tests/testthat/fixtures/cross_writer_mudata$
+^tests/testthat/_problems$
+^tests/testthat/testthat-problems\.rds$

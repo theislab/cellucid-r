@@ -35,7 +35,7 @@ cellucid_view <- function(
     serve_web_ui = TRUE,
     web_cache_dir = NULL,
     web_source_url = "https://www.cellucid.com",
-    cache_bytes = 268435456,
+    cache_bytes = NULL,
     quiet = FALSE
 ) {
   if (missing(data)) {
@@ -66,7 +66,63 @@ cellucid_view <- function(
   } else {
     .open_pane(viewer, pane, quiet)
   }
+  .release_replaced_viewers(viewer, quiet)
   invisible(viewer)
+}
+
+# The notebook cell running now: its front end's id (JupyterLab, Notebook 7
+# and VS Code send `cellId` with each run) and that run's execution count,
+# from IRkernel's executor on the call stack; NULL outside IRkernel, or where
+# the front end sends no cell id.
+.notebook_run <- function() {
+  if (!.in_jupyter_kernel()) return(NULL)
+  for (frame in rev(sys.frames())) {
+    executor <- tryCatch(get(".self", envir = frame), error = function(error) NULL)
+    if (!inherits(executor, "Executor")) next
+    cell <- executor$current_request$metadata$cellId
+    if (!is.character(cell) || length(cell) != 1L || is.na(cell) || !nzchar(cell)) return(NULL)
+    return(list(cell = cell, count = executor$execution_count))
+  }
+  NULL
+}
+
+# The viewers each notebook cell showed in its last run, by cell id: that
+# run's execution count and the viewers' ids (looked up in the registry, so
+# a stopped viewer is not kept alive here).
+.shown_by_cell <- new.env(parent = emptyenv())
+
+# `viewer` was just shown by cellucid_view(). A cell run again replaces its
+# output: a viewer the cell showed in an earlier run, and no other cell
+# shows, is stopped (its object's matrices and chunk cache released), as
+# cellucid-python stops the widget a re-run cell replaced. Where no cell id
+# is known (a terminal, a console, a front end that sends none), showing a
+# dataset again stops the earlier viewer of the same dataset id, and says so.
+.release_replaced_viewers <- function(viewer, quiet) {
+  run <- .notebook_run()
+  if (is.null(run)) {
+    for (other in cellucid_viewers()) {
+      if (identical(other$viewer_id, viewer$viewer_id) || !isTRUE(other$running)) next
+      if (!identical(other$dataset_id, viewer$dataset_id)) next
+      cellucid_stop(other)
+      if (!isTRUE(quiet)) {
+        .inform("Stopped the earlier viewer of '", viewer$dataset_id, "': cellucid_view() showed it again.")
+      }
+    }
+    return(invisible(NULL))
+  }
+  previous <- if (exists(run$cell, envir = .shown_by_cell, inherits = FALSE)) get(run$cell, envir = .shown_by_cell) else NULL
+  if (!is.null(previous) && identical(previous$count, run$count)) {
+    previous$ids <- c(previous$ids, viewer$viewer_id)
+    assign(run$cell, previous, envir = .shown_by_cell)
+    return(invisible(NULL))
+  }
+  assign(run$cell, list(count = run$count, ids = viewer$viewer_id), envir = .shown_by_cell)
+  if (is.null(previous)) return(invisible(NULL))
+  elsewhere <- unlist(lapply(setdiff(ls(.shown_by_cell), run$cell), function(cell) get(cell, envir = .shown_by_cell)$ids))
+  for (id in setdiff(previous$ids, c(viewer$viewer_id, elsewhere))) {
+    if (exists(id, envir = .viewer_registry, inherits = FALSE)) cellucid_stop(get(id, envir = .viewer_registry))
+  }
+  invisible(NULL)
 }
 
 cellucid_serve <- function(
@@ -78,7 +134,7 @@ cellucid_serve <- function(
     serve_web_ui = TRUE,
     web_cache_dir = NULL,
     web_source_url = "https://www.cellucid.com",
-    cache_bytes = 268435456,
+    cache_bytes = NULL,
     quiet = FALSE
 ) {
   if (missing(data)) {
@@ -102,6 +158,16 @@ cellucid_serve <- function(
     )
   }
   invisible(viewer)
+}
+
+# What one served store keeps of what it makes, by default: a 64th of the
+# machine's memory (.machine_memory_bytes()): at most what the web app gives
+# its decoded chunks (a 32nd of what its working set leaves of half the
+# device, data/memory-budget.js; a 64th of the device when nothing is drawn).
+# cellucid-python's served stores follow the same rule
+# (_served_store.default_cache_bytes()).
+.default_cache_bytes <- function() {
+  floor(.machine_memory_bytes() / 64)
 }
 
 # Hex text of `n_bytes` bytes from the system's cryptographic generator: the
@@ -140,8 +206,9 @@ cellucid_serve <- function(
   host <- .validate_required_string(host, "host")
   allowed_hosts <- .validate_allowed_hosts(allowed_hosts)
   quiet <- .validate_flag(quiet, "quiet")
+  if (is.null(cache_bytes)) cache_bytes <- .default_cache_bytes()
   if (!is.numeric(cache_bytes) || length(cache_bytes) != 1L || is.na(cache_bytes) || cache_bytes < 0) {
-    .abort("cache_bytes must be one non-negative number of bytes.")
+    .abort("cache_bytes must be NULL or one non-negative number of bytes.")
   }
   if (length(extra) > 0L && (is.null(names(extra)) || any(!nzchar(names(extra))))) {
     .abort("Arguments after data must be named, for example latent_key = \"X_pca\".")
@@ -449,8 +516,8 @@ cellucid_serve <- function(
   assign(viewer$viewer_id, viewer, envir = .viewer_registry)
   if (!quiet && !port_given && viewer$port != .default_port) {
     .inform(
-      "Port ", .default_port, " is in use; serving on ", viewer$port, ". Google sign-in ",
-      "(community annotation) works only on port 8765."
+      "Port ", .default_port, " is in use; serving on ", viewer$port, ". Google Drive ",
+      "files open only on port 8765."
     )
   }
   invisible(viewer)
@@ -508,6 +575,11 @@ print.cellucid_viewer <- function(x, ...) {
 cellucid_stop <- function(viewer) {
   .require_viewer(viewer)
   if (isTRUE(viewer$running)) {
+    if (!is.null(viewer$socket)) {
+      # An open page is told to freeze first, as cellucid-python's stop() tells
+      # it: it keeps its last view instead of losing its data source.
+      try(.viewer_send(viewer, list(type = "freeze")), silent = TRUE)
+    }
     viewer$running <- FALSE
     if (!is.null(viewer$socket)) {
       try(viewer$socket$close(.viewer_close_codes[["goingAway"]], "The R session stopped the viewer"), silent = TRUE)
@@ -519,6 +591,9 @@ cellucid_stop <- function(viewer) {
       NULL
     }, error = conditionMessage)
     for (request in names(viewer$session_requests)) viewer$session_requests[[request]] <- NULL
+    # Its matrices' layouts stop now, their scratch files let go.
+    if (!is.null(viewer$store$layouts)) .native_layouts_stop(viewer$store$layouts)
+    if (!is.null(viewer$store)) .backed_release_layouts(viewer$store)
     viewer$store <- NULL
     if (!is.null(failure)) {
       # The server may still hold its port: the viewer stays listed, so

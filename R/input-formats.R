@@ -32,6 +32,18 @@
   Filter(function(entry) identical(entry$id, id), .input_formats()$formats)[[1L]]
 }
 
+# The format a gzip-compressed copy (`x.h5ad.gz`) is a copy of, or NULL: a
+# copy of a file read in parts, as the web app's registry tells it
+# (`compressedFormatOfName`); a format read as one stream names its
+# compressed endings itself (`.rds.gz`).
+.compressed_copy_of <- function(name) {
+  if (!endsWith(tolower(name), ".gz")) return(NULL)
+  named <- .format_of_name(substr(name, 1L, nchar(name) - 3L), c("file", "zip"))
+  if (is.null(named)) return(NULL)
+  entry <- .format_entry(named$id)
+  if (identical(entry$access, "ranges")) entry else NULL
+}
+
 # The format and layout of the longest name ending `name` ends with.
 .format_of_name <- function(name, layouts) {
   lower <- tolower(name)
@@ -100,6 +112,16 @@
     readBin(connection, "raw", n = 2056L)
   })
   sniffed <- .signature_of_head(head)
+  compressed <- if (is.null(named) && is.null(sniffed)) .compressed_copy_of(basename(resolved)) else NULL
+  if (!is.null(compressed)) {
+    # The browser reads a served file in parts; a gzip stream has none.
+    .abort(
+      basename(resolved), " is a gzip-compressed copy of ", compressed$label, ": it cannot be ",
+      "read in parts. Decompress it (gunzip ", basename(resolved), ") and serve the ",
+      "decompressed file. The web app opens the compressed copy itself, from a ",
+      "link or from this computer, reading it whole once."
+    )
+  }
   if (is.null(named) && is.null(sniffed)) {
     .abort(
       "A file Cellucid opens is one of ", .file_endings(), "; ", basename(resolved),

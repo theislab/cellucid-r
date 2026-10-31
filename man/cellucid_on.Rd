@@ -33,7 +33,11 @@ made or changed, as \code{\link{cellucid_results}()} lists them),
 \code{"result_removed"}, \code{"results"} (every result the viewer holds) and
 \code{"color_by"} (the field it colours by: \code{field}, a gene by its
 identifier, the var index; \code{source}, \code{"obs"} or \code{"var"};
-and \code{label}, the name the viewer shows for it). A command the viewer
+\code{symbol}, the name the viewer shows for a gene when it differs from
+its identifier, else \code{NULL}; and \code{cells_read}, for a gene read
+for a sample of the open cells of a large dataset stored cell by cell, how
+many of them it is read for, the first in their order, else \code{NULL};
+sent again when that grows). A command the viewer
 refused, or one that waited for the viewer and could not be built once it
 could, arrives as \code{"command_error"}; with no handler for it, R warns.
 For \code{cellucid_off()},

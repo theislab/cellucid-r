@@ -16,8 +16,28 @@
 # thread: while a cell runs, the viewer waits, and a cell cannot wait for the
 # viewer's answer (.wait_for() says so at once). An httpuv server is no help
 # here: IRkernel never runs R's event loop between cells, so it would answer
-# nothing at all. IRkernel's comms carry no binary buffers, so bodies travel
-# as base64 text.
+# nothing at all.
+#
+# Bodies and the channel's binary frames go to the page as the binary buffers
+# of a Jupyter message (frames after its content, outside its JSON and its
+# signature), as the Python kernel sends them: IRkernel's own send writes no
+# buffers, so such a message is made with the kernel's reply and wire
+# functions, as comm_open is (.kernel_comms()). Measured on one 1 MiB body,
+# base64 and its JSON took 17.6 ms of R's one thread (60 MB/s); its buffer,
+# 0.3 ms. IRkernel's reader drops the buffers of a message it receives, so
+# the page's binary frames to R (selections, results, a session bundle) come
+# as base64 text (the widget's `_binary` trait).
+#
+# IRkernel answers one message at a time, and each costs it about 1.7 ms of
+# its own (the message read and checked, a busy and an idle status written)
+# before any of ours: 450 requests in 450 messages took 1.28 s, in 15 messages
+# 0.27 s. The widget so takes at most `.widget_fetch_messages` fetch messages
+# of the page at once (the `_fetch_messages` trait): while they are answered,
+# the page's next requests gather into the next message, so a burst goes in a
+# few large messages and a lone request at once. (The Python kernel answers a
+# message's requests on threads, as they come: it takes every message.) The
+# answers' JSON is written here in one pass (.widget_answers_json()), where
+# jsonlite's writer walked each answer's list.
 
 # The widget protocol the notebook's widget manager speaks (ipywidgets 8).
 .widget_protocol_version <- "2.1.0"
@@ -30,6 +50,10 @@
 # front end's PIECE_BYTES); answers are sent in messages of at most this many
 # body bytes, a message's shape and not a limit on what is read.
 .widget_answer_message_bytes <- 8388608
+
+# Fetch messages of the page the widget has with R at once: one answered and
+# one waiting behind it, so R never waits for the page between two.
+.widget_fetch_messages <- 2L
 
 .in_jupyter_kernel <- function() isTRUE(getOption("jupyter.in_kernel"))
 
@@ -58,7 +82,7 @@
 }
 
 # The kernel's comms: IRkernel's comm manager, or a test's stand-in with the
-# same three functions.
+# same three functions (send takes the message's binary buffers, raw vectors).
 .kernel_comms <- function() {
   for (package in c("IRkernel", "IRdisplay")) {
     if (!requireNamespace(package, quietly = TRUE)) {
@@ -85,9 +109,47 @@
       send_multipart(kernel$sockets$iopub, kernel$msg_to_wire(message), serialize = FALSE)
       invisible(comm)
     },
-    send = function(comm_id, data) manager$send_msg(comm_id, "jupyter.widget", data),
+    send = function(comm_id, data, buffers = list()) {
+      if (length(buffers) == 0L && !inherits(data, "json")) return(manager$send_msg(comm_id, "jupyter.widget", data))
+      parent <- manager$parent_request %||% kernel$executor$current_request
+      send_multipart(kernel$sockets$iopub, .comm_msg_parts(kernel, parent, comm_id, data, buffers), serialize = FALSE)
+    },
     display = function(bundle, metadata) IRdisplay::publish_mimebundle(bundle, metadata)
   )
+}
+
+# A comm_msg with binary buffers, as the frames of the Jupyter wire protocol:
+# its four parts as the kernel writes them (`msg_to_wire`: identities, the
+# delimiter, the signature of the four, then header, parent header, metadata
+# and content), then each buffer (a raw vector) as a frame of its own,
+# outside the JSON and the signature. `data` is a list, or JSON already
+# written (class "json"), placed in the content as it is.
+.comm_msg_parts <- function(kernel, parent, comm_id, data, buffers) {
+  message <- kernel$new_reply("comm_msg", parent)
+  content <- if (inherits(data, "json")) {
+    paste0("{\"comm_id\":", .json_strings(comm_id), ",\"data\":", data, "}")
+  } else {
+    jsonlite::toJSON(list(comm_id = comm_id, data = data), auto_unbox = TRUE)
+  }
+  parts <- list(
+    charToRaw(jsonlite::toJSON(message$header, auto_unbox = TRUE)),
+    charToRaw(jsonlite::toJSON(message$parent_header, auto_unbox = TRUE)),
+    charToRaw(jsonlite::toJSON(message$metadata, auto_unbox = TRUE)),
+    charToRaw(enc2utf8(as.character(content)))
+  )
+  c(message$identities, list(charToRaw("<IDS|MSG>"), charToRaw(kernel$sign_msg(parts))), parts, buffers)
+}
+
+# Strings as JSON string literals, each in one pass: a string with no quote,
+# backslash or control character is itself in quotes (every path, header and
+# view name the widget sends); any other is written by jsonlite.
+.json_strings <- function(x) {
+  if (length(x) == 0L) return(character())
+  x <- enc2utf8(as.character(x))
+  out <- paste0("\"", x, "\"")
+  escaped <- grepl("[\"\\\\[:cntrl:]]", x)
+  if (any(escaped)) out[escaped] <- vapply(x[escaped], function(one) as.character(jsonlite::toJSON(one, auto_unbox = TRUE)), "")
+  out
 }
 
 .widget_file <- function(name) {
@@ -119,7 +181,13 @@
   widget <- new.env(parent = emptyenv())
   widget$model_id <- model_id
   widget$sockets <- list()
-  widget$send <- function(content) comms$send(model_id, list(method = "custom", content = content))
+  widget$send <- function(content, buffers = list()) {
+    comms$send(model_id, list(method = "custom", content = content), buffers)
+  }
+  # A custom message whose content is JSON already written.
+  widget$send_json <- function(content, buffers = list()) {
+    comms$send(model_id, structure(paste0("{\"method\":\"custom\",\"content\":", content, "}"), class = "json"), buffers)
+  }
   viewer$widget <- widget
   state <- list(
     `_anywidget_id` = "cellucid.Widget",
@@ -133,6 +201,7 @@
     `_view_module_version` = .widget_module_version,
     `_view_name` = "AnyView",
     `_binary` = "base64",
+    `_fetch_messages` = .widget_fetch_messages,
     height = as.integer(height),
     web_source_url = web_source_url,
     layout = paste0("IPY_MODEL_", layout_id)
@@ -228,11 +297,11 @@
   ws$onClose <- function(handler) ws$close_handler <- handler
   ws$send <- function(frame) {
     if (ws$closed) .abort("The viewer's channel is closed.")
-    widget$send(if (is.raw(frame)) {
-      list(t = "binary", v = view, s = socket_id, b64 = jsonlite::base64_enc(frame))
+    if (is.raw(frame)) {
+      widget$send(list(t = "binary", v = view, s = socket_id), list(frame))
     } else {
-      list(t = "text", v = view, s = socket_id, text = frame)
-    })
+      widget$send(list(t = "text", v = view, s = socket_id, text = frame))
+    }
   }
   ws$close <- function(code = 1000L, reason = "") {
     if (ws$closed) return(invisible(NULL))
@@ -253,45 +322,85 @@
 }
 
 # The page's requests, as IRkernel hands them over: a data frame (its JSON
-# reader simplifies an array of objects) or a list of records.
+# reader simplifies an array of objects), read by its columns, or a list of
+# records.
 .widget_requests <- function(requests) {
   if (is.data.frame(requests)) {
-    return(lapply(seq_len(nrow(requests)), function(row) as.list(requests[row, , drop = FALSE])))
+    return(lapply(seq_len(nrow(requests)), function(row) {
+      list(id = requests$id[[row]], method = requests$method[[row]], path = requests$path[[row]], range = requests$range[[row]])
+    }))
   }
   if (is.list(requests)) requests else list()
 }
 
-# Answer the page's requests from the routes of the viewer's server.
+# Answer the page's requests from the routes of the viewer's server, several
+# bodies to a message, each body one of its binary buffers (`buffer`: its
+# index, -1 for none).
 .widget_answer <- function(viewer, view, requests) {
   widget <- viewer$widget
-  answers <- list()
+  answers <- character()
+  bodies <- list()
   size <- 0
-  flush <- function() {
-    if (length(answers) > 0L) widget$send(list(t = "answers", v = view, answers = answers))
-    answers <<- list()
-    size <<- 0
-  }
   for (request in .widget_requests(requests)) {
     response <- .widget_route(viewer, request)
     body <- response$body
-    if (length(body) > 0L && size > 0 && size + length(body) > .widget_answer_message_bytes) flush()
-    answers[[length(answers) + 1L]] <- list(
-      id = request$id, status = as.integer(response$status),
-      headers = .widget_headers(response$headers), b64 = jsonlite::base64_enc(body)
-    )
-    size <- size + length(body)
+    if (length(body) > 0L && size > 0 && size + length(body) > .widget_answer_message_bytes) {
+      .widget_send_answers(widget, view, answers, bodies)
+      answers <- character()
+      bodies <- list()
+      size <- 0
+    }
+    buffer <- -1L
+    if (length(body) > 0L) {
+      bodies[[length(bodies) + 1L]] <- body
+      buffer <- length(bodies) - 1L
+      size <- size + length(body)
+    }
+    answers[[length(answers) + 1L]] <- .widget_answer_json(request$id, response$status, response$headers, buffer)
   }
-  flush()
+  if (length(answers) > 0L) .widget_send_answers(widget, view, answers, bodies)
 }
 
-.widget_headers <- function(headers) {
-  out <- list()
-  for (name in names(headers)) out[[name]] <- as.character(headers[[name]])
-  out
+# One answer as JSON: the request's id, the status, the headers (strings) and
+# its buffer.
+.widget_answer_json <- function(id, status, headers, buffer) {
+  fields <- if (length(headers) == 0L) "" else {
+    values <- vapply(headers, function(value) paste(as.character(value), collapse = ", "), "")
+    paste0(.json_strings(names(headers)), ":", .json_strings(values), collapse = ",")
+  }
+  paste0(
+    "{\"id\":", if (is.numeric(id)) sprintf("%.0f", id) else .json_strings(id),
+    ",\"status\":", as.integer(status),
+    ",\"headers\":{", fields, "}",
+    ",\"buffer\":", buffer, "}"
+  )
 }
 
-# One request answered as the HTTP server answers it, with the body read whole.
+.widget_send_answers <- function(widget, view, answers, bodies) {
+  widget$send_json(paste0("{\"t\":\"answers\",\"v\":", .json_strings(view), ",\"answers\":[", paste(answers, collapse = ","), "]}"), bodies)
+}
+
+# One request answered as the HTTP server answers it, with the body read whole
+# as raw bytes (a message's buffer), whatever answered it.
 .widget_route <- function(viewer, request) {
+  response <- .widget_response(viewer, request)
+  body <- response$body
+  if (is.list(body)) {
+    # A file the HTTP server would stream from disk (removed after, when owned).
+    file <- body$file
+    bytes <- readBin(file, "raw", n = file.info(file)$size)
+    if (isTRUE(body$owned)) unlink(file)
+    body <- bytes
+  } else if (is.character(body)) {
+    body <- charToRaw(enc2utf8(paste(body, collapse = "")))
+  }
+  if (identical(request$method, "HEAD")) body <- raw(0)
+  response$body <- body
+  response
+}
+
+# The routes' answer to one request, its body as the HTTP server holds it.
+.widget_response <- function(viewer, request) {
   if (!isTRUE(viewer$running)) return(.text_response(410L, "The viewer was stopped"))
   method <- request$method
   path <- request$path
@@ -306,21 +415,8 @@
     QUERY_STRING = if (length(parts) > 1L) parts[[2L]] else "",
     HTTP_RANGE = if (is.character(range) && length(range) == 1L && !is.na(range)) range
   )
-  response <- tryCatch(.route(viewer, req), error = function(error) {
+  tryCatch(.route(viewer, req), error = function(error) {
     .inform("Cellucid viewer: a request for ", req$PATH_INFO, " failed: ", conditionMessage(error))
     .text_response(500L, "Internal server error")
   })
-  body <- response$body
-  if (is.list(body)) {
-    # A file the HTTP server would stream from disk (removed after, when owned).
-    file <- body$file
-    bytes <- readBin(file, "raw", n = file.info(file)$size)
-    if (isTRUE(body$owned)) unlink(file)
-    body <- bytes
-  } else if (is.character(body)) {
-    body <- charToRaw(enc2utf8(paste(body, collapse = "")))
-  }
-  if (identical(method, "HEAD")) body <- raw(0)
-  response$body <- body
-  response
 }

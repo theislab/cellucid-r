@@ -13,12 +13,14 @@
 # high bytes of neighbouring values compress together; the expression values
 # (X's data, a dense X) are not, because deflate finds their repeated values
 # only unshuffled (shuffled, real expression data grew 14-45%). Every chunk is
-# compressed with DEFLATE level 6 (zlib's default): base R's
-# memCompress(type = "gzip") produces a zlib stream (RFC 1950: a 0x78 header,
-# deflate data, an Adler-32 trailer), what numcodecs' Zlib codec writes (the
-# same bytes wherever R and Python link a zlib that deflates alike; zlib 1.3.2
+# compressed with DEFLATE level 6 (zlib's default) into a zlib stream (RFC
+# 1950: a 0x78 header, deflate data, an Adler-32 trailer) by the zlib this
+# package links, a batch of chunks at a time on every core (src/deflate.c;
+# each chunk alone, so the bytes never depend on the number of cores): what
+# base R's memCompress(type = "gzip") and numcodecs' Zlib codec write (the
+# same bytes wherever they link a zlib that deflates alike; zlib 1.3.2
 # deflates some inputs differently from 1.2.12, so the writers are compared by
-# metadata and values). Format 2 declares numcodecs' Shuffle filter {"id":
+# metadata and values, and a chunk by its bytes once inflated). Format 2 declares numcodecs' Shuffle filter {"id":
 # "shuffle", "elementsize": n} (a format 2 filter is any numcodecs codec) and
 # the compressor {"id": "zlib", "level": 6}. Format 3 has no shuffle codec of
 # its own (numcodecs.shuffle is outside its specification), so a shuffled
@@ -45,13 +47,16 @@
 # bytes and writes them (cellucid_prepare()); the memory backend keeps the
 # functions and calls one when its key is asked for, so a served store holds
 # exactly the values cellucid_prepare() writes, in the same arrays and chunks
-# (tests/testthat/test-served-store.R reads every array of both and compares
-# them, dtype, shape and values). A chunk is made from its R vector in one
+# but for an expression matrix's entries, which it chunks for loopback
+# (.chunk_elements_served) and lays out once in the background
+# (expression-input.R, .laid_out_arrays()) (tests/testthat/test-served-store.R
+# reads every array of both and compares them, dtype, shape and values); a
+# Range of one of its chunks is made alone (.store_body()). A chunk is made from its R vector in one
 # pass (src/chunks.c), straight into the vector the server answers with; R
 # gives no raw vector that shares an integer or double vector's memory, so
 # that one copy is the least a chunk can cost. Only chunks made by a
-# transform (text, a dense matrix's block, a sparse matrix's gene-major
-# block) are kept, in the store's least-recently-used cache.
+# transform (text, a dense matrix's block) are kept, in the store's
+# least-recently-used cache.
 
 .deflate_level <- 6L
 
@@ -70,6 +75,31 @@
 .chunk_elements_whole <- 262144
 .chunk_elements_cell <- 65536
 .chunk_elements_sliced <- 16384
+
+# A served store (held in memory) chunks the data and indices of its
+# expression matrices in 2^18 values (1 MiB of float32): a request on this
+# machine costs a fixed time whatever its length, at both ends -- measured on
+# an Apple M1 Pro over loopback, six connections: these handlers on R's thread
+# answer about 1,600 requests a second (0.6 ms each), cellucid-python's
+# http.server about 4,700, and a browser's fetch from a worker moves 46-79
+# MB/s in requests of 64 KiB (Chromium, Firefox, WebKit), 300-510 MB/s in
+# requests of 1 MiB and no more in larger ones -- so at 2^14 values a chunk a
+# pass over a matrix (an analysis, many genes) was bound by requests. 2^18
+# values is the least at which every engine's loopback rate has reached its
+# plateau. The viewer reads a served chunk in part (it is stored uncompressed: a
+# Range of one is only those bytes, made alone, .store_body()), so a gene, or
+# a subsample's first entries of one, reads no more than with smaller chunks.
+# A scheduling choice, measured; cellucid-python's served stores use the same
+# (SERVED_ENTRY_CHUNK_ELEMENTS in _served_store.py). A written store keeps
+# .chunk_elements_sliced: its chunks are compressed, and a chunk is the least
+# a reader of it decodes.
+.chunk_elements_served <- 262144
+
+# The values one chunk of an expression matrix's data and indices holds in
+# `store`: a served store's (held in memory), else a written one's.
+.sliced_chunk_elements <- function(store) {
+  if (isTRUE(store$memory)) .chunk_elements_served else .chunk_elements_sliced
+}
 
 # --- JSON -------------------------------------------------------------------
 
@@ -103,6 +133,9 @@
   store$metadata_keys <- character()
   store$metadata_texts <- character()
   store$root_attrs <- .json_object()
+  # Chunks made and not yet compressed (.zarr_put_chunk()), and their bytes.
+  store$pending <- list()
+  store$pending_bytes <- 0
   if (zip) {
     store$connection <- file(path, open = "wb")
     store$offset <- 0
@@ -130,25 +163,60 @@
   store$root_attrs <- .json_object()
   store$entries <- new.env(parent = emptyenv(), hash = TRUE)
   store$keys <- character()
+  # The expression matrices laid out in the background (.laid_out_arrays()).
+  store$layout_jobs <- list()
+  store$layout_labels <- character()
   store
 }
 
-# The bytes of one key of a memory store, or NULL for a key it does not
-# hold. A chunk that is a slice of its vector is made on each request: making
-# it is one copy at memory speed, and keeping it would hold a second copy of
-# the data. A chunk made by a transform is kept in the store's cache. The
-# entries are keyed by .symbol_keys(): a key names an obs column, which may
-# hold any character.
-.store_get <- function(store, key) {
+# One key of a memory store as a server answers it -- its length, and its
+# bytes [start, end) made when asked (`read`) -- or NULL for a key it does
+# not hold. A chunk that is a slice of its vector (.ranged()) is made on each
+# request, and only the values a range of it covers: making it is one copy at
+# memory speed, and keeping it would hold a second copy of the data; a Range
+# of a served chunk (a gene, a subsample's first entries of one) makes those
+# bytes alone. A chunk made by a transform is made whole and kept in the
+# store's cache. The entries are keyed by .symbol_keys(): a key names an obs
+# column, which may hold any character.
+.store_body <- function(store, key) {
   value <- get0(.symbol_keys(key), envir = store$entries, inherits = FALSE)
-  if (!is.function(value)) return(value)
-  if (isTRUE(attr(value, "transform"))) .cached(store$cache, key, value) else value()
+  if (is.null(value)) return(NULL)
+  item <- attr(value, "item")
+  if (is.function(value) && !is.null(item)) {
+    return(list(size = attr(value, "elements") * item, read = function(start, end) {
+      from <- start %/% item
+      to <- ceiling(end / item)
+      bytes <- value(from, to)
+      if (start == from * item && end == to * item) bytes else .native_raw_slice(bytes, start - from * item, end - start, end - start)
+    }))
+  }
+  .raw_body(if (!is.function(value)) value else if (isTRUE(attr(value, "transform"))) .cached(store$cache, key, value) else value())
+}
+
+# Bytes held whole, as a body (.store_body()).
+.raw_body <- function(bytes) {
+  list(size = length(bytes), read = function(start, end) {
+    if (start == 0 && end == length(bytes)) bytes else .native_raw_slice(bytes, start, end - start, end - start)
+  })
+}
+
+# One key of a memory store whole (.store_body()), or NULL.
+.store_get <- function(store, key) {
+  body <- .store_body(store, key)
+  if (is.null(body)) NULL else body$read(0, body$size)
+}
+
+# A chunk of a vector whose values [from, to) (offsets in the chunk; the
+# whole chunk by default) `make(from, to)` makes alone, padded to `to - from`:
+# a slice of a numeric vector or of a gene-major array, `elements` values of
+# `item` bytes a chunk (.store_body()).
+.ranged <- function(make, elements, item) {
+  structure(make, elements = elements, item = item)
 }
 
 # Bytes made by a transform, kept least recently used first out within
-# `budget` bytes: a chunk of text, a dense matrix's block, a sparse matrix's
-# gene-major block (expression-input.R). Bytes larger than the budget are
-# made each time and not kept.
+# `budget` bytes: a chunk of text, a dense matrix's block. Bytes larger than
+# the budget are made each time and not kept.
 .chunk_cache <- function(budget) {
   cache <- new.env(parent = emptyenv())
   cache$budget <- budget
@@ -160,8 +228,7 @@
   cache
 }
 
-# What `make()` returns for `key`, from the cache when it is there.
-# `make()` returns a raw vector, or a list of raw vectors (a gene-major block).
+# What `make()` returns for `key` (a raw vector), from the cache when it is there.
 .cached <- function(cache, key, make) {
   key <- .symbol_keys(key)
   cache$clock <- cache$clock + 1
@@ -171,7 +238,7 @@
     return(hit)
   }
   value <- make()
-  size <- if (is.list(value)) sum(lengths(value)) else length(value)
+  size <- length(value)
   if (size > cache$budget) return(value)
   while (cache$used + size > cache$budget && length(cache$sizes) > 0L) {
     oldest <- names(cache$touched)[[which.min(cache$touched)]]
@@ -194,6 +261,9 @@
 # vector, or for a memory store a function returning one (a chunk), which it
 # keeps.
 .store_put <- function(store, key, bytes) {
+  # Chunks still to be compressed go first, so a ZIP holds every entry in the
+  # order it was put.
+  if (length(store$pending) > 0L) .store_flush(store)
   if (store$memory) {
     slot <- .symbol_keys(key)
     if (!exists(slot, envir = store$entries, inherits = FALSE)) {
@@ -231,6 +301,7 @@
 # archive's last entry, read together with the central directory when the
 # archive opens.
 .store_close <- function(store) {
+  .store_flush(store)
   if (store$zip) {
     # The documents of the root group last, after every nested one.
     deferred <- store$deferred
@@ -265,6 +336,7 @@
     close(store$connection)
     store$connection <- NULL
   }
+  if (isTRUE(store$memory) && length(store$layout_jobs) > 0L) .layouts_start(store)
   invisible(NULL)
 }
 
@@ -281,6 +353,7 @@
 }
 
 .store_abort <- function(store) {
+  store$pending <- list()
   if (isTRUE(store$zip) && !is.null(store$connection)) {
     close(store$connection)
     store$connection <- NULL
@@ -445,11 +518,30 @@
   as.vector(t(matrix(bytes, nrow = item_size)))
 }
 
+# A written store's chunks are compressed a batch at a time, every chunk of
+# the batch on its own core (src/deflate.c): about this many uncompressed
+# bytes, a scheduling choice that keeps a batch small beside the data, not a
+# limit on it. Each chunk's bytes are what compressing it alone gives,
+# whatever the number of cores.
+.deflate_batch_bytes <- 64 * 2^20
+
+# The threads a written store compresses its chunks on: every core, as
+# cellucid-python's writer uses every core; at most two under R CMD check,
+# as CRAN's policy asks of a check (_R_CHECK_LIMIT_CORES_).
+.deflate_threads <- function() {
+  threads <- suppressWarnings(parallel::detectCores())
+  if (!is.numeric(threads) || length(threads) != 1L || is.na(threads) || threads < 1) threads <- 1L
+  limit <- Sys.getenv("_R_CHECK_LIMIT_CORES_", "")
+  if (nzchar(limit) && !identical(tolower(limit), "false")) threads <- min(threads, 2L)
+  as.integer(threads)
+}
+
 # DEFLATE in the framing the store's format declares: zlib (format 2) or gzip
 # (format 3; header with no name and modification time 0, then the CRC-32 and
-# size of the uncompressed bytes, both little-endian).
-.deflate_chunk <- function(store, bytes) {
-  zlib <- memCompress(bytes, type = "gzip")
+# size of the uncompressed bytes, both little-endian). `bytes` is the chunk,
+# `zlib` its zlib stream (src/deflate.c, what memCompress(type = "gzip")
+# makes).
+.framed <- function(store, bytes, zlib) {
   if (store$zarr_format == 2L) return(zlib)
   deflate <- zlib[3:(length(zlib) - 4L)]
   c(
@@ -487,15 +579,18 @@
 # (cname zlib, clevel 6, byte shuffle, automatic block size), the frame
 # c-blosc writes compressing in one thread, as numcodecs does under
 # zarr-python -- the same header, blocks and streams, each stream deflated by
-# the zlib R links: a 16-byte header (format 2, zlib format 1, flags, value size,
-# then the byte size, block size and frame size as little-endian uint32), the
-# start of every block, and each block shuffled and cut into one stream per
-# byte of a value (a single stream for a last, shorter block), each stream a
-# 4-byte length and its zlib data, or the stream as it is when zlib gains
-# nothing. A buffer under 128 bytes, or one whose streams would outgrow it,
-# is copied whole after the header instead. The flags: byte shuffle (0x01),
-# a whole copy (0x02), no split (0x10), zlib (3 << 5).
-.blosc_frame <- function(bytes, item_size) {
+# the zlib this package links: a 16-byte header (format 2, zlib format 1,
+# flags, value size, then the byte size, block size and frame size as
+# little-endian uint32), the start of every block, and each block shuffled and
+# cut into one stream per byte of a value (a single stream for a last, shorter
+# block), each stream a 4-byte length and its zlib data, or the stream as it
+# is when zlib gains nothing. A buffer under 128 bytes, or one whose streams
+# would outgrow it, is copied whole after the header instead. The flags: byte
+# shuffle (0x01), a whole copy (0x02), no split (0x10), zlib (3 << 5).
+#
+# In two steps, so the streams of many frames are deflated together: the
+# planes to deflate, then `finish(packed)` of their zlib streams, in order.
+.blosc_planes <- function(bytes, item_size) {
   n_bytes <- length(bytes)
   block <- .blosc_block_size(n_bytes, item_size)
   split <- .blosc_splits(item_size, block)
@@ -507,46 +602,59 @@
     )
   }
   whole_copy <- function() c(header(flags + 0x02, n_bytes + 16), bytes)
-  if (n_bytes < 128) return(whole_copy())
+  if (n_bytes < 128) return(list(planes = list(), finish = function(packed) whole_copy()))
   n_blocks <- ceiling(n_bytes / block)
-  limit <- n_bytes + 16
-  written <- 16 + 4 * n_blocks
-  starts <- numeric(n_blocks)
-  body <- vector("list", n_blocks)
+  planes <- list()
   for (index in seq_len(n_blocks)) {
-    starts[[index]] <- written
     first <- (index - 1) * block
     size <- min(block, n_bytes - first)
     shuffled <- .shuffle_bytes(bytes[first + seq_len(size)], item_size)
     n_streams <- if (split && size == block) item_size else 1L
     each <- size / n_streams
-    streams <- vector("list", n_streams)
-    for (stream in seq_len(n_streams)) {
-      written <- written + 4
-      room <- min(each, limit - written)
-      if (room <= 0) return(whole_copy())
-      plane <- shuffled[(stream - 1) * each + seq_len(each)]
-      packed <- memCompress(plane, type = "gzip")
-      if (length(packed) > room || length(packed) == each) {
-        if (written + each > limit) return(whole_copy())
-        packed <- plane
-      }
-      streams[[stream]] <- c(.zip_le(length(packed), 4), packed)
-      written <- written + length(packed)
-    }
-    body[[index]] <- unlist(streams, use.names = FALSE)
+    for (stream in seq_len(n_streams)) planes[[length(planes) + 1L]] <- shuffled[(stream - 1) * each + seq_len(each)]
   }
-  c(
-    header(flags, written),
-    unlist(lapply(starts, .zip_le, bytes = 4), use.names = FALSE),
-    unlist(body, use.names = FALSE)
-  )
+  finish <- function(packed) {
+    limit <- n_bytes + 16
+    written <- 16 + 4 * n_blocks
+    starts <- numeric(n_blocks)
+    body <- vector("list", n_blocks)
+    at <- 0L
+    for (index in seq_len(n_blocks)) {
+      starts[[index]] <- written
+      first <- (index - 1) * block
+      size <- min(block, n_bytes - first)
+      n_streams <- if (split && size == block) item_size else 1L
+      each <- size / n_streams
+      streams <- vector("list", n_streams)
+      for (stream in seq_len(n_streams)) {
+        at <- at + 1L
+        written <- written + 4
+        room <- min(each, limit - written)
+        if (room <= 0) return(whole_copy())
+        stored <- packed[[at]]
+        if (length(stored) > room || length(stored) == each) {
+          if (written + each > limit) return(whole_copy())
+          stored <- planes[[at]]
+        }
+        streams[[stream]] <- c(.zip_le(length(stored), 4), stored)
+        written <- written + length(stored)
+      }
+      body[[index]] <- unlist(streams, use.names = FALSE)
+    }
+    c(
+      header(flags, written),
+      unlist(lapply(starts, .zip_le, bytes = 4), use.names = FALSE),
+      unlist(body, use.names = FALSE)
+    )
+  }
+  list(planes = planes, finish = finish)
 }
 
 # One chunk: `values` is a function returning the chunk's little-endian
-# bytes. A written store calls it now and compresses them; a memory store
-# keeps it, marked `transform` when its bytes are made by more than a slice
-# of a vector (they are then kept in the store's cache, .store_get()).
+# bytes. A written store calls it now and holds its bytes until a batch of
+# them is compressed (.store_flush()); a memory store keeps the function,
+# marked `transform` when its bytes are made by more than a slice of a vector
+# (they are then kept in the store's cache, .store_get()).
 .zarr_put_chunk <- function(store, path, position, values, dtype, shuffle = TRUE, transform = FALSE) {
   key <- .zarr_key(path, .zarr_chunk_key(store, position))
   if (!store$compressed) {
@@ -554,13 +662,36 @@
     return(.store_put(store, key, values))
   }
   item_size <- .zarr_shuffle_size(store, dtype, shuffle)
-  blosc <- store$zarr_format == 3L && item_size > 0L
   bytes <- values()
-  .store_put(store, key, if (blosc) {
-    .blosc_frame(bytes, item_size)
+  pending <- if (store$zarr_format == 3L && item_size > 0L) {
+    .blosc_planes(bytes, item_size)
   } else {
-    .deflate_chunk(store, .shuffle_bytes(bytes, item_size))
-  })
+    shuffled <- .shuffle_bytes(bytes, item_size)
+    list(planes = list(shuffled), finish = function(packed) .framed(store, shuffled, packed[[1L]]))
+  }
+  pending$key <- key
+  store$pending[[length(store$pending) + 1L]] <- pending
+  store$pending_bytes <- store$pending_bytes + length(bytes)
+  if (store$pending_bytes >= .deflate_batch_bytes) .store_flush(store)
+  invisible(NULL)
+}
+
+# Compress the chunks held (.zarr_put_chunk()), every plane on its own core,
+# and put each in the order it was made.
+.store_flush <- function(store) {
+  pending <- store$pending
+  if (length(pending) == 0L) return(invisible(NULL))
+  store$pending <- list()
+  store$pending_bytes <- 0
+  planes <- unlist(lapply(pending, `[[`, "planes"), recursive = FALSE)
+  packed <- .native_deflate_chunks(planes, .deflate_level, .deflate_threads())
+  at <- 0L
+  for (entry in pending) {
+    count <- length(entry$planes)
+    .store_put(store, entry$key, entry$finish(packed[at + seq_len(count)]))
+    at <- at + count
+  }
+  invisible(NULL)
 }
 
 # --- Values computed when a chunk needs them ---------------------------------
@@ -578,7 +709,10 @@
 
 # A sparse matrix's gene-major array (its data or its indices) made block by
 # block from a genes x cells matrix (expression-input.R): `chunk(first,
-# count, chunk_length)` returns one chunk's bytes.
+# count, chunk_length, chunk_first =, chunk_last =)` returns positions
+# first .. first + count - 1 padded to `chunk_length` values, of the chunk
+# holding positions chunk_first .. chunk_last (a source that makes a chunk
+# whole keeps it for the chunk's other ranges).
 .is_chunked <- function(values) inherits(values, "cellucid_chunked")
 
 .value_length <- function(values) {
@@ -680,19 +814,24 @@
     return(invisible(NULL))
   }
   text <- identical(dtype, "|O")
+  item <- if (text) NULL else .zarr_item_size(dtype)
   chunk_values <- function(first, last) {
     force(first)
     force(last)
-    if (.is_chunked(values)) {
-      return(function() values$chunk(first, last - first + 1, chunk))
-    }
     if (text) {
       return(function() {
         part <- .realize(values)[first:last]
         .encode_vlen_utf8(c(part, rep("", chunk - length(part))))
       })
     }
-    function() .native_encode_values(.realize(values), first, last - first + 1, chunk, dtype)
+    # Values [from, to) of the chunk: those of the vector, then the padding.
+    .ranged(function(from = 0, to = chunk) {
+      count <- max(0, min(last, first + to - 1) - (first + from) + 1)
+      if (count == 0) return(raw((to - from) * item))
+      # The chunk's own positions too: a source that makes a chunk whole keeps it for its other ranges.
+      if (.is_chunked(values)) return(values$chunk(first + from, count, to - from, chunk_first = first, chunk_last = last))
+      .native_encode_values(.realize(values), first + from, count, to - from, dtype)
+    }, chunk, item)
   }
   n_chunks <- ceiling(n / chunk)
   for (index in seq_len(n_chunks)) {

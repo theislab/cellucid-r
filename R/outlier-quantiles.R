@@ -16,7 +16,10 @@
 # factor, a character column (stored as a categorical or as text), a logical
 # column with or without NA -- partitioned by its values (NA belongs to no
 # category). A column none of whose categories reaches `min_points` cells
-# gets no entry; a numeric column never does.
+# gets no entry; a numeric column never does. A cell whose latent row is not
+# finite (NaN: a latent space computed on some of the cells) has no place in
+# the latent space: it belongs to no category, as a missing value does, and
+# gets no quantile.
 
 # The fewest cells a category needs for its cells to get outlier quantiles,
 # unless centroid_min_points says otherwise; the web app's default too.
@@ -52,11 +55,12 @@
 # obs column order.
 .stored_outlier_quantiles <- function(obs, latent_key, latent, min_points) {
   fields <- list()
+  placed <- rowSums(!is.finite(latent)) == 0L
   for (column in names(obs)) {
     partition <- .outlier_partition(obs[[column]])
     if (is.null(partition)) next
     codes <- partition$codes
-    counts <- tabulate(codes[!is.na(codes)] + 1L, nbins = partition$n_categories)
+    counts <- tabulate(codes[placed & !is.na(codes)] + 1L, nbins = partition$n_categories)
     if (!any(counts >= min_points)) next
     fields[[column]] <- .uns_cell_floats32(.native_latent_outlier_quantiles(
       latent, codes, partition$n_categories, min_points

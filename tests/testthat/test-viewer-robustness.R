@@ -45,7 +45,7 @@ test_that("a HEAD answer carries the Content-Length of the GET", {
   expect_identical(as.numeric(head$headers[["content-length"]]), as.numeric(length(asset$body)))
 })
 
-test_that("a file's range is read block by block, never whole, and a HEAD sizes it", {
+test_that("a file's range is read with its version from one open, and a HEAD sizes it", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(file.path(tempfile(), "f.zarr.zip"))
   args$format <- "zarr.zip"
@@ -55,10 +55,8 @@ test_that("a file's range is read block by block, never whole, and a HEAD sizes 
   bytes <- readBin(zip, "raw", file.size(zip))
   head <- http_request(url, method = "HEAD")
   expect_identical(as.numeric(head$headers[["content-length"]]), as.numeric(length(bytes)))
-  # A range longer than one block goes through a file httpuv sends and
-  # removes; blocks of 16 bytes make every range here such a range.
-  local_mocked_bindings(.range_block_bytes = 16, .package = "cellucid")
-  before <- list.files(tempdir(), pattern = "^cellucid-range-")
+  # Read from the file opened, with the tag of that open: no temporary copy.
+  before <- list.files(tempdir())
   part <- http_request(url, list(Range = "bytes=100-1099"))
   expect_identical(part$status, 206L)
   expect_identical(part$body, bytes[101:1100])
@@ -66,10 +64,20 @@ test_that("a file's range is read block by block, never whole, and a HEAD sizes 
   whole <- http_request(url, list(Range = "bytes=0-"))
   expect_identical(whole$status, 206L)
   expect_identical(whole$body, bytes)
-  run_loop_until(function() {
-    length(setdiff(list.files(tempdir(), pattern = "^cellucid-range-"), before)) == 0L
-  })
-  expect_length(setdiff(list.files(tempdir(), pattern = "^cellucid-range-"), before), 0L)
+  expect_identical(setdiff(list.files(tempdir()), before), character())
+  read <- cellucid:::.native_file_range(zip, 100, 1000)
+  expect_identical(read$bytes, bytes[101:1100])
+  expect_identical(read$etag, cellucid:::.file_version(zip)$etag)
+  # A range past the end is read as far as the file goes; a file gone is NULL.
+  expect_identical(cellucid:::.native_file_range(zip, length(bytes) - 4, 100)$bytes, bytes[length(bytes) - 3:0])
+  expect_null(cellucid:::.native_file_range(file.path(tempdir(), "no-such-file"), 0, 1))
+  # A file replaced between its version and its bytes is refused, never mixed.
+  local_mocked_bindings(
+    .native_file_range = function(path, offset, length) list(size = 1, etag = "\"other\"", bytes = raw(length)),
+    .package = "cellucid"
+  )
+  changed <- http_request(url, list(Range = "bytes=100-1099"))
+  expect_identical(changed$status, 409L)
 })
 
 test_that("a damaged request path is a 400, and a failed request names nothing internal", {

@@ -74,8 +74,10 @@ small_sce <- function(alt = TRUE) {
 }
 
 # A memory store written key by key to a folder (each chunk made as the
-# server makes it), so it is read as any store on disk.
+# server makes it, its expression matrices laid out first), so it is read as
+# any store on disk.
 dump_store <- function(store, folder = tempfile("cellucid_dumped_")) {
+  cellucid:::.store_laid_out(store, timeout = 300)
   for (key in store$keys) {
     target <- file.path(folder, key)
     dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
@@ -98,18 +100,48 @@ metadata_without_codecs <- function(folder) {
   })
 }
 
+# An expression matrix's data and indices (X, raw/X, a layer, a modality's),
+# which a served store chunks in .chunk_elements_served values and a written
+# one in .chunk_elements_sliced.
+served_entries <- function(path) grepl("(^|/)(X|raw/X|layers/[^/]+)/(data|indices)$", path)
+
+# The metadata and the files a served store holds for the arrays of a written
+# store `folder`: the same, an expression matrix's entries in served chunks.
+served_metadata <- function(folder) {
+  metadata <- metadata_without_codecs(folder)
+  for (key in grep("/\\.zarray$", names(metadata), value = TRUE)) {
+    if (served_entries(sub("/\\.zarray$", "", key))) {
+      length <- metadata[[key]]$shape[[1L]]
+      metadata[[key]]$chunks <- list(as.integer(max(1, min(length, cellucid:::.chunk_elements_served))))
+    }
+  }
+  metadata
+}
+served_files <- function(folder) {
+  files <- list.files(folder, recursive = TRUE, all.files = TRUE)
+  metadata <- served_metadata(folder)
+  for (key in grep("/\\.zarray$", names(metadata), value = TRUE)) {
+    array <- sub("/\\.zarray$", "", key)
+    if (!served_entries(array)) next
+    chunks <- grepl(paste0("^", array, "/[0-9]+$"), files)
+    count <- ceiling(metadata[[key]]$shape[[1L]] / metadata[[key]]$chunks[[1L]])
+    files <- c(files[!chunks], if (count > 0) paste0(array, "/", seq_len(count) - 1L))
+  }
+  files
+}
+
 # The store cellucid_view() serves (a memory store) holds the arrays of the
 # store cellucid_prepare() wrote: the same keys, every metadata document the
 # same but for the codecs, which the served one leaves out (it is read over
-# loopback, uncompressed), and every array the same dtype, shape and values
-# -- read by this package's own test reader, and by zarr-python when one is
-# found (compare_stores.py). `served` is the memory store, or a folder of the
-# bytes its server answered with.
+# loopback, uncompressed), and an expression matrix's entries, which it
+# chunks for loopback (served_entries()), and every array the same dtype,
+# shape and values -- read by this package's own test reader, and by
+# zarr-python when one is found (compare_stores.py). `served` is the memory
+# store, or a folder of the bytes its server answered with.
 expect_same_arrays <- function(folder, served) {
   if (is.environment(served)) served <- dump_store(served)
-  files <- list.files(folder, recursive = TRUE, all.files = TRUE)
-  testthat::expect_setequal(list.files(served, recursive = TRUE, all.files = TRUE), files)
-  testthat::expect_identical(metadata_without_codecs(served), metadata_without_codecs(folder))
+  testthat::expect_setequal(list.files(served, recursive = TRUE, all.files = TRUE), served_files(folder))
+  testthat::expect_identical(metadata_without_codecs(served), served_metadata(folder))
   served_members <- jsonlite::read_json(file.path(served, ".zmetadata"), simplifyVector = FALSE)$metadata
   arrays <- sub("/\\.zarray$", "", grep("(^|/)\\.zarray$", names(served_members), value = TRUE))
   for (key in arrays) {
@@ -122,7 +154,8 @@ expect_same_arrays <- function(folder, served) {
   python <- zarr_python()
   if (!is.null(python)) {
     output <- suppressWarnings(system2(
-      python, c(shQuote(testthat::test_path("python", "compare_stores.py")), shQuote(folder), shQuote(served)),
+      python, c(shQuote(testthat::test_path("python", "compare_stores.py")), shQuote(folder), shQuote(served),
+                cellucid:::.chunk_elements_served),
       stdout = TRUE, stderr = TRUE
     ))
     testthat::expect_identical(attr(output, "status"), NULL, info = paste(output, collapse = "\n"))
@@ -196,5 +229,6 @@ memory_store_of <- function(components, cache_bytes = 268435456) {
   store <- cellucid:::.store_open_memory(2L, cache_bytes)
   plan$write(store)
   cellucid:::.store_close(store)
+  cellucid:::.store_laid_out(store, timeout = 300)
   store
 }

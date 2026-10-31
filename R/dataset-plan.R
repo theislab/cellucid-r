@@ -489,7 +489,7 @@
   part <- function(which) {
     structure(list(
       length = length(matrix@x),
-      chunk = function(first, count, chunk_length) {
+      chunk = function(first, count, chunk_length, ...) {
         .native_renumbered_block(matrix, new_row, first - 1, first - 1 + count, index_size, "<f4",
                                  column_order = column_order, pointers = .realize(pointers),
                                  part = which, padded = chunk_length)

@@ -367,3 +367,53 @@ SEXP cellucid_subsample_decode(SEXP payload, SEXP n_obs) {
   UNPROTECT(1);
   return out;
 }
+
+/*
+ * The shortest decimal that names a share x in (0, 1]: the fewest
+ * significant digits whose text is read back as x, and among those the
+ * nearest to x -- the text Python's repr and the web app's String(x) give,
+ * which the share's rational is taken from (R/subsample.R). R's own
+ * conversion of text to a double is not correctly rounded on every build
+ * (it reads "0.09946616017259657" one ulp low), so the round trip is tested
+ * with the C library's strtod, which is. At each length the correctly
+ * rounded text is tried first; when it does not read back, its neighbour on
+ * x's side may (x a power of two: its rounding interval is narrower below
+ * it, so "5.960464477539062e-08" is another double and
+ * "5.960464477539063e-08" is 2^-24).
+ */
+SEXP cellucid_shortest_decimal(SEXP x) {
+  if (TYPEOF(x) != REALSXP || XLENGTH(x) != 1) error("a share must be one number");
+  double value = REAL(x)[0];
+  if (!(value > 0 && value <= 1)) error("a share must be in (0, 1]");
+  char text[64];
+  for (int digits = 1; digits <= 17; digits++) {
+    snprintf(text, sizeof text, "%.*e", digits - 1, value);
+    if (strtod(text, NULL) == value) return mkString(text);
+    /* The neighbour on x's side: one unit of the last digit. */
+    char *e = strchr(text, 'e');
+    int exponent = atoi(e + 1);
+    long long mantissa = 0;
+    for (const char *p = text; p < e; p++) {
+      if (*p >= '0' && *p <= '9') mantissa = mantissa * 10 + (*p - '0');
+    }
+    long long neighbour = strtod(text, NULL) < value ? mantissa + 1 : mantissa - 1;
+    long long lowest = 1;
+    for (int i = 1; i < digits; i++) lowest *= 10;
+    if (neighbour >= lowest * 10) {
+      /* 9.99 up one unit is 1.00 of the next power of ten: fewer digits, tried already. */
+      continue;
+    }
+    if (neighbour < lowest && digits > 1) continue; /* 1.00 down one unit: fewer digits, tried already */
+    char shown[32];
+    snprintf(shown, sizeof shown, "%lld", neighbour);
+    char candidate[64];
+    if (digits > 1) {
+      snprintf(candidate, sizeof candidate, "%c.%se%+03d", shown[0], shown + 1, exponent);
+    } else {
+      snprintf(candidate, sizeof candidate, "%ce%+03d", shown[0], exponent);
+    }
+    if (strtod(candidate, NULL) == value) return mkString(candidate);
+  }
+  snprintf(text, sizeof text, "%.16e", value);
+  return mkString(text);
+}

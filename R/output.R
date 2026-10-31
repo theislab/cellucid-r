@@ -85,10 +85,30 @@
   list(path = path, parent = parent, zip = zip)
 }
 
+# What a writer killed before it finished (its process gone) left beside the
+# target, removed, as cellucid-python's writer removes it: its staging
+# (.<name>.<pid>.partial), and the target it had moved aside
+# (.<name>.<pid>.replaced) when the target is there again -- when it is not,
+# the moved-aside copy is the only one, and it is left.
+.remove_stale_staging <- function(target) {
+  name <- basename(target$path)
+  pattern <- paste0("^\\.", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", name), "\\.([0-9]+)\\.(partial|replaced)$")
+  for (entry in list.files(target$parent, all.files = TRUE, no.. = TRUE)) {
+    found <- regmatches(entry, regexec(pattern, entry))[[1L]]
+    if (length(found) != 3L) next
+    pid <- as.numeric(found[[2L]])
+    if (pid == Sys.getpid() || .native_process_alive(pid)) next
+    if (found[[3L]] == "replaced" && !file.exists(target$path)) next
+    unlink(file.path(target$parent, entry), recursive = TRUE, force = TRUE)
+  }
+  invisible(NULL)
+}
+
 # Write the store to a temporary sibling of the target, then move it into
 # place, replacing what was there only after the new store is complete.
 .write_output <- function(target, write) {
   .dir_create(target$parent)
+  .remove_stale_staging(target)
   tag <- paste0(".", basename(target$path), ".", Sys.getpid())
   staging <- file.path(target$parent, paste0(tag, ".partial"))
   replaced <- file.path(target$parent, paste0(tag, ".replaced"))

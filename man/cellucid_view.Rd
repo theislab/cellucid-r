@@ -20,7 +20,7 @@ cellucid_view(
   serve_web_ui = TRUE,
   web_cache_dir = NULL,
   web_source_url = "https://www.cellucid.com",
-  cache_bytes = 268435456,
+  cache_bytes = NULL,
   quiet = FALSE
 )
 
@@ -33,7 +33,7 @@ cellucid_serve(
   serve_web_ui = TRUE,
   web_cache_dir = NULL,
   web_source_url = "https://www.cellucid.com",
-  cache_bytes = 268435456,
+  cache_bytes = NULL,
   quiet = FALSE
 )
 
@@ -53,7 +53,11 @@ the web app's registry, \code{system.file("input_formats.json", package =
 "cellucid")}). An h5Seurat file is not opened: it is refused before anything
 is served, with the route that converts it (read it with
 \code{SeuratDisk::LoadH5Seurat()} and pass the object, or save it with
-\code{saveRDS()}).}
+\code{saveRDS()}). A gzip-compressed copy of a file read in parts
+(\code{.h5ad.gz}, \code{.loom.gz}, \code{.h5.gz}, \code{.h5mu.gz}) is refused
+too, with how to decompress it: a served file is read in parts, which a gzip
+stream has none of (the web app itself opens such a copy from a link or from
+the computer, reading it whole once).}
 \item{...}{For an object, the arguments of \code{\link{cellucid_prepare}()}
 that choose what is shown: \code{dataset_id}, \code{dataset_name},
 \code{embeddings}, \code{obs}, \code{modalities}, \code{modality},
@@ -79,12 +83,17 @@ only; \code{"viewer"} the pane only; \code{"browser"} the default browser;
 \code{"none"} nowhere (the address is printed). See "In a Jupyter notebook"
 below.}
 \item{port}{The port to serve on. The default 8765 is the one local address
-Google sign-in (community annotation) accepts; when it is taken, the next free
+Google accepts for opening Google Drive files (community annotation's GitHub
+sign-in works only on www.cellucid.com); when it is taken, the next free
 port is used and the message says so. A port you choose is used or refused.
 \code{0} picks a free port.}
 \item{host}{The address to listen on. The default listens on this machine
-only; \code{"0.0.0.0"} on every interface (others on the network can then open
-the viewer).}
+only -- which, on a machine several people use at once (an HPC node, RStudio
+Server, Posit Workbench), is every user of it: the served data carries no
+secret, so any of them can read it while the viewer runs; use the Jupyter
+widget (no port) or a machine only you use when that matters.
+\code{"0.0.0.0"} listens on every interface (others on the network can then
+open the viewer).}
 \item{allowed_hosts}{Extra host names the server answers to, needed only behind
 a proxy that forwards to it under another name (RStudio Server, Posit
 Workbench, a reverse proxy): bare names such as \code{"rstudio.example.org"},
@@ -98,22 +107,37 @@ whenever it publishes a new build. \code{NULL} serves the cached build as it
 is, with no network access. In a Jupyter notebook the browser loads the app
 from this site itself (it must then be an http(s) address).}
 \item{cache_bytes}{The memory the served store may keep of what it makes by
-a transform, in bytes (least recently used first out): chunks of text, of a
-dense matrix, and the blocks of an object's sparse matrix read gene by gene.
-A chunk that is a slice of a vector (most of them) is made again each time,
-in one pass at memory speed, and never kept. An object's sparse matrix is
-never transposed or reordered whole: when the viewer reads a gene, the block
-of genes around it (about eight values a cell, at most half of
-\code{cache_bytes}) is made from the matrix as it is -- for a genes x cells
-matrix one binary search a cell plus the block's own values, for a cells x
-genes one its genes' values sorted by priority, a fraction of a second for a
-million cells -- and kept within this budget; a block dropped from it is made
-again when it is read again. A dense matrix is read through its transpose,
-block by block, and never copied whole. The neighbour graph is not copied
-either: each chunk of it (\eqn{2^{18}} entries) is made from the graph as it
-is, both axes in priority order, when the viewer reads it, and not kept (at
-one million cells and 20 million edges the served store holds no second
-graph).}
+a transform, in bytes (least recently used first out); \code{NULL} keeps a
+64th of the machine's memory (256 MiB on a 16 GB machine), the share the
+web app gives its decoded chunks and cellucid-python's served stores keep:
+chunks of text and of a dense matrix. A chunk that is a slice of a vector
+(most of them) is made again each time, in one pass at memory speed, and
+never kept. An object's sparse expression matrix is laid out gene-major
+once, in the background, from the moment the viewer starts (X first, then
+any other matrix), on every core (two under \command{R CMD check}): each
+thread lays out a share of its cells (a genes x cells matrix: its values of
+each gene counted, then placed, one binary search a cell plus a write a
+value) or of its genes (a cells x genes matrix: each gene's values sorted by
+priority), into memory-mapped scratch files in R's temporary folder (removed
+as soon as they are mapped; the operating system keeps their pages or
+writes them to disk), never a copy in R's memory, as cellucid-python's
+served store lays its matrices out. Until a matrix is laid out, a gene the
+viewer reads is made from the layout's progress: the values already laid
+out are copied, and those of the cells not reached yet are found by one
+scan of the matrix's values in its own order, on every core while the
+layout stands; when the layout would end sooner (a gene asked near its end,
+or a burst of genes), it is waited for. Then a
+gene, or a subsample's first values of one, is a copy of its bytes. A dense matrix is
+read through its transpose, block by block, and never copied whole. A matrix
+held outside R's memory (BPCells, a DelayedArray backend) is read only by
+R's own thread, so it is laid out there, before the viewer opens, block by
+block into the same scratch files (8 bytes a stored value): one pass counts
+its values, then one pass places each quarter of the machine's memory of
+them; it is never held whole in R's memory, whatever its size. The
+neighbour graph is not copied either: each chunk of it (\eqn{2^{18}}
+entries) is made from the graph as it is, both axes in priority order, when
+the viewer reads it, and not kept (at one million cells and 20 million
+edges the served store holds no second graph).}
 \item{quiet}{\code{TRUE} prints nothing: neither the address nor the notes
 reading the data writes (columns not stored, gene names made unique).}
 \item{viewer}{A viewer \code{cellucid_view()} or \code{cellucid_serve()}
@@ -182,7 +206,12 @@ DNS-rebinding pages with 421) -- unless it listens on a non-loopback IP address
 (\code{host = "0.0.0.0"}, say) with no \code{allowed_hosts}, an explicit request
 for network exposure whose names cannot be known -- and opens the viewer channel -- a WebSocket that
 carries commands to the viewer and its events back -- only for a page of its
-own, a loopback or an \code{allowed_hosts} origin. The channel is pinged every
+own, a loopback or an \code{allowed_hosts} origin, and only with the viewer's
+token, which the printed address carries (so another user of the machine can
+read the served data but cannot drive the viewer without that address). The
+browser lets only the hosted app's pages (origins \code{https://www.cellucid.com}
+and \code{https://cellucid.com}) and pages on this machine read the data across
+origins. The channel is pinged every
 20 seconds, so a proxy between the page and R (RStudio Server, Posit
 Workbench) does not close it for being idle, and a socket that does not say
 who it is within 60 seconds is closed. The web app itself is the
@@ -191,8 +220,10 @@ published build of \url{https://www.cellucid.com}, downloaded once into
 before any byte is served; \code{\link{cellucid_clear_web_cache}()} removes it.
 
 Several viewers run at once, each on its own port. \code{cellucid_stop()}
-closes the viewer's channel (the page shows it was stopped) and frees its
-port; \code{cellucid_stop_all()} stops every viewer of the session.
+tells an open page to freeze (it keeps its last view, as
+\code{\link{cellucid_freeze}()} does), closes the viewer's channel and frees
+its port, as cellucid-python's \code{stop()} does; \code{cellucid_stop_all()}
+stops every viewer of the session.
 
 A Viewer pane that renders without WebGL stays blank: view it with
 \code{pane = "browser"}.
@@ -217,6 +248,14 @@ Hooks registered with \code{cellucid_on()} run, and \code{cellucid_selection()}
 is current, whenever the kernel is idle. \code{port}, \code{host},
 \code{allowed_hosts}, \code{serve_web_ui} and \code{web_cache_dir} do not
 apply.
+
+A cell run again replaces its output: the viewer \code{cellucid_view()}
+showed in the cell's earlier run is stopped (\code{cellucid_stop()}), its
+object's matrices, memoised arrays and chunk cache let go, unless another
+cell shows it too. The cell is known by the id the front end sends with each
+run (JupyterLab, Notebook 7, VS Code). Where no cell id is sent, and outside
+a notebook, \code{cellucid_view()} of a dataset stops the earlier viewer of
+the same dataset id, and says so.
 
 In Google Colab's R runtime (detected from its \code{COLAB_RELEASE_TAG}
 environment variable) the widget's display also names Colab's widget manager,

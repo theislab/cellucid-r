@@ -67,7 +67,10 @@ cellucid_apply_session <- function(
   plans <- planned$plans
   record <- if (store_metadata) {
     session_record <- list(
-      manifest = planned$bundle$manifest,
+      # Without `source`: where the viewer opened the dataset (a link, a server
+      # address, a local file name) is not part of the object, and would travel
+      # with every file written from it.
+      manifest = planned$bundle$manifest[setdiff(names(planned$bundle$manifest), "source")],
       dataset_fingerprint = planned$fingerprint,
       applied = list(expected_dataset_id = expected_dataset_id, contract = "exact"),
       materialized_fields = stats::setNames(lapply(plans, `[[`, "metadata"), vapply(plans, `[[`, "", "name")),

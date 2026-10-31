@@ -13,13 +13,18 @@ cellucid_subsample_cells(x, n_cells = NULL, fraction = NULL, method = "uniform",
 \arguments{
 \item{x}{A \pkg{Seurat} object, a \pkg{SingleCellExperiment} or
 \pkg{SummarizedExperiment}, a \code{data.frame} of cells, or the cell count
-itself (enough for \code{"uniform"} and \code{"blocks"}).}
+itself (enough for \code{"uniform"} and \code{"blocks"}). Its cells are taken
+by their original positions: an object read from a Cellucid-ready file in
+priority order (its \code{cellucid} record holds \code{priority}) is refused
+until \code{\link{cellucid_restore_original_order}} puts it back, as
+\code{cellucid_pull()}, \code{cellucid_subset()} and a session refuse it.}
 \item{n_cells}{How many cells to keep; or give \code{fraction}. A count of
 every cell or more keeps every cell.}
 \item{fraction}{The share of cells to keep, in (0, 1]; the count is
 \code{n * fraction} rounded half up, at least 1, computed exactly from the
-fraction's shortest decimal text, never as a floating-point product, as the
-web app and Python compute it. Any count from 1 is a
+fraction's shortest round-trip decimal text (found in C with a correctly
+rounded conversion), never as a floating-point product, as the web app and
+Python compute it. Any count from 1 is a
 selection here; the web app opens a subsample of at least 2 cells, since one
 cell has no coordinate variation to draw.}
 \item{method}{\code{"uniform"} (every cell alike), \code{"blocks"} (runs of
@@ -46,8 +51,10 @@ cells.}
 \item{grid_size}{\code{"spatial"}: boxes per axis.}
 }
 \value{
-The kept cells' positions (1-based, ascending): an integer vector, or a
-double one for an object of more cells than an R integer counts.
+The kept cells' original positions (1-based, ascending): an integer vector,
+or a double one for an object of more cells than an R integer counts. They are
+the object's own columns (rows of a data frame), so \code{x[, kept]} holds the
+cells the viewer opens.
 }
 \description{
 \code{cellucid_subsample_cells()} gives the cells a subsample keeps: the cells
@@ -68,4 +75,9 @@ Python package to one shared conformance fixture
 \examples{
 kept <- cellucid_subsample_cells(10000, fraction = 0.1, seed = 0)
 length(kept)
+cells <- data.frame(type = rep(c("B", "T", "NK"), length.out = 300))
+kept <- cellucid_subsample_cells(cells, 30, method = "stratified", groupby = "type")
+table(cells$type[kept])
+# An object read from a Cellucid-ready file holds its cells in priority
+# order: put them back first, x <- cellucid_restore_original_order(x).
 }

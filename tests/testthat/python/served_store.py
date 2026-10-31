@@ -10,8 +10,9 @@ rows, and optionally a symmetric neighbour graph (``graph``: its
 compressed-column arrays, float32 weights), stored as
 ``obsp['connectivities']``. A matrix the store refuses prints ``{"__refused__": message}``. Prints one JSON object: each array's .zarray as its
 metadata, and the SHA-256 of every chunk of the array, and under
-``__chunk_elements__`` the chunk sizes the Python writers share
-(``cellucid.prepare_data._store``: per cell, sliced, whole). Exits 3 with
+``__chunk_elements__`` the chunk sizes the Python served store uses
+(``cellucid.prepare_data._store``: per cell and whole; a served expression
+matrix's entries, ``cellucid._served_store``). Exits 3 with
 "skip: <reason>" when cellucid or anndata is not importable.
 """
 
@@ -25,8 +26,8 @@ try:
     import pandas as pd
     from scipy import sparse
 
-    from cellucid._served_store import PriorityStore
-    from cellucid.prepare_data._store import CELL_CHUNK_ELEMENTS, SLICED_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS
+    from cellucid._served_store import SERVED_ENTRY_CHUNK_ELEMENTS, PriorityStore
+    from cellucid.prepare_data._store import CELL_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS
 except ImportError as error:  # pragma: no cover - depends on the interpreter
     print(f"skip: {error}")
     sys.exit(3)
@@ -75,6 +76,8 @@ def main(path: str, arrays: list[str]) -> None:
         print(json.dumps({"__refused__": str(error)}))
         return
     try:
+        # Its expression matrices are laid out by the store's worker: wait for them.
+        store.laid_out()
         keys = list(store.stored_keys())
         out = {}
         for array in arrays:
@@ -83,7 +86,7 @@ def main(path: str, arrays: list[str]) -> None:
                     body = store.get(key)
                     assert body is not None, key
                     out[key] = json.loads(body) if key.endswith(".zarray") else hashlib.sha256(body).hexdigest()
-        out["__chunk_elements__"] = {"cell": CELL_CHUNK_ELEMENTS, "sliced": SLICED_CHUNK_ELEMENTS, "whole": WHOLE_CHUNK_ELEMENTS}
+        out["__chunk_elements__"] = {"cell": CELL_CHUNK_ELEMENTS, "served": SERVED_ENTRY_CHUNK_ELEMENTS, "whole": WHOLE_CHUNK_ELEMENTS}
         print(json.dumps(out))
     finally:
         store.close()

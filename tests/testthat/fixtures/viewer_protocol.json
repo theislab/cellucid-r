@@ -180,7 +180,8 @@
       "type",
       "field",
       "source",
-      "label"
+      "symbol",
+      "cells_read"
     ],
     "result_removed": [
       "type",
@@ -555,19 +556,36 @@
         "type": "color_by",
         "field": "cell_type",
         "source": "obs",
-        "label": "cell_type"
+        "symbol": null,
+        "cells_read": null
+      },
+      {
+        "type": "color_by",
+        "field": "CD3E",
+        "source": "var",
+        "symbol": null,
+        "cells_read": null
       },
       {
         "type": "color_by",
         "field": "ENSG00000198851",
         "source": "var",
-        "label": "CD3E"
+        "symbol": "CD3E",
+        "cells_read": null
+      },
+      {
+        "type": "color_by",
+        "field": "ENSG00000168484",
+        "source": "var",
+        "symbol": "SFTPC",
+        "cells_read": 40000
       },
       {
         "type": "color_by",
         "field": null,
         "source": null,
-        "label": null
+        "symbol": null,
+        "cells_read": null
       },
       {
         "type": "result_removed",
@@ -806,6 +824,32 @@
         ],
         "values": null,
         "hex": "ad0000007b2274797065223a22726573756c74222c22726571756573744964223a6e756c6c2c2265706f6368223a2230313233343536373839616263646566222c227265766973696f6e223a362c226b696e64223a22737562736574222c226964223a226f70656e222c226e4f6273223a31302c226d657461223a7b22646967657374223a2230313233343536373839616263646566227d2c2263656c6c73223a342c2276616c756573223a6e756c6c7d00000000030000000400000009000000"
+      },
+      {
+        "header": {
+          "type": "result",
+          "requestId": null,
+          "epoch": "0123456789abcdef",
+          "revision": 7,
+          "kind": "geneSet",
+          "id": "markers_1",
+          "nObs": 10,
+          "meta": {
+            "name": "B cell",
+            "description": "Marker genes",
+            "genes": [
+              "MS4A1",
+              "CD79A"
+            ],
+            "symbols": null,
+            "origin": "markers"
+          },
+          "cells": 0,
+          "values": null
+        },
+        "cells": [],
+        "values": null,
+        "hex": "000100007b2274797065223a22726573756c74222c22726571756573744964223a6e756c6c2c2265706f6368223a2230313233343536373839616263646566222c227265766973696f6e223a372c226b696e64223a2267656e65536574222c226964223a226d61726b6572735f31222c226e4f6273223a31302c226d657461223a7b226e616d65223a22422063656c6c222c226465736372697074696f6e223a224d61726b65722067656e6573222c2267656e6573223a5b224d53344131222c224344373941225d2c2273796d626f6c73223a6e756c6c2c226f726967696e223a226d61726b657273227d2c2263656c6c73223a302c2276616c756573223a6e756c6c7d"
       }
     ]
   }

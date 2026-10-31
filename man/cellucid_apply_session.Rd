@@ -53,7 +53,8 @@ categorical field as a factor, a copied continuous field as numbers.}
 followed by its name.}
 \item{include_deleted_user_defined_fields}{Also add user-defined fields the
 session deleted (never purged ones).}
-\item{store_metadata}{Record the session -- its manifest, dataset
+\item{store_metadata}{Record the session -- its manifest (without
+\code{source}, where the viewer opened the dataset), dataset
 fingerprint, the columns added, its highlight pages and field overlays -- in
 \code{misc$cellucid$session} (Seurat) or \code{metadata(x)$cellucid$session}
 (SingleCellExperiment, SummarizedExperiment).}

@@ -32,7 +32,7 @@ viewer_results <- function(n) {
     list(kind = "continuous", id = "user_obs_value_1", cells = NULL, type = "float32", values = rep(0, n),
          meta = list(key = "pushed", origin = "notebook")),
     list(kind = "geneSet", id = "gene_set_1", cells = numeric(0),
-         meta = list(name = "T", description = "", genes = I("CD3E"), symbols = I("CD3E"), origin = "notebook")),
+         meta = list(name = "T", description = "", genes = I("CD3E"), symbols = NULL, origin = "notebook")),
     list(kind = "visibility", id = "visible", cells = c(0, 1, 2), meta = structure(list(), names = character()))
   )
 }
@@ -106,7 +106,7 @@ test_that("prune removes only what the viewer no longer holds", {
   expect_identical(pulled@misc$cellucid$pulled$annotation,
                    list(kind = "categorical", id = "user_cat_1", pulled_from = "viewer", key = "annotation", origin = "user"))
   expect_identical(pulled@misc$cellucid$gene_sets$T,
-                   list(genes = "CD3E", symbols = "CD3E", description = "", origin = "notebook", pulled_from = "viewer",
+                   list(genes = "CD3E", description = "", origin = "notebook", pulled_from = "viewer",
                         id = "gene_set_1"))
   # Results left out of a pull keep their columns.
   again <- cellucid_pull(pulled, viewer, highlights = FALSE, return_summary = TRUE)
@@ -184,6 +184,9 @@ test_that("push sends at once; gene sets, subsets and selections read what the v
   expect_identical(ws_receive(client)$json$genes, list("CD3E", "CD3D"))
 
   expect_identical(cellucid_gene_sets(viewer), list(T = "CD3E"))
+  # Named by the var index, the viewer sends no symbols: the names shown are
+  # the identifiers.
+  expect_identical(cellucid_gene_sets(viewer, symbols = TRUE), list(T = "CD3E"))
   subset <- cellucid_subset(object, viewer, "Lasso selection")
   expect_identical(colnames(subset), colnames(object)[c(1, 3)])
   expect_error(cellucid_subset(object, viewer, "none"), "names 0 highlight groups")
@@ -315,9 +318,17 @@ test_that("GMT files round trip, by the rules the web app and Python share", {
 
 test_that("gene sets of one name are named by one rule; a logical column is pushed as false/true", {
   sets <- cellucid:::.gene_sets_of(lapply(c("a", "b", "c"), function(id) {
-    list(kind = "geneSet", id = id, meta = list(name = "T", description = "", genes = list(id), symbols = list(id), origin = "markers"))
+    list(kind = "geneSet", id = id, meta = list(name = "T", description = "", genes = list(id), symbols = NULL, origin = "markers"))
   }))
   expect_identical(vapply(sets, `[[`, "", "name"), c("T", "T (2)", "T (3)"))
+  # The names shown go beside the identifiers only when the viewer sent them
+  # (a var column names the genes in its data mapping).
+  named <- cellucid:::.gene_sets_of(list(list(kind = "geneSet", id = "g", meta = list(
+    name = "S", description = "", genes = list("ENSG00000198851"), symbols = list("CD3E"), origin = "markers"
+  ))))
+  expect_identical(named[[1L]]$entry$genes, "ENSG00000198851")
+  expect_identical(named[[1L]]$entry$symbols, "CD3E")
+  expect_null(sets[[1L]]$entry$symbols)
   command <- cellucid:::.field_command(c(TRUE, FALSE, NA), "flag", 3, NULL)
   expect_identical(unlist(command$categories), c("false", "true"))
   expect_identical(command$values, c(1, 0, 255))

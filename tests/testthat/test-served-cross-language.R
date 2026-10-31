@@ -62,7 +62,7 @@ r_served <- function(expression, umap, graph = NULL) {
                 dataset_id = "cross", dataset_name = "Cross")
   viewer <- new.env()
   suppressMessages(cellucid:::.serve_object(viewer, NULL, given, "cross", quiet = TRUE, cache_bytes = 268435456))
-  viewer$store
+  cellucid:::.store_laid_out(viewer$store, timeout = 300)
 }
 
 served_arrays <- c(
@@ -76,9 +76,11 @@ test_that("an object served by R and by Python holds the same bytes in every arr
   python <- require_served_python()
   skip_if_not_installed("Matrix")
   set.seed(11)
-  # More cells than one per-cell chunk holds (2^16), more entries than one sliced chunk (2^14).
+  # More cells than one per-cell chunk holds (2^16), and more entries than
+  # two of a served expression matrix's chunks (2^18): several of R's
+  # gene-major blocks (eight values a cell), each a whole number of chunks.
   n <- 70000L
-  m <- 30L
+  m <- 640L
   # Values float32 holds exactly, so both sides store the same numbers.
   x <- Matrix::rsparsematrix(n, m, density = 0.05, rand.x = function(k) sample(1:400, k, replace = TRUE) / 8)
   x <- methods::as(x, "CsparseMatrix")
@@ -99,7 +101,7 @@ test_that("an object served by R and by Python holds the same bytes in every arr
   python_keys[["__chunk_elements__"]] <- NULL
   expect_identical(
     lapply(sizes, as.numeric),
-    list(cell = cellucid:::.chunk_elements_cell, sliced = cellucid:::.chunk_elements_sliced, whole = cellucid:::.chunk_elements_whole)
+    list(cell = cellucid:::.chunk_elements_cell, served = cellucid:::.chunk_elements_served, whole = cellucid:::.chunk_elements_whole)
   )
   for (array in c("obs/cellucid_original_position", "obsm/X_umap", "X/indices", "X/data", graph_arrays[2:3])) {
     # Several chunks: their size is what is compared, not one chunk the whole length.

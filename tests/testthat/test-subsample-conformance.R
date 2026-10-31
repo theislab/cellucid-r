@@ -8,7 +8,7 @@
 # SHA-256. Positions in the fixture are 0-based; the function returns R's
 # 1-based positions.
 
-.subsample_sha256 <- "a805a302a88e77e0c7e07e998811ce79825b5a34890db79a9462e801ab84a60d"
+.subsample_sha256 <- "ee4b8462f66e6e441c2ab9f0948ca26d04451aa48017c38e577e3f13c8f1f48b"
 
 .subsample_case <- function(case) {
   if (identical(case$method, "uniform")) {
@@ -120,4 +120,65 @@ test_that("categories of plain values are ordered by code point, never by the lo
     cellucid_subsample_cells(10, 3, method = "stratified", groupby = values, allocation = "balanced"),
     cellucid_subsample_cells(10, 3, method = "stratified", groupby = by_code_point, allocation = "balanced")
   )
+})
+
+# An object in a Cellucid-ready file's stored order, by hand as a reader gives
+# it: rows (columns) by ascending rank of `seed`, each one's original position
+# recorded, and the record beside them.
+.stored_cells <- function(frame, seed) {
+  n <- nrow(frame)
+  positions <- order(cellucid:::.subsample_rank(seed, seq_len(n) - 1), method = "radix") - 1
+  stored <- frame[positions + 1, , drop = FALSE]
+  stored$cellucid_original_position <- positions
+  attr(stored, "cellucid") <- list(priority = list(seed = seed, specVersion = 1L, nObs = n, levels = cellucid:::.prefix_levels(n)))
+  stored
+}
+
+test_that("an object in a file's stored order is refused until restored, then keeps the fixture's cells", {
+  # The viewer opens the fixture's cells (original positions) of a file in
+  # priority order; an object holding that file's rows as stored would take
+  # other cells by position, as pull, subset and a session would.
+  document <- cellucid_read_fixture("subsample_conformance.json")
+  for (case in document$cases) {
+    if (is.null(case$kept) || identical(case$method, "spatial") || case$nObs < 2) next
+    n <- case$nObs
+    frame <- data.frame(row.names = paste0("cell", seq_len(n) - 1L))
+    request <- list(n_cells = case$k, method = case$method, seed = case$seed)
+    if (identical(case$method, "stratified")) {
+      codes <- vapply(case$codes, function(code) if (is.null(code)) -1L else as.integer(code), integer(1))
+      frame$group <- factor(ifelse(codes < 0L, NA, paste0("c", codes)), levels = paste0("c", seq_len(case$nCategories) - 1L))
+      request <- c(request, list(groupby = "group", allocation = case$allocation, min_per_group = case$minPerCategory))
+    }
+    if (identical(case$method, "blocks")) request <- c(request, list(block_size = case$blockSize))
+    stored <- .stored_cells(frame, 7)
+    expect_error(do.call(cellucid_subsample_cells, c(list(stored), request)), "cellucid_restore_original_order", label = case$name)
+    restored <- cellucid_restore_original_order(stored)
+    kept <- do.call(cellucid_subsample_cells, c(list(restored), request))
+    expected <- vapply(case$kept, as.numeric, numeric(1))
+    expect_identical(as.numeric(kept) - 1, expected, label = case$name)
+    expect_identical(rownames(restored)[kept], paste0("cell", expected), label = case$name)
+  }
+  skip_without_sce()
+  case <- Filter(function(case) identical(case$name, "spatial a constant axis"), document$cases)[[1L]]
+  coordinates <- matrix(vapply(case$coordinates, as.numeric, numeric(1)), ncol = case$dimensions, byrow = TRUE)
+  sce <- SingleCellExperiment::SingleCellExperiment(
+    assays = list(counts = matrix(0, nrow = 1, ncol = case$nObs, dimnames = list("g", paste0("cell", seq_len(case$nObs) - 1L)))),
+    reducedDims = list(SPACE = coordinates)
+  )
+  positions <- order(cellucid:::.subsample_rank(7, seq_len(case$nObs) - 1), method = "radix") - 1
+  stored <- sce[, positions + 1]
+  SummarizedExperiment::colData(stored)$cellucid_original_position <- positions
+  S4Vectors::metadata(stored)$cellucid <- list(priority = list(seed = 7, specVersion = 1L, nObs = case$nObs, levels = cellucid:::.prefix_levels(case$nObs)))
+  request <- list(n_cells = case$k, method = "spatial", seed = case$seed, basis = "SPACE", columns = seq_len(case$dimensions), grid_size = case$gridSize)
+  expect_error(do.call(cellucid_subsample_cells, c(list(stored), request)), "cellucid_restore_original_order")
+  kept <- do.call(cellucid_subsample_cells, c(list(cellucid_restore_original_order(stored)), request))
+  expect_identical(as.numeric(kept) - 1, vapply(case$kept, as.numeric, numeric(1)))
+})
+
+test_that("a record that no longer describes the cells warns and takes each row as its own position", {
+  stored <- .stored_cells(data.frame(row.names = paste0("c", 1:200)), 0)
+  subset <- stored[1:150, , drop = FALSE]
+  attr(subset, "cellucid") <- attr(stored, "cellucid")
+  expect_warning(kept <- cellucid_subsample_cells(subset, 15, seed = 3), "written for 200 cells")
+  expect_identical(kept, cellucid_subsample_cells(150, 15, seed = 3))
 })

@@ -14,16 +14,27 @@
 //   (`open`, `text`, `binary`, `close`, by socket `s`) and the page's
 //   requests (`fetch`), each relayed to the kernel as a widget message named
 //   by this output (`v`), and the kernel's frames and answers back.
-// - Requests that arrive together go to the kernel as one message; a binary
+// - Requests that arrive together (in one task) go to the kernel as one
+//   message, at once: the page's reader bounds how many it has under way, as
+//   with a web host, and the kernel answers each as it is ready (Python on
+//   threads of its own, so a slow one holds back no other; R in turn, between
+//   cells either way). A kernel that answers one message at a time, each at
+//   a cost of its own (IRkernel), sets the trait `_fetch_messages`: at most
+//   that many fetch messages are with it at once, and requests arriving
+//   meanwhile gather into the next, sent as soon as one is answered (a burst
+//   goes in a few large messages, a lone request at once). A request the page
+//   withdraws (`cancel`) before its message went is never sent; one already
+//   with the kernel is answered, and its answer dropped by the page. A binary
 //   frame goes in pieces, so no message is larger than a notebook carries.
-// - The kernel answers its messages one after another, and none while a
-//   cell runs: at most two batches of requests are with it at once (one
-//   being answered, the next ready), and the rest wait here, where a request
-//   the page withdraws (`cancel`) is dropped before the kernel ever reads
-//   for it. A withdrawn request already with the kernel is answered, and its
-//   answer dropped by the page.
-// - A kernel whose comms carry no binary buffers (IRkernel) sets the trait
-//   `_binary` to "base64": binary bodies then travel as base64 text (`b64`).
+// - The kernel going away is said to the page, never left to a clock: when
+//   this output is removed, or the kernel's connection to the widget closes
+//   (a restart, a shutdown: `comm:close`, where the notebook front end has
+//   one), the page is told `{t: 'ended', why}` and ends every request and
+//   socket waiting on the kernel, saying what to do.
+// - The kernel sends bodies and binary frames as its messages' binary
+//   buffers. A kernel that drops the buffers of the messages it receives
+//   (IRkernel) sets the trait `_binary` to "base64": the page's binary frames
+//   then go to it as base64 text (`b64`).
 //
 // The page's side is cellucid/assets/js/data/viewer-embed.js in the web app.
 
@@ -47,13 +58,6 @@ function randomId() {
 function ownBytes(view) {
   if (view instanceof ArrayBuffer) return view.slice(0);
   return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
-}
-
-function fromBase64(text) {
-  const binary = atob(text);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes.buffer;
 }
 
 function toBase64(bytes) {
@@ -90,11 +94,12 @@ function render({ model, el }) {
   let pageReady = false;
   let ended = false;
   let silentNotice = null;
-  /** Requests waiting to go to the kernel together. */
+  /** Requests of this task, going to the kernel together. */
   let requests = [];
   let flushing = false;
-  /** The batches with the kernel: the ids each still waits an answer for. */
-  const outstanding = [];
+  /** Fetch messages the kernel takes at once (0: every one), and the ids of each one with it still unanswered. */
+  const fetchMessages = model.get('_fetch_messages') || 0;
+  let unanswered = [];
 
   const say = text => {
     status.textContent = text;
@@ -107,19 +112,12 @@ function render({ model, el }) {
 
   const flushRequests = () => {
     flushing = false;
-    if (requests.length === 0 || outstanding.length >= 2) return;
+    if (requests.length === 0) return;
+    // As many with the kernel as it takes: sent once one is answered.
+    if (fetchMessages > 0 && unanswered.length >= fetchMessages) return;
     sendKernel({ t: 'fetch', requests });
-    outstanding.push(new Set(requests.map(request => request.id)));
+    if (fetchMessages > 0) unanswered.push(new Set(requests.map(request => request.id)));
     requests = [];
-  };
-
-  /** The kernel answered `id`: a batch it completes lets the next one go. */
-  const answered = id => {
-    const batch = outstanding.findIndex(ids => ids.delete(id));
-    if (batch >= 0 && outstanding[batch].size === 0) {
-      outstanding.splice(batch, 1);
-      flushRequests();
-    }
   };
 
   const fromPage = message => {
@@ -189,7 +187,7 @@ function render({ model, el }) {
       port = null;
       // What the page had asked went with it.
       requests = [];
-      outstanding.length = 0;
+      unanswered = [];
     }
     pageReady = true;
     if (credentials === null) say('Waiting for the notebook kernel…');
@@ -205,21 +203,23 @@ function render({ model, el }) {
         return;
       case 'answers':
         for (const answer of message.answers) {
-          const bytes = typeof answer.b64 === 'string'
-            ? fromBase64(answer.b64)
-            : answer.buffer >= 0 ? ownBytes(buffers[answer.buffer]) : new ArrayBuffer(0);
+          const bytes = answer.buffer >= 0 ? ownBytes(buffers[answer.buffer]) : new ArrayBuffer(0);
           port?.postMessage(
             { t: 'answer', id: answer.id, status: answer.status, headers: answer.headers, bytes },
             [bytes]
           );
-          answered(answer.id);
+          unanswered.some(ids => ids.delete(answer.id));
+        }
+        if (unanswered.some(ids => ids.size === 0)) {
+          unanswered = unanswered.filter(ids => ids.size > 0);
+          flushRequests();
         }
         return;
       case 'text':
         port?.postMessage({ t: 'text', s: message.s, text: message.text });
         return;
       case 'binary': {
-        const bytes = typeof message.b64 === 'string' ? fromBase64(message.b64) : ownBytes(buffers[0]);
+        const bytes = ownBytes(buffers[0]);
         port?.postMessage({ t: 'binary', s: message.s, bytes }, [bytes]);
         return;
       }
@@ -247,8 +247,15 @@ function render({ model, el }) {
     }, SILENT_PAGE_NOTICE_MS);
   });
   window.addEventListener('message', onWindowMessage);
+  // The kernel's end of the widget closed: nothing sent to it is answered.
+  const onKernelGone = () => {
+    if (ended) return;
+    port?.postMessage({ t: 'ended', why: 'kernel' });
+    say('The notebook\'s kernel stopped: run this cell again to show the viewer.');
+  };
   model.on('msg:custom', fromKernel);
   model.on('change:height', onHeight);
+  model.on('comm:close', onKernelGone);
   frame.src = `${appUrl}/?viewer=embedded`;
   sendKernel({ t: 'attach' });
 
@@ -259,6 +266,8 @@ function render({ model, el }) {
     window.removeEventListener('message', onWindowMessage);
     model.off('msg:custom', fromKernel);
     model.off('change:height', onHeight);
+    model.off('comm:close', onKernelGone);
+    port?.postMessage({ t: 'ended', why: 'removed' });
     port?.close();
     port = null;
   };

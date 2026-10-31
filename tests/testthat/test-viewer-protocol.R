@@ -8,7 +8,7 @@
 # it must accept every example event and binary event, and produce every
 # example command.
 
-.viewer_protocol_sha256 <- "bf1db1f20d75f72359eea882297e880b9092f7682525f1caa56bdc8148b2b936"
+.viewer_protocol_sha256 <- "24b8606e4ce533f5320b4adb88b6aaac314091943bbb5f3c6590f55b7adfd32a"
 
 protocol_fixture <- function() cellucid_read_fixture("viewer_protocol.json")
 
@@ -116,7 +116,8 @@ test_that("frames that break the protocol are refused with the reason", {
   refused("{\"type\":\"ready\",\"n_cells\":10,\"n_obs\":10,\"dimensions\":4}")
   refused("{\"type\":\"ready\",\"n_cells\":-1,\"n_obs\":10,\"dimensions\":2}")
   refused("{\"type\":\"ready\",\"n_cells\":11,\"n_obs\":10,\"dimensions\":2}")
-  refused("{\"type\":\"color_by\",\"field\":\"x\",\"source\":null,\"label\":\"x\"}")
+  refused("{\"type\":\"color_by\",\"field\":\"x\",\"source\":null,\"symbol\":null}")
+  refused("{\"type\":\"color_by\",\"field\":\"x\",\"source\":\"obs\",\"symbol\":\"X\"}")
   refused("{\"type\":\"color_by\",\"field\":\"x\",\"source\":\"var\",\"label\":null}")
   refused("{\"type\":\"result_removed\",\"epoch\":\"0123456789abcdef\",\"revision\":0,\"kind\":\"highlight\",\"id\":\"h\"}")
   refused("{\"type\":\"result_removed\",\"epoch\":\"0123456789ABCDEF\",\"revision\":1,\"kind\":\"highlight\",\"id\":\"h\"}")

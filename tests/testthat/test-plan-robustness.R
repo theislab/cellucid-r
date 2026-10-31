@@ -94,7 +94,7 @@ test_that("a dense genes x cells assay is read through its transpose, never tran
   expect_s3_class(captured, "cellucid_transposed")
 })
 
-test_that("a matrix held outside memory is read in column blocks and joined once", {
+test_that("a matrix held outside memory is read in blocks of whole cells that cover it once", {
   skip_if_not_installed("DelayedArray")
   skip_if_not_installed("Matrix")
   set.seed(5)
@@ -103,12 +103,23 @@ test_that("a matrix held outside memory is read in column blocks and joined once
   expected <- Matrix::drop0(expected)
   dimnames(expected) <- list(paste0("g", 1:40), paste0("c", 1:23))
   delayed <- DelayedArray::DelayedArray(expected)
-  # Blocks of 80 values: two columns at a time, twelve blocks.
-  local_mocked_bindings(.matrix_block_values = 80, .package = "cellucid")
-  read <- suppressMessages(cellucid:::.in_memory_matrix(delayed, "assay"))
-  expect_s4_class(read, "dgCMatrix")
-  expect_identical(dimnames(read), dimnames(expected))
-  expect_equal(as.matrix(read), as.matrix(expected))
+  # Blocks of 80 values: two columns at a time, twelve blocks, never joined.
+  local_mocked_bindings(.backed_block_values = 80, .package = "cellucid")
+  blocks <- cellucid:::.backed_blocks(delayed)
+  expect_identical(blocks$n, 12L)
+  for (k in seq_len(blocks$n)) {
+    read <- blocks$read(k)
+    expect_false(read$by_rows)
+    expect_identical(read$rows, 1:40)
+    columns <- read$col0 + seq_len(length(read$pointers) - 1L)
+    block <- methods::new("dgCMatrix", i = read$index, p = as.integer(read$pointers), x = read$values, Dim = c(40L, length(columns)))
+    expect_equal(unname(as.matrix(block)), unname(as.matrix(expected[, columns, drop = FALSE])))
+  }
+  # Only the rows a pass needs.
+  some <- cellucid:::.backed_blocks(delayed, c(3L, 9L, 40L))$read(1L)
+  expect_identical(some$rows, c(3L, 9L, 40L))
+  block <- methods::new("dgCMatrix", i = some$index, p = as.integer(some$pointers), x = some$values, Dim = c(3L, length(some$pointers) - 1L))
+  expect_equal(unname(as.matrix(block)), unname(as.matrix(expected[c(3, 9, 40), some$col0 + seq_len(ncol(block)), drop = FALSE])))
 })
 
 test_that("genes kept from a genes x cells assay are read in place, in their order, never copied", {

@@ -276,8 +276,8 @@ test_that("cellucid_restore_original_order() reorders every part of a Seurat obj
   expect_identical(SeuratObject::Indices(back[["RNA.nn"]]), SeuratObject::Indices(neighbors))
   expect_identical(SeuratObject::Distances(back[["RNA.nn"]]), SeuratObject::Distances(neighbors))
   # A session is refused on the stored order, applied after the restore.
-  session <- testthat::test_path("fixtures", "session_format2", "session.cellucid-session")
-  expect_error(cellucid_apply_session(stored, session, expected_dataset_id = "format2"), "cellucid_restore_original_order")
+  session <- testthat::test_path("fixtures", "session_format3", "session.cellucid-session")
+  expect_error(cellucid_apply_session(stored, session, expected_dataset_id = "format3"), "cellucid_restore_original_order")
 })
 
 test_that("a MuData's modalities are ordered by their cells' priority, prefix counts in global levels", {
@@ -310,14 +310,14 @@ test_that("a session is applied in original order, and an object in a file's sto
   obs <- data.frame(row = c(1, 2), row.names = c("a", "b"))[priority$positions + 1, , drop = FALSE]
   obs$cellucid_original_position <- priority$positions
   attr(obs, "cellucid") <- list(priority = priority$record)
-  session <- testthat::test_path("fixtures", "session_format2", "session.cellucid-session")
-  expect_error(cellucid_apply_session(obs, session, expected_dataset_id = "format2"), "cellucid_restore_original_order")
+  session <- testthat::test_path("fixtures", "session_format3", "session.cellucid-session")
+  expect_error(cellucid_apply_session(obs, session, expected_dataset_id = "format3"), "cellucid_restore_original_order")
   # A record that does not describe the cells: each row its own original
   # position, as the web app read the file; the warning says why.
   attr(obs, "cellucid") <- list(priority = utils::modifyList(priority$record, list(nObs = 3)))
   warned <- character()
   refused <- tryCatch(
-    withCallingHandlers(cellucid_apply_session(obs, session, expected_dataset_id = "format2"),
+    withCallingHandlers(cellucid_apply_session(obs, session, expected_dataset_id = "format3"),
                         warning = function(w) { warned <<- c(warned, conditionMessage(w)); invokeRestart("muffleWarning") }),
     error = function(e) conditionMessage(e)
   )

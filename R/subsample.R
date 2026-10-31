@@ -11,14 +11,30 @@
 
 .subsample_methods <- c("uniform", "blocks", "stratified", "spatial")
 
-# The cell count of what cellucid_subsample_cells() is given.
+# The cell count of what cellucid_subsample_cells() is given, whose columns
+# (rows of a data frame) are each its own original position. An object in a
+# Cellucid-ready file's verified stored order (.stored_order()) is refused, as
+# cellucid_pull(), cellucid_subset() and a session refuse it: the cells are
+# chosen by original position, and a column of such an object is not one, so
+# x[, kept] would take other cells than the viewer's. A record that no longer
+# describes the cells leaves each its own original position, with a warning.
 .subsample_n_obs <- function(x) {
   if (is.numeric(x) && length(x) == 1L && !is.object(x)) {
     return(.subsample_uint32(x, "x"))
   }
-  if (inherits(x, "Seurat") || methods::is(x, "SummarizedExperiment")) return(as.double(ncol(x)))
-  if (is.data.frame(x)) return(as.double(nrow(x)))
-  .abort("x must be a Seurat object, a SingleCellExperiment or SummarizedExperiment, a data.frame of cells, or the cell count.")
+  if (!(inherits(x, "Seurat") || methods::is(x, "SummarizedExperiment") || is.data.frame(x))) {
+    .abort("x must be a Seurat object, a SingleCellExperiment or SummarizedExperiment, a data.frame of cells, or the cell count.")
+  }
+  stored <- .stored_order_of(x)
+  if (!is.null(stored$notice)) .warn(stored$notice)
+  if (!is.null(stored$positions)) {
+    .abort(
+      "This object holds its cells in a Cellucid-ready file's stored order (uns['cellucid']['priority']), ",
+      "and a subsample names cells by their original position, so x[, kept] would take other cells than the ",
+      "viewer opens. Put them back first: x <- cellucid_restore_original_order(x)."
+    )
+  }
+  as.double(if (is.data.frame(x)) nrow(x) else ncol(x))
 }
 
 .subsample_uint32 <- function(value, label, minimum = 0) {
@@ -59,23 +75,16 @@
 
 # The subsample size a fraction of n_obs cells stands for, exactly: the
 # fraction as the rational its shortest round-trip decimal names (as the web
-# app's String(x) and Python's repr), round-half-up(n_obs * fraction) in
-# integer arithmetic (decimal digits in doubles, every step exact), at least 1
-# and at most n_obs.
-.subsample_shortest_decimal <- function(x) {
-  for (digits in 1:17) {
-    text <- trimws(formatC(x, digits = digits, format = "g"))
-    if (as.numeric(text) == x) return(text)
-  }
-  sprintf("%.17g", x)
-}
-
+# app's String(x) and Python's repr; found in C, src/subsample.c, with a
+# correctly rounded strtod, which R's own text conversion is not on every
+# build), round-half-up(n_obs * fraction) in integer arithmetic (decimal
+# digits in doubles, every step exact), at least 1 and at most n_obs.
 .subsample_count_from_fraction <- function(fraction, n_obs) {
   if (!is.numeric(fraction) || length(fraction) != 1L || !is.finite(fraction) || fraction <= 0 || fraction > 1) {
     .abort("fraction must be one number in (0, 1].")
   }
-  parts <- regmatches(.subsample_shortest_decimal(fraction),
-                      regexec("^(\\d+)(?:\\.(\\d*))?(?:[eE]([+-]?\\d+))?$", .subsample_shortest_decimal(fraction)))[[1]]
+  text <- .native_shortest_decimal(fraction)
+  parts <- regmatches(text, regexec("^(\\d+)(?:\\.(\\d*))?(?:[eE]([+-]?\\d+))?$", text))[[1]]
   decimals <- parts[3]
   mantissa <- sub("^0+(?=.)", "", paste0(parts[2], decimals), perl = TRUE)
   scale <- nchar(decimals) - (if (nzchar(parts[4])) as.integer(parts[4]) else 0L)
@@ -141,6 +150,9 @@ cellucid_subsample_cells <- function(x, n_cells = NULL, fraction = NULL, method 
     coordinates <- as.matrix(coordinates)
     if (nrow(coordinates) != n_obs) .abort("basis has ", nrow(coordinates), " ", .plural(nrow(coordinates), "row"), " for ", n_obs, " ", .plural(n_obs, "cell"), ".")
     if (length(columns) < 1L || length(columns) > 3L) .abort("columns names one to three embedding columns.")
+    if (!is.numeric(columns) || anyNA(columns) || any(columns != floor(columns)) || any(columns < 1) || any(columns > ncol(coordinates))) {
+      .abort("columns must name embedding columns from 1 to ", ncol(coordinates), "; got c(", paste(columns, collapse = ", "), ").")
+    }
     coordinates <- coordinates[, columns, drop = FALSE]
     storage.mode(coordinates) <- "double"
     if (as.double(grid_size)^ncol(coordinates) >= 2^53) {
@@ -207,4 +219,42 @@ cellucid_subsample_cells <- function(x, n_cells = NULL, fraction = NULL, method 
     .session_manifest_error("cells.spec must give a blocks subsample its blockSize")
   }
   list(spec = spec, kept = kept, digest = cells[["digest"]])
+}
+
+# The `genes` record of a session saved while genes were read for a sample
+# of the open cells: genes were read for the first `cells` open cells in
+# their order (the order of the `blocks` subsample of every cell `order`
+# names -- every cell's, or a share's spread through a file in its own
+# order, its cells filtered -- or, with `order` null, a subsample's priority
+# order), whose original positions
+# have the cell-set digest `digest`. Checked as the web app's
+# decodeGeneSampleRecord and cellucid-python's _decode_genes check it.
+.session_genes <- function(genes, cell_count) {
+  if (!is.list(genes) || !setequal(names(genes), c("cells", "order", "digest")) || anyDuplicated(names(genes))) {
+    .session_manifest_error("genes must have exactly cells, order and digest")
+  }
+  cells <- genes[["cells"]]
+  if (!is.numeric(cells) || length(cells) != 1L || cells != floor(cells) || !(cells >= 1 && cells < cell_count)) {
+    .session_manifest_error("genes.cells must be a count of open cells below the fingerprint cell count")
+  }
+  order <- genes[["order"]]
+  if (!is.null(order)) {
+    if (!is.list(order) || !setequal(names(order), c("method", "seed", "blockSize")) || anyDuplicated(names(order)) ||
+        !identical(order[["method"]], "blocks")) {
+      .session_manifest_error("genes.order must be {method: 'blocks', seed, blockSize}")
+    }
+    seed <- order[["seed"]]
+    if (!is.numeric(seed) || length(seed) != 1L || seed != floor(seed) || seed < 0 || seed > 4294967295) {
+      .session_manifest_error("genes.order.seed must be a uint32")
+    }
+    block_size <- order[["blockSize"]]
+    if (!is.numeric(block_size) || length(block_size) != 1L || block_size != floor(block_size) || block_size < 1) {
+      .session_manifest_error("genes.order.blockSize must be a positive count")
+    }
+  }
+  digest <- genes[["digest"]]
+  if (!is.character(digest) || length(digest) != 1L || !grepl("^[0-9a-f]{16}$", digest)) {
+    .session_manifest_error("genes.digest must be 16 lowercase hex digits")
+  }
+  list(cells = cells, order = order, digest = digest)
 }

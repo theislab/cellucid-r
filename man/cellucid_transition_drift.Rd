@@ -47,7 +47,8 @@ drift per embedding to draw the field on several
 (\code{list(T_fwd = list(X_umap = d2, X_umap_3d = d3))}).
 
 This is the computation of the Python package's
-\code{cellucid.compute_transition_drift()}, operation for operation. Python's
+\code{cellucid.compute_transition_drift()}, the same operations (their
+summation order aside, below). Python's
 \code{cellucid.add_transition_drift_to_obsm()}, which writes the result into
 the \code{obsm} of an AnnData held in memory, has no R counterpart: this
 package holds no AnnData in memory, and \code{cellucid_prepare()}'s

@@ -16,7 +16,13 @@
  * 3. its quantile is the number of the category's cells at that distance or
  *    closer, divided by the cell count, both as float32.
  *
- * Every other cell (a missing code, or a category under `min_points`) is NaN.
+ * A cell whose latent row is not finite (NaN or an infinity in any column:
+ * a latent space computed on some of the cells, a modality that did not
+ * measure the cell) has no place in the latent space: it is left out as a
+ * cell with a missing code is, adding nothing to its category's centroid or
+ * size, and `min_points` counts a category's placed cells. Every other cell
+ * (a missing code, an unplaced cell, or a category under `min_points`) is
+ * NaN.
  *
  * Only IEEE double and float arithmetic is used, each operation rounded on
  * its own: no long double, and every product is stored before it is added so
@@ -56,6 +62,17 @@ static R_xlen_t cellucid_count_at_most(const double *sorted, R_xlen_t length,
 
 static double cellucid_as_float32(double value) { return (double)(float)value; }
 
+/* Whether `cell`'s row of the column-major latent space is finite in every column. */
+static int cellucid_placed(const double *values, R_xlen_t n_cells, R_xlen_t width,
+                           R_xlen_t cell) {
+  for (R_xlen_t column = 0; column < width; column++) {
+    if (!isfinite(values[column * n_cells + cell])) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 /*
  * `latent` is the n_cells x width double matrix of the latent space, `codes`
  * one integer per cell (0-based; NA or outside [0, n_categories) is missing).
@@ -92,14 +109,15 @@ SEXP cellucid_latent_outlier_quantiles(SEXP latent, SEXP codes,
     quantiles[cell] = R_NaN;
   }
 
-  /* The cells of each category, in cell order. */
+  /* The placed cells of each category, in cell order. */
   R_xlen_t *starts = (R_xlen_t *)R_alloc((size_t)n_categories + 1, sizeof(R_xlen_t));
   for (int code = 0; code <= n_categories; code++) {
     starts[code] = 0;
   }
   for (R_xlen_t cell = 0; cell < n_cells; cell++) {
     const int code = code_of[cell];
-    if (code != NA_INTEGER && code >= 0 && code < n_categories) {
+    if (code != NA_INTEGER && code >= 0 && code < n_categories &&
+        cellucid_placed(values, n_cells, width, cell)) {
       starts[code + 1] += 1;
     }
   }
@@ -115,7 +133,8 @@ SEXP cellucid_latent_outlier_quantiles(SEXP latent, SEXP codes,
   }
   for (R_xlen_t cell = 0; cell < n_cells; cell++) {
     const int code = code_of[cell];
-    if (code != NA_INTEGER && code >= 0 && code < n_categories) {
+    if (code != NA_INTEGER && code >= 0 && code < n_categories &&
+        cellucid_placed(values, n_cells, width, cell)) {
       members[next[code]++] = cell;
     }
   }
