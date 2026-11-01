@@ -12,10 +12,15 @@
 #   WS   /_cellucid/ws                      the viewer channel
 #
 # An R object is served as a Cellucid-ready AnnData (or MuData) Zarr store
-# held in memory: the plan cellucid_prepare() writes (dataset-plan.R),
+# held in memory, its cells in priority order under the served seed
+# (viewer-api.R, .serve_object): the plan cellucid_prepare() writes (dataset-plan.R),
 # uncompressed (the browser reads it over loopback), every chunk made when the
-# browser asks for it, and the chunks made by a transform kept in a
-# least-recently-used cache bounded by `cache_bytes` (zarr-store.R). A file or
+# browser asks for it (a Range of one, only its bytes), the chunks made by a
+# transform kept in a least-recently-used cache bounded by `cache_bytes`
+# (zarr-store.R), its expression matrices laid out gene-major once in the
+# background on every core (expression-input.R, .laid_out_arrays(); a chunk
+# asked for before is made from the layout's progress, only the part not laid
+# out yet passed over). A file or
 # a Zarr folder given by path is served from disk. The object is read when the
 # viewer starts: changing it afterwards does not change what the viewer shows
 # (R copies on change), so view it again to see the change.
@@ -25,7 +30,8 @@
 # console waiting at its prompt), so the console stays usable while a viewer
 # is open. Every request is checked first (onHeaders): a Host header that
 # does not name this server is answered 421 (DNS rebinding), and a WebSocket
-# upgrade from another origin 403.
+# upgrade from another origin 403 -- and its socket, which httpuv opens all
+# the same, closed at once (.on_server_ws_open()).
 
 .viewer_registry <- new.env(parent = emptyenv())
 
@@ -111,13 +117,15 @@
 }
 
 # The CORS headers of every answer, as cellucid-python sends them: the
-# requesting origin when it is local or Cellucid's own, the methods and
-# headers a reader uses, and the headers a reader acts on exposed.
+# requesting origin when it is local (a loopback page) or the hosted app's,
+# exactly (https://www.cellucid.com, https://cellucid.com; no other page on
+# a cellucid.com name), the methods and headers a reader uses, and the
+# headers a reader acts on exposed.
 .cors_headers <- function(req) {
   headers <- list(
     `Access-Control-Allow-Methods` = "GET, HEAD, OPTIONS",
     `Access-Control-Allow-Headers` = "Content-Type, Range",
-    `Access-Control-Expose-Headers` = "Accept-Ranges, Content-Encoding, Content-Length, Content-Range, ETag",
+    `Access-Control-Expose-Headers` = "Accept-Ranges, Content-Encoding, Content-Length, Content-Range, ETag, Retry-After",
     `Cache-Control` = "no-cache"
   )
   origin <- .request_header(req, "Origin")
@@ -125,8 +133,7 @@
     parts <- regmatches(origin, regexec("^(https?)://([^/:]+)(:[0-9]+)?$", origin))[[1L]]
     allowed <- length(parts) > 0L && (
       parts[[3L]] %in% c("localhost", "127.0.0.1") ||
-        identical(origin, .cellucid_web_url) ||
-        (identical(parts[[2L]], "https") && (parts[[3L]] == "cellucid.com" || endsWith(parts[[3L]], ".cellucid.com")))
+        origin %in% c(.cellucid_web_url, "https://cellucid.com")
     )
     if (allowed) {
       headers <- c(list(`Access-Control-Allow-Origin` = origin, Vary = "Origin"), headers)
@@ -218,12 +225,13 @@
 }
 
 # Bytes held in memory, or a range of them: exactly the bytes asked for.
-.bytes_response <- function(req, bytes, etag, head_only) {
+# A body of the store (.store_body()): only the interval asked for is made.
+.bytes_response <- function(req, source, etag, head_only) {
   if (.not_modified(req, etag)) return(list(status = 304L, headers = list(ETag = etag), body = raw(0)))
-  size <- length(bytes)
+  size <- source$size
   interval <- .range_interval(req, size, etag)
   if (isFALSE(interval)) return(.range_not_satisfiable(size))
-  body <- if (is.null(interval)) bytes else bytes[(interval[[1L]] + 1):(interval[[2L]] + 1)]
+  body <- if (is.null(interval)) source$read(0, size) else source$read(interval[[1L]], interval[[2L]] + 1)
   # A HEAD answer is given its body too: httpuv sends a HEAD's headers
   # alone, with the body's Content-Length, which is what a reader sizes the
   # resource from.
@@ -234,18 +242,37 @@
   )
 }
 
-# The bytes read from disk at once for a range; a longer range is copied
-# through a temporary file in blocks of this size, so its bytes are never
-# held in R's memory whole (a scheduling choice, not a limit on ranges).
-.range_block_bytes <- 8388608
 
-# A file on disk, or a range of it. A whole file is streamed by httpuv from
-# disk; a range is read with one seek and one read.
+# One file's version: its size and a strong validator of its bytes, NULL when
+# it is no longer a readable file. The validator is the file's size,
+# modification time, status-change time and identity (inode; on Windows its
+# file index, and NTFS's change time), read from the file opened
+# (src/file_version.c), as cellucid-python's _file_version() reads them: a
+# file rewritten in place has a new status-change time, even with its
+# modification time put back, and one replaced by another (moved over it,
+# even with its modification time copied: cp -p, rsync -t) a new identity
+# and status-change time. file.info() cannot say this: it has no inode, and
+# on Windows its ctime is the creation time, which a rewrite in place keeps.
+# The browser files what it keeps of a served file under the validator (the
+# dataset list states it beside the size, .datasets_document()), so a
+# changed file is a new version.
+.file_version <- function(path) {
+  .native_file_version(path)
+}
+
+# A file on disk, or a range of it. A range is read with its version from
+# the one file opened (src/file_version.c), as cellucid-python answers it
+# from the descriptor it reads the tag from: a file replaced or rewritten
+# meanwhile never sends new bytes under the old tag, and nothing is copied
+# through a temporary file. Memory holds the range the browser asked for (its
+# requests are sized by its own reading plan). A whole file is streamed by
+# httpuv from disk, which opens it by its path again: httpuv sends no part of
+# a file, and no file it did not open itself.
 .file_response <- function(req, path, head_only) {
-  info <- file.info(path, extra_cols = FALSE)
-  if (is.na(info$size) || isTRUE(info$isdir)) return(.text_response(404L, paste0(basename(path), " is no longer readable")))
-  size <- info$size
-  etag <- paste0("\"", as.hexmode(as.integer(size %% 2^31)), "-", format(as.numeric(info$mtime) * 1e6, scientific = FALSE), "\"")
+  version <- .file_version(path)
+  if (is.null(version)) return(.text_response(404L, paste0(basename(path), " is no longer readable")))
+  size <- version$size
+  etag <- version$etag
   if (.not_modified(req, etag)) return(list(status = 304L, headers = list(ETag = etag), body = raw(0)))
   interval <- .range_interval(req, size, etag)
   if (isFALSE(interval)) return(.range_not_satisfiable(size))
@@ -260,31 +287,15 @@
     return(list(status = status, headers = headers, body = .file_body(path)))
   }
   length <- interval[[2L]] - interval[[1L]] + 1
-  connection <- file(path, "rb")
-  on.exit(close(connection))
-  seek(connection, interval[[1L]])
-  if (length <= .range_block_bytes) {
-    return(list(status = status, headers = headers, body = readBin(connection, "raw", n = length)))
+  if (head_only) return(list(status = status, headers = headers, body = raw(0)))
+  read <- .native_file_range(path, interval[[1L]], length)
+  if (is.null(read)) return(.text_response(404L, paste0(basename(path), " is no longer readable")))
+  if (!identical(read$etag, etag) || length(read$bytes) != length) {
+    # Replaced or rewritten since its version was read for the request:
+    # answered as the browser answers a changed file, never with mixed bytes.
+    return(.text_response(409L, paste0(basename(path), " changed while it was read")))
   }
-  # A long range is copied block by block into a file httpuv sends and then
-  # removes (owned), so memory holds one block at a time.
-  copy <- tempfile("cellucid-range-")
-  output <- file(copy, "wb")
-  left <- length
-  tryCatch({
-    while (left > 0) {
-      block <- readBin(connection, "raw", n = min(left, .range_block_bytes))
-      if (length(block) == 0L) .abort(basename(path), " ended before the range it was asked for")
-      writeBin(block, output)
-      left <- left - length(block)
-    }
-    close(output)
-  }, error = function(error) {
-    try(close(output), silent = TRUE)
-    unlink(copy)
-    stop(error)
-  })
-  list(status = status, headers = headers, body = .file_body(copy, owned = TRUE))
+  list(status = status, headers = headers, body = read$bytes)
 }
 
 # --- The served store ------------------------------------------------------------
@@ -309,13 +320,13 @@
   key <- .canonical_store_key(substring(route, nchar(prefix) + 1L))
   if (is.null(key)) return(not_found())
   if (!is.null(viewer$store)) {
-    bytes <- .store_get(viewer$store, key)
-    if (is.null(bytes)) return(.text_response(404L, paste0("No key '", key, "' in the store")))
-    return(.bytes_response(req, bytes, viewer$etag, head_only))
+    body <- .store_body(viewer$store, key)
+    if (is.null(body)) return(.text_response(404L, paste0("No key '", key, "' in the store")))
+    return(.bytes_response(req, body, viewer$etag, head_only))
   }
   generated <- served$generated
   if (!is.null(generated) && identical(key, generated$key)) {
-    return(.bytes_response(req, generated$bytes, viewer$etag, head_only))
+    return(.bytes_response(req, .raw_body(generated$bytes), viewer$etag, head_only))
   }
   path <- file.path(served$path, key)
   if (!file.exists(path) || dir.exists(path)) return(.text_response(404L, paste0("No key '", key, "' in the store")))
@@ -378,7 +389,11 @@
   switch(route,
     `_cellucid/health` = return(.json_response(viewer$health)),
     `_cellucid/info` = return(.json_response(viewer$info)),
-    `_cellucid/datasets` = return(.json_response(viewer$datasets)),
+    `_cellucid/datasets` = {
+      listed <- .datasets_document(viewer)
+      if (is.null(listed)) return(.text_response(404L, paste0(basename(viewer$served$path), " is no longer readable")))
+      return(.json_response(listed))
+    },
     `_cellucid/protocol` = return(.json_response(.viewer_protocol_document()))
   )
   if (startsWith(route, "_cellucid/anndata/")) {
@@ -403,9 +418,33 @@
 .viewer_hello_seconds <- 60
 .viewer_keepalive_seconds <- 20
 
+# How long cellucid_stop() lets an open page answer the channel's close before
+# the server stops. httpuv writes a frame after another on its next turn of
+# its event loop (a frame's empty last buffer leaves its write unfinished
+# until then), and stopping the server drops what is not written yet: the
+# freeze and the close sent together lost the close (seen on macOS CI and
+# every time under Rosetta). A page answers the close at once and the wait
+# ends then; this bounds it for a page that never answers.
+.viewer_close_seconds <- 1
+
 # The requestId prefix of the keep-alive pings: their pongs keep the
 # connection busy and are not events of the caller's.
 .keepalive_prefix <- "keepalive-"
+
+# A WebSocket the server opened. httpuv upgrades a connection whose
+# handshake onHeaders answered all the same (it writes the 421 or 403, then
+# its own 101, and opens the socket), so a refused socket is closed here
+# before it can say anything: a page on another origin, or a rebound Host,
+# never holds a channel. (A notebook widget's socket is no HTTP connection:
+# .widget_socket() goes to .on_ws_open() directly.)
+.on_server_ws_open <- function(viewer, ws) {
+  refusal <- .on_headers(viewer, ws$request)
+  if (!is.null(refusal)) {
+    ws$close(.viewer_close_codes[["protocolViolation"]], refusal$body)
+    return(invisible(NULL))
+  }
+  .on_ws_open(viewer, ws)
+}
 
 .on_ws_open <- function(viewer, ws) {
   path <- ws$request$PATH_INFO %||% ""
@@ -490,6 +529,9 @@
 .check_event_cells <- function(viewer, event) {
   n <- viewer$n_cells
   if (is.null(n)) return(event)
+  if (identical(event$type, "result") && event$payload$nObs != n) {
+    .refuse_frame("A result names a dataset of ", event$payload$nObs, " ", .plural(event$payload$nObs, "cell"), ", and this one has ", n, ".")
+  }
   cells <- switch(event$type,
     selection = event$payload$cells,
     hover = event$payload$cell,
@@ -545,21 +587,62 @@
   } else if (identical(type, "session_bundle")) {
     request <- viewer$session_requests[[payload$requestId]]
     if (is.null(request)) {
-      # Nobody waits for it any more (the wait timed out): dropped, and the
-      # channel stays open.
+      # Nobody asked for it any more (the request was withdrawn): dropped,
+      # and the channel stays open.
       return(invisible(NULL))
     }
-    viewer$session_requests[[payload$requestId]] <- NULL
     if (!.is_session_bundle(event$body)) {
       # The one waiting is told now, in the form its wait accepts.
       return(.deliver_event(viewer, list(type = "command_error", payload = list(
         command = "requestSessionBundle",
-        reason = paste0("The viewer sent an invalid session bundle: ", .not_a_session_file)
+        reason = paste0("The viewer sent an invalid session bundle: ",
+                        .session_signature_refusal(event$body[seq_len(min(length(event$body), length(.session_magic)))]))
       ))))
     }
     path <- tempfile("cellucid-session-", fileext = ".cellucid-session")
     writeBin(event$body, path)
     payload <- list(requestId = payload$requestId, status = "ok", bytes = length(event$body), path = path)
+    # The request holds its answer until it is collected
+    # (cellucid_session_result()).
+    viewer$session_requests[[payload$requestId]] <- list(answer = payload)
+  } else if (type %in% c("result", "result_removed", "results") && !identical(payload$epoch, viewer$results_epoch)) {
+    # Another epoch -- a reloaded page, the viewer shown again elsewhere,
+    # another dataset opened in it -- starts afresh; its snapshot follows.
+    viewer$results_epoch <- payload$epoch
+    viewer$results <- list()
+    viewer$results_inventory <- NULL
+    viewer$results_dataset <- NULL
+  }
+  if (identical(type, "result")) {
+    # The newest revision of each result: everything the viewer holds in its
+    # epoch, as of the last event it sent (cellucid_results() reads it,
+    # never asks).
+    record <- .result_record(payload, viewer$cell_names)
+    key <- .result_key(record)
+    held <- viewer$results[[key]]
+    if (is.null(held) || held$revision <= record$revision) viewer$results[[key]] <- record
+    if (!is.null(viewer$results_inventory)) viewer$results_inventory <- union(viewer$results_inventory, key)
+    payload <- record
+  } else if (identical(type, "result_removed")) {
+    key <- paste(payload$kind, payload$id, sep = ":")
+    held <- viewer$results[[key]]
+    if (!is.null(held) && held$revision < payload$revision) {
+      viewer$results[[key]] <- NULL
+      if (!is.null(viewer$results_inventory)) viewer$results_inventory <- setdiff(viewer$results_inventory, key)
+    }
+  } else if (identical(type, "results")) {
+    # A snapshot's end: the complete set, which replaces what was kept, and
+    # the dataset it describes (NULL: another one is open in the viewer).
+    listed <- vapply(payload$items, function(item) paste(item$kind, item$id, sep = ":"), "")
+    viewer$results <- viewer$results[intersect(names(viewer$results), listed)]
+    viewer$results_inventory <- listed
+    viewer$results_dataset <- payload$dataset
+  } else if (identical(type, "command_error") && identical(payload$command, "requestSessionBundle")) {
+    # The viewer could not capture a session: every request still open
+    # learns why.
+    for (id in names(viewer$session_requests)) {
+      if (is.null(viewer$session_requests[[id]]$answer)) viewer$session_requests[[id]] <- list(failed = payload$reason)
+    }
   } else if (identical(type, "data_mapping")) {
     viewer$data_mapping <- payload
   } else if (identical(type, "ready")) {
@@ -571,19 +654,35 @@
       .warn("A cellucid_on(\"", type, "\") hook failed: ", conditionMessage(error))
     })
   }
+  # A command the viewer refused (or that could not be built once the viewer
+  # could take it) is said, unless a hook handles it: commands never wait.
+  if (identical(type, "command_error") && length(viewer$hooks[["command_error"]]) == 0L) {
+    .warn("The viewer did not take ", .command_r_callers[[payload$command]] %||% payload$command, ": ", payload$reason)
+  }
+  # What waited for this event goes now.
+  if (identical(type, "ready")) .send_pending_pushes(viewer)
+  if (identical(type, "data_mapping")) .send_pending_mapping(viewer)
   invisible(NULL)
 }
 
-# A .cellucid-session file starts with its format's signature (the web app's
-# bundle/format.js, cellucid-python's SESSION_BUNDLE_MAGIC).
-.session_format_version <- 2L
-.session_bundle_magic <- charToRaw(paste0("CELLUCID_SESSION/", .session_format_version, "\n"))
-.not_a_session_file <- paste0(
-  "This file is not a Cellucid session file of format ", .session_format_version,
-  " (it does not start with CELLUCID_SESSION/", .session_format_version, ")."
+# The R call behind each command, for what a refused one says.
+.command_r_callers <- list(
+  requestSessionBundle = "cellucid_request_session()", highlight = "cellucid_highlight()",
+  clearHighlights = "cellucid_clear_highlights()", setColorBy = "cellucid_color_by()",
+  setVisibility = "cellucid_set_visibility()", resetCamera = "cellucid_reset_camera()", freeze = "cellucid_freeze()",
+  setDataMapping = "cellucid_set_data_mapping()", setField = "cellucid_push()", setGeneSet = "cellucid_push_gene_set()"
 )
 
+# A command that waited for the viewer and could not be built once it could:
+# reported as the viewer reports a refused command (a command_error event).
+.report_local_command_error <- function(viewer, command, reason) {
+  .deliver_event(viewer, list(type = "command_error", payload = list(command = command, reason = substr(reason, 1L, 240L))))
+}
+
+# A .cellucid-session file starts with its format's signature (.session_magic,
+# session-bundle.R: the web app's bundle/format.js, cellucid-python's
+# SESSION_BUNDLE_MAGIC).
 .is_session_bundle <- function(body) {
-  length(body) >= length(.session_bundle_magic) &&
-    identical(body[seq_along(.session_bundle_magic)], .session_bundle_magic)
+  length(body) >= length(.session_magic) &&
+    identical(body[seq_along(.session_magic)], .session_magic)
 }

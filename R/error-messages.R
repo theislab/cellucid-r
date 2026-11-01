@@ -115,15 +115,7 @@
 .describe_non_finite <- function(values, subject, positions = TRUE) {
   dims <- if (is.matrix(values)) dim(values) else NULL
   scan <- .scan_non_finite(values, .non_finite_example_limit)
-  counts <- scan$counts
-  offending <- sum(counts)
-  counted <- c(
-    if (counts[["nan"]] > 0) paste(.format_count(counts[["nan"]]), "NaN"),
-    if (counts[["missing"]] > 0) paste(.format_count(counts[["missing"]]), "NA"),
-    if (counts[["positive"]] > 0) paste(.format_count(counts[["positive"]]), "+Inf"),
-    if (counts[["negative"]] > 0) paste(.format_count(counts[["negative"]]), "-Inf")
-  )
-  scope <- if (positions) "values" else "stored non-zero values"
+  offending <- sum(scan$counts)
   where <- if (positions) {
     paste0(
       " First affected position",
@@ -134,8 +126,22 @@
   } else {
     ""
   }
+  .describe_non_finite_counts(scan$counts, scan$length, subject, positions, where)
+}
+
+# The same from the counts alone (named nan, missing, positive, negative) of
+# `length` values: a matrix held outside R's memory is counted block by block
+# (backed-matrix.R), its stored non-zero values having no position either.
+.describe_non_finite_counts <- function(counts, length, subject, positions = FALSE, where = "") {
+  counted <- c(
+    if (counts[["nan"]] > 0) paste(.format_count(counts[["nan"]]), "NaN"),
+    if (counts[["missing"]] > 0) paste(.format_count(counts[["missing"]]), "NA"),
+    if (counts[["positive"]] > 0) paste(.format_count(counts[["positive"]]), "+Inf"),
+    if (counts[["negative"]] > 0) paste(.format_count(counts[["negative"]]), "-Inf")
+  )
+  scope <- if (positions) "values" else "stored non-zero values"
   paste0(
-    subject, " cannot be stored: of ", .format_count(scan$length), " ",
+    subject, " cannot be stored: of ", .format_count(length), " ",
     scope, ", ", paste(counted, collapse = ", "), ".", where,
     " Coordinates, expression values, vectors and graph weights must be",
     " finite numbers: a missing value or an infinity has no position on a",

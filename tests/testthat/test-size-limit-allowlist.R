@@ -69,6 +69,10 @@ size_limit_allowlist <- list(
     "PLAT",
     "The longest raw vector R allocates: a chunk, block or frame beyond it is refused before its byte count can wrap a 32-bit R_xlen_t."
   ),
+  "src/backed.c:R_XLEN_T_MAX" = c(
+    "PLAT",
+    "The longest vector R allocates: a counted row count, or a chunk sliced from a gene-major block, beyond it has no vector to fill."
+  ),
   "src/extent.c:R_XLEN_T_MAX" = c(
     "PLAT",
     "The longest vector R allocates: a row count whose pointers (one more) it cannot hold is refused before the cast."

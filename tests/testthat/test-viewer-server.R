@@ -67,6 +67,7 @@ test_that("without the web build the data routes still answer", {
 test_that("every key of the served store answers with the prepared store's arrays, with exact ranges", {
   skip_without_sce()
   object <- small_sce()
+  # Served in priority order under the served seed, as cellucid_prepare() writes it by default.
   folder <- suppressMessages(cellucid_prepare(file.path(tempfile(), "s.zarr"), "zarr", data = object, dataset_id = "s", dataset_name = "S"))
   viewer <- test_viewer(object, dataset_id = "s", dataset_name = "S")
   served <- tempfile("cellucid_answered_")
@@ -111,14 +112,59 @@ test_that("chunks made by a transform are kept within the cache budget", {
   expect_lte(cache$used, 2000)
   expect_gt(length(cache$sizes), 0L)
   expect_identical(cache$used, sum(cache$sizes))
-  # Chunks of text and of a matrix, and the gene-major blocks of X, are
-  # kept; a chunk of a numeric vector, a slice of it, never is.
+  # Chunks of text and of a matrix are kept; a chunk of a numeric vector, a
+  # slice of it, never is, nor X's gene-major arrays (laid out once, outside
+  # the cache: .laid_out_arrays()).
   transformed <- vapply(keys, function(key) {
     meta <- jsonlite::fromJSON(rawToChar(cellucid:::.store_get(viewer$store, sub("/[^/]+$", "/.zarray", key))))
     identical(meta$dtype, "|O") || length(meta$shape) == 2L
   }, logical(1L))
   expect_true(any(!transformed))
-  expect_true(all(names(cache$sizes) %in% c(keys[transformed], "X\0010")))
+  expect_true(all(names(cache$sizes) %in% keys[transformed]))
+})
+
+# The layouts' scratch files in R's session folder. Linux and macOS remove a
+# scratch file's name as soon as it is mapped; Windows keeps the name of an
+# open file and removes it when the file is closed (FILE_FLAG_DELETE_ON_CLOSE,
+# src/chunks.c), which the viewer stopping does -- and the system does
+# however R ends.
+layout_scratch <- function() list.files(tempdir(), pattern = "^cellucid-layout-")
+
+test_that("a served expression matrix is laid out once in the background, its chunks made from the matrix until then", {
+  skip_without_sce()
+  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S", cache_bytes = 2000)
+  store <- viewer$store
+  # Laid out (test_viewer waits): X's chunks are slices of the layout, the
+  # cache never holds them, and no scratch file is named in the folder.
+  expect_identical(cellucid:::.native_layout_state(store$layouts, 0L)[[1L]], 2)
+  if (.Platform$OS.type != "windows") expect_identical(layout_scratch(), character())
+  laid <- lapply(c("X/data/0", "X/indices/0"), function(key) http_request(served_url(viewer, key)))
+  expect_identical(vapply(laid, `[[`, 0L, "status"), c(200L, 200L))
+  expect_false(any(startsWith(as.character(names(store$cache$sizes)), "X")))
+  # While a matrix is laid out, a chunk (or a range of one) is made from the
+  # matrix itself: the same bytes, never a wait.
+  testthat::local_mocked_bindings(.native_layout_state = function(layouts, index) c(1, 250, 1000, 3), .package = "cellucid")
+  during <- lapply(c("X/data/0", "X/indices/0"), function(key) http_request(served_url(viewer, key)))
+  expect_identical(vapply(during, `[[`, 0L, "status"), c(200L, 200L))
+  expect_identical(lapply(during, `[[`, "body"), lapply(laid, `[[`, "body"))
+  ranged <- http_request(served_url(viewer, "X/indices/0"), list(Range = "bytes=4-11"))
+  expect_identical(ranged$status, 206L)
+  expect_identical(ranged$body, laid[[2L]]$body[5:12])
+})
+
+test_that("stopping a viewer stops its layouts and lets their files go", {
+  skip_without_sce()
+  before <- layout_scratch()
+  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
+  layouts <- viewer$store$layouts
+  # Its scratch files (two a matrix laid out): named only on Windows, while
+  # they are open.
+  named <- setdiff(layout_scratch(), before)
+  expect_gt(length(viewer$store$layout_labels), 0L)
+  expect_length(named, if (.Platform$OS.type == "windows") 2L * length(viewer$store$layout_labels) else 0L)
+  cellucid_stop(viewer)
+  expect_error(cellucid:::.native_layout_state(layouts, 0L), "stopped")
+  expect_identical(intersect(layout_scratch(), named), character())
 })
 
 test_that("a Host that does not name the server is refused, and so is a foreign WebSocket", {
@@ -127,15 +173,37 @@ test_that("a Host that does not name the server is refused, and so is a foreign 
   expect_identical(http_request(paste0(viewer$url, "/_cellucid/health"), list(Host = "attacker.example"))$status, 421L)
   expect_identical(http_request(paste0(viewer$url, "/_cellucid/health"), list(Host = "127.0.0.1:1"))$status, 421L)
   expect_identical(http_request(paste0(viewer$url, "/_cellucid/health"), list(Host = paste0("localhost:", viewer$port)))$status, 200L)
+  # Each refused socket is closed by the server as httpuv opens it, never
+  # left to say hello (ws_refused_close(), helper-viewer.R).
   foreign <- ws_open(viewer, origin = "https://attacker.example")
   expect_identical(foreign$status, 403L)
+  expect_identical(ws_refused_close(foreign)$code, 1008L)
   ws_close(foreign)
   anonymous <- ws_open(viewer, origin = NULL)
   expect_identical(anonymous$status, 403L)
+  expect_identical(ws_refused_close(anonymous)$code, 1008L)
   ws_close(anonymous)
   rebound <- ws_open(viewer, host = "attacker.example")
   expect_identical(rebound$status, 421L)
+  expect_identical(ws_refused_close(rebound)$code, 1008L)
   ws_close(rebound)
+  expect_null(viewer$socket)
+})
+
+test_that("cross-origin reads are open to the hosted app and loopback pages only, as in Python", {
+  allowed <- function(origin) {
+    headers <- cellucid:::.cors_headers(list(HTTP_ORIGIN = origin))
+    identical(headers[["Access-Control-Allow-Origin"]], origin)
+  }
+  for (origin in c("https://www.cellucid.com", "https://cellucid.com", "http://localhost:3000", "http://127.0.0.1:8000")) {
+    expect_true(allowed(origin), info = origin)
+  }
+  # No other page on a cellucid.com name: the documentation site runs its
+  # host's scripts and must not read a served dataset.
+  for (origin in c("https://docs.cellucid.com", "https://preview.cellucid.com", "http://www.cellucid.com",
+                   "https://www.cellucid.com.example.org", "https://theislab.github.io", "null")) {
+    expect_false(allowed(origin), info = origin)
+  }
 })
 
 test_that("allowed_hosts lets a proxy's name through", {
@@ -153,7 +221,7 @@ test_that("the channel welcomes the viewer's credentials and refuses others", {
   expect_identical(ws_receive(wrong)$code, 4401L)
   ws_close(wrong)
   rude <- ws_open(viewer)
-  ws_send_json(rude, list(type = "ready", n_cells = 1, dimensions = 2))
+  ws_send_json(rude, list(type = "ready", n_cells = 1, n_obs = 1, dimensions = 2))
   expect_identical(ws_receive(rude)$code, 1008L)
   ws_close(rude)
   elsewhere <- ws_open(viewer, path = "/elsewhere")
@@ -185,7 +253,7 @@ test_that("commands wait for the channel and go out in order", {
   received <- lapply(frames, function(frame) frame$json)
   # Commands that name cells are binary frames; every other one is text.
   expect_identical(vapply(frames, function(frame) frame$opcode, 0L), c(2L, 1L, 2L, 1L, 1L, 1L))
-  expect_identical(received[[1L]], list(type = "highlight", color = "#123456", cells = c(0L, 2L)))
+  expect_identical(received[[1L]], list(type = "highlight", color = "#123456", label = NULL, cells = c(0L, 2L)))
   expect_identical(received[[2L]], list(type = "setColorBy", field = "cluster"))
   expect_identical(received[[3L]], list(type = "setVisibility", visible = FALSE, all = FALSE, cells = c(0L, 2:11)))
   expect_identical(vapply(received, function(x) x$type, ""), c("highlight", "setColorBy", "setVisibility", "resetCamera", "clearHighlights", "freeze"))
@@ -208,7 +276,7 @@ test_that("events reach the hooks, a selection by index and by name", {
   cellucid_on(viewer, "hover", function(event) seen$hover <<- event)
   cellucid_on(viewer, "click", function(event) stop("a broken hook"))
   client <- ws_welcomed(viewer)
-  ws_send_json(client, list(type = "ready", n_cells = 12, dimensions = 2))
+  ws_send_json(client, list(type = "ready", n_cells = 12, n_obs = 12, dimensions = 2))
   ws_send_json(client, list(type = "hover", cell = 3, position = list(x = 0.5, y = -1, z = 0)))
   header <- charToRaw("{\"type\":\"selection\",\"source\":\"lasso\"}")
   ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, cellucid:::.encode_uint32(c(0, 4, 11))))
@@ -219,7 +287,7 @@ test_that("events reach the hooks, a selection by index and by name", {
   # Cells are R's 1-based positions in every event (the wire's 3 is cell 4).
   expect_identical(seen$hover$cell, 4L)
   expect_identical(seen$hover$cell_name, colnames(object)[[4L]])
-  expect_identical(cellucid_wait_ready(viewer, timeout = 5), list(n_cells = 12L, dimensions = 2L))
+  expect_identical(cellucid_wait_ready(viewer, timeout = 5), list(n_cells = 12L, n_obs = 12L, dimensions = 2L))
   ws_send_json(client, list(type = "click", cell = 1, button = 0, shift = FALSE, ctrl = FALSE))
   expect_warning(run_loop_until(function() !is.null(viewer$last$click)), "a broken hook")
   cellucid_off(viewer, "selection")
@@ -256,12 +324,12 @@ test_that("a session bundle arrives as the file it asked for", {
   answer <- function() {
     command <- ws_receive(client)$json
     header <- charToRaw(paste0("{\"type\":\"session_bundle\",\"requestId\":\"", command$requestId, "\"}"))
-    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("CELLUCID_SESSION/2\nbody")))
+    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("CELLUCID_SESSION/3\nbody")))
   }
   later::later(answer, 0.2)
   target <- tempfile(fileext = ".cellucid-session")
-  path <- cellucid_session(viewer, file = target, timeout = 10)
-  expect_identical(readLines(path, warn = FALSE), c("CELLUCID_SESSION/2", "body"))
+  path <- cellucid_session_result(cellucid_request_session(viewer), file = target, timeout = 10)
+  expect_identical(readLines(path, warn = FALSE), c("CELLUCID_SESSION/3", "body"))
   expect_length(viewer$session_requests, 0L)
   # A bundle without the signature is reported to the one waiting for it.
   bad <- function() {
@@ -270,18 +338,26 @@ test_that("a session bundle arrives as the file it asked for", {
     ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("not a session")))
   }
   later::later(bad, 0.2)
-  expect_error(cellucid_session(viewer, timeout = 10), "invalid session bundle.*CELLUCID_SESSION/2.*Try cellucid_session\\(\\) again")
+  # The one waiting stops with why; with no command_error hook, the refusal
+  # is also said as it arrives (as every refused command is).
+  expect_warning(
+    expect_error(cellucid_session_result(cellucid_request_session(viewer), timeout = 10),
+                 "invalid session bundle.*CELLUCID_SESSION/3.*Ask again with cellucid_request_session\\(\\)"),
+    "The viewer did not take cellucid_request_session\\(\\): The viewer sent an invalid session bundle"
+  )
   ws_close(client)
 })
 
 test_that("waiting on a viewer that never answers stops with what to do", {
   skip_without_sce()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
-  expect_error(cellucid_session(viewer, timeout = 0.3), "did not answer within 0.3 seconds.*No viewer is connected: open http")
-  expect_length(viewer$session_requests, 0L)
+  request <- cellucid_request_session(viewer)
+  expect_error(cellucid_session_result(request, timeout = 0.3), "did not answer within 0.3 seconds.*No viewer is connected: open http")
+  # The request stays open: collected later, once a viewer answers it.
+  expect_length(viewer$session_requests, 1L)
 })
 
-test_that("stopping closes the channel and frees the port for a new viewer", {
+test_that("stopping freezes the page, closes the channel and frees the port for a new viewer", {
   skip_without_sce()
   object <- small_sce(alt = FALSE)
   viewer <- cellucid_serve(object, dataset_id = "s", dataset_name = "S", port = 0L, web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL, quiet = TRUE)
@@ -289,6 +365,8 @@ test_that("stopping closes the channel and frees the port for a new viewer", {
   client <- ws_welcomed(viewer)
   expect_true(viewer$viewer_id %in% vapply(cellucid_viewers(), function(v) v$viewer_id, ""))
   cellucid_stop(viewer)
+  # The open page is told to freeze (it keeps its last view), as Python's stop() tells it.
+  expect_identical(ws_receive(client)$json$type, "freeze")
   expect_identical(ws_receive(client)$code, 1001L)
   ws_close(client)
   expect_false(viewer$running)
@@ -326,6 +404,89 @@ test_that("several viewers run at once, a taken port is refused or passed over",
   expect_length(cellucid_viewers(), 0L)
 })
 
+test_that("a file rewritten while it is served is a new version, in place or replaced", {
+  skip_if_not_installed("Matrix")
+  args <- prepare_fixture(file.path(tempfile(), "f.zarr.zip"))
+  args$format <- "zarr.zip"
+  zip <- suppressMessages(do.call(cellucid_prepare, args))
+  viewer <- test_viewer(zip)
+  url <- paste0(viewer$url, "/_cellucid/anndata/", viewer$served$route_name)
+  listed <- function() http_json(paste0(viewer$url, "/_cellucid/datasets"))$datasets[[1L]]$anndata$file
+  first <- listed()
+  expect_identical(http_request(url, list(`If-None-Match` = first$etag))$status, 304L)
+  expect_identical(listed()$etag, first$etag)
+
+  # Rewritten in place, the same size, its modification time put back (as a
+  # copy that keeps it would): still a new version.
+  bytes <- readBin(zip, "raw", file.size(zip))
+  modified <- file.mtime(zip)
+  Sys.sleep(0.05)
+  connection <- file(zip, "r+b")
+  seek(connection, 0L, rw = "write")
+  writeBin(rev(bytes[1:8]), connection)
+  close(connection)
+  Sys.setFileTime(zip, modified)
+  second <- listed()
+  expect_identical(second$size, first$size)
+  expect_false(identical(second$etag, first$etag))
+  stale <- http_request(url, list(`If-None-Match` = first$etag))
+  expect_identical(stale$status, 200L)
+  expect_identical(stale$headers[["etag"]], second$etag)
+  # A range asked of the old version is answered whole, as the new one.
+  ranged <- http_request(url, list(Range = "bytes=0-7", `If-Range` = first$etag))
+  expect_identical(ranged$status, 200L)
+  expect_identical(ranged$body[1:8], rev(bytes[1:8]))
+
+  # Replaced by another file moved over it.
+  Sys.sleep(0.05)
+  other <- tempfile(tmpdir = dirname(zip))
+  writeBin(bytes, other)
+  expect_true(file.rename(other, zip))
+  expect_false(listed()$etag %in% c(first$etag, second$etag))
+
+  # A file that is gone is not listed as if it were there.
+  unlink(zip)
+  gone <- http_request(paste0(viewer$url, "/_cellucid/datasets"))
+  expect_identical(gone$status, 404L)
+  expect_identical(rawToChar(gone$body), paste0(basename(zip), " is no longer readable"))
+  expect_identical(http_request(url)$status, 404L)
+})
+
+test_that("a served file's validator is read from the file opened, never from its path", {
+  # A name outside every single-byte code page: on Windows the file is opened by its UTF-16 name.
+  path <- file.path(tempfile("cellucid_version_"), "café α.h5ad")
+  dir.create(dirname(path))
+  writeBin(as.raw(0:255), path)
+  version <- cellucid:::.file_version(path)
+  expect_identical(version$size, 256)
+  # The size, modification time, status-change time and identity, as hex.
+  expect_match(version$etag, "^\"100-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+\"$")
+  expect_identical(cellucid:::.file_version(path), version)
+  # What a path's file.info() reports is not the validator (on Windows its
+  # ctime is the creation time, which a rewrite in place keeps): times it
+  # reports otherwise change nothing.
+  file_info <- base::file.info
+  testthat::local_mocked_bindings(
+    file.info = function(...) {
+      info <- file_info(...)
+      info$mtime <- info$mtime - 1
+      info$ctime <- info$ctime - 1
+      info
+    },
+    .package = "base"
+  )
+  expect_identical(cellucid:::.file_version(path), version)
+  # A copy with the same bytes, its modification time copied (cp -p), is
+  # another file.
+  copy <- file.path(dirname(path), "copy.h5ad")
+  expect_true(file.copy(path, copy, copy.date = TRUE))
+  expect_false(identical(cellucid:::.file_version(copy)$etag, version$etag))
+  # A folder, or a file that is gone, has no version.
+  expect_null(cellucid:::.file_version(dirname(path)))
+  unlink(copy)
+  expect_null(cellucid:::.file_version(copy))
+})
+
 test_that("a prepared store or file given by path is served from disk", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(file.path(tempfile(), "f.zarr"))
@@ -346,6 +507,10 @@ test_that("a prepared store or file given by path is served from disk", {
   expect_identical(whole$body, readBin(zip, "raw", file.size(zip)))
   part <- http_request(url, list(Range = "bytes=100-163"))
   expect_identical(part$body, whole$body[101:164])
+  # The list states the validator the bytes are answered with: the version
+  # the viewer files what it keeps of the file under.
+  expect_match(datasets$anndata$file$etag, '^"[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+"$')
+  expect_identical(whole$headers[["etag"]], datasets$anndata$file$etag)
 
   viewer <- test_viewer(folder, latent_key = "X_pca", obs_keys = c("cluster"))
   health <- http_json(paste0(viewer$url, "/_cellucid/health"))
@@ -373,4 +538,41 @@ test_that("arguments that do not choose what is shown are refused by name", {
   expect_error(cellucid_serve(small_sce(), "positional", quiet = TRUE), "must be named")
   expect_error(cellucid_view(), "needs data")
   expect_error(cellucid_serve(small_sce(), port = 70000, quiet = TRUE), "port must be one whole number")
+})
+
+test_that("a file served as it is says what a subsample of it reads, unless it is in priority order", {
+  skip_if_not_installed("Matrix")
+  # An HDF5 file (its signature), which R cannot read to put in priority order.
+  loom <- tempfile(fileext = ".loom")
+  writeBin(c(as.raw(c(0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a)), raw(4000L)), loom)
+  note <- .path_order_note(.classify_path(loom))
+  expect_match(note, "is served as it is. Its cells are in their own order:", fixed = TRUE)
+  expect_match(note, "cellucid_view(object)", fixed = TRUE)
+  expect_match(note, "cellucid serve <path>", fixed = TRUE)
+  expect_no_match(note, "unless cellucid_prepare", fixed = TRUE)
+  h5ad <- tempfile(fileext = ".h5ad")
+  file.copy(loom, h5ad)
+  expect_match(.path_order_note(.classify_path(h5ad)), "unless cellucid_prepare() or prepare() wrote it", fixed = TRUE)
+  # A store cellucid_prepare() wrote in priority order: nothing to say, folder or zip.
+  args <- prepare_fixture(file.path(tempfile(), "f.zarr"))
+  args$priority_seed <- 0
+  folder <- suppressMessages(do.call(cellucid_prepare, args))
+  expect_null(.path_order_note(.classify_path(folder)))
+  args$out_path <- sub("\\.zarr$", ".zarr.zip", args$out_path)
+  args$format <- "zarr.zip"
+  expect_null(.path_order_note(.classify_path(suppressMessages(do.call(cellucid_prepare, args)))))
+  # One in its own order (no uns['cellucid']['priority']) is told.
+  unlink(file.path(folder, "uns", "cellucid", "priority"), recursive = TRUE)
+  expect_match(.path_order_note(.classify_path(folder)), "no reader of Zarr chunks", fixed = TRUE)
+  # Said when it is served (not when quiet).
+  messages <- character()
+  viewer <- withCallingHandlers(
+    cellucid_serve(loom, dataset_id = "l", dataset_name = "L", port = 0L, serve_web_ui = FALSE),
+    message = function(condition) {
+      messages <<- c(messages, conditionMessage(condition))
+      invokeRestart("muffleMessage")
+    }
+  )
+  on.exit(cellucid_stop(viewer), add = TRUE)
+  expect_true(any(grepl("Its cells are in their own order", messages, fixed = TRUE)))
 })

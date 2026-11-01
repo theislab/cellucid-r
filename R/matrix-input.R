@@ -57,8 +57,39 @@
   invisible(extent)
 }
 
+# Each cell (row) of a per-cell matrix placed -- finite in every column and
+# within the float32 range -- or not placed: a row holding NaN (or NA, or an
+# infinity) is a cell the array has no value for (an embedding computed on
+# some of the cells), stored as given and not drawn by the viewer in that
+# embedding. At least one cell is placed. The rule of the Python writer
+# (_require_placed_float32 in prepare_data/_inputs.py), in its words.
+.require_placed_float32 <- function(x, name) {
+  if (length(x) == 0L) {
+    return(invisible(NULL))
+  }
+  extent <- .native_extent(x)
+  if (extent[[3L]] == 0 && max(abs(extent[1:2])) <= .float32_max_magnitude) {
+    return(invisible(NULL))
+  }
+  placed <- rowSums(!is.finite(x)) == 0L
+  if (!any(placed)) {
+    .abort(
+      name, ": every cell's values are missing (NaN or infinite). A cell whose row ",
+      "holds NaN is a cell the array has no value for; at least one cell needs finite values."
+    )
+  }
+  if (max(abs(range(x[placed, , drop = FALSE]))) > .float32_max_magnitude) {
+    .abort(
+      name, " holds values beyond the float32 range (magnitude above ",
+      "3.4e38), which would be stored as infinities."
+    )
+  }
+  invisible(NULL)
+}
+
 # A numeric matrix with one row per cell: an embedding or a vector field. A
-# plain numeric vector is the one column it declares.
+# plain numeric vector is the one column it declares. A row holding NaN is a
+# cell the array does not place (.require_placed_float32()).
 .as_cell_matrix <- function(x, name) {
   if (is.numeric(x) && !is.object(x) && is.null(dim(x))) {
     x <- matrix(x, ncol = 1L)
@@ -68,7 +99,7 @@
     .abort(name, " must be a real numeric matrix or vector.")
   }
   storage.mode(x) <- "double"
-  .require_finite_float32(x, name)
+  .require_placed_float32(x, name)
   x
 }
 
@@ -120,7 +151,7 @@
   if (inherits(x, "Matrix") || .is_numeric_data_frame(x)) {
     x <- as.matrix(x)
   } else if (!is.matrix(x) || !(is.numeric(x) || is.logical(x)) || is.object(x)) {
-    .abort(name, " must be a real numeric matrix or a Matrix::Matrix.")
+    .abort(name, " must be a real numeric matrix, a Matrix::Matrix, or a matrix held outside R's memory (BPCells, DelayedArray).")
   }
   storage.mode(x) <- "double"
   list(matrix = x, extent = .require_finite_float32(x, name))

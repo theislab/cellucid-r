@@ -25,3 +25,7 @@ docs/
 
 # macOS
 .DS_Store
+
+# testthat failure records (written by a failing run, never kept)
+tests/testthat/_problems/
+tests/testthat/testthat-problems.rds

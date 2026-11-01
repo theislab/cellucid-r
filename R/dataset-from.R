@@ -21,9 +21,10 @@
 # the caller's object is never changed. A Cellucid-ready AnnData holds one
 # matrix per modality (its layers group is empty, the shared contract), so
 # counts beside data, and further assays, are not read. Matrices kept outside
-# R's memory (BPCells, HDF5Array and other DelayedArray backends) are read block by block
-# into a sparse matrix. scale.data is not read: it is dense, holds only the
-# variable genes, and is derived from data.
+# R's memory (BPCells, HDF5Array and other DelayedArray backends) stay there:
+# they are read block by block as they are written or served
+# (backed-matrix.R), never whole. scale.data is not read: it is dense, holds
+# only the variable genes, and is derived from data.
 #
 # SeuratObject, SingleCellExperiment and SummarizedExperiment are suggested,
 # not imported: each is loaded only when an object of its class arrives.
@@ -60,8 +61,10 @@
 
 .require_object_package <- function(package, class_name) {
   if (!requireNamespace(package, quietly = TRUE)) {
-    install <- if (package %in% c("SingleCellExperiment", "SummarizedExperiment", "S4Vectors")) {
+    install <- if (package %in% c("SingleCellExperiment", "SummarizedExperiment", "S4Vectors", "DelayedArray", "HDF5Array")) {
       paste0("BiocManager::install(\"", package, "\")")
+    } else if (identical(package, "BPCells")) {
+      "install.packages(\"BPCells\", repos = c(\"https://bnprks.r-universe.dev\", getOption(\"repos\")))"
     } else {
       paste0("install.packages(\"", package, "\")")
     }
@@ -112,61 +115,18 @@
   list(frame = out, note = note)
 }
 
-# The values one block of a matrix held outside R's memory holds while it is
-# read (.in_memory_matrix()).
-.matrix_block_values <- 16777216
-
-# A matrix as the plan reads it: a base matrix or a Matrix sparse matrix as it
-# is, and one held outside R's memory (BPCells, a DelayedArray backend such
-# as HDF5Array) read into a dgCMatrix block of rows by block of rows, so the
-# backend is never asked for the whole matrix at once.
-.in_memory_matrix <- function(matrix, where) {
-  if (is.matrix(matrix) || inherits(matrix, "Matrix")) {
+# A matrix as the plan reads it: a base matrix, a Matrix sparse matrix, or one
+# held outside R's memory (BPCells, a DelayedArray backend such as
+# HDF5Array), which stays where it is and is read block by block when it is
+# written or served (backed-matrix.R). Anything else is refused.
+.readable_matrix <- function(matrix, where) {
+  if (is.matrix(matrix) || inherits(matrix, "Matrix") || !is.null(.backed_package(matrix))) {
     return(matrix)
   }
-  backed <- inherits(matrix, "IterableMatrix") || methods::is(matrix, "DelayedMatrix")
-  if (!backed) {
-    .abort(
-      where, " is ", .describe_class(matrix), ", which Cellucid does not read. ",
-      "Convert it to a dgCMatrix first: as(x, \"dgCMatrix\")."
-    )
-  }
-  package <- if (inherits(matrix, "IterableMatrix")) "BPCells" else "DelayedArray"
-  .require_object_package(package, class(matrix)[[1L]])
-  .inform("Reading ", where, " (", class(matrix)[[1L]], ") into memory, block by block.")
-  n_rows <- nrow(matrix)
-  n_cols <- ncol(matrix)
-  # Blocks of whole columns (cells, which is how these backends store a
-  # genes x cells matrix), of about 2^24 values each: a scheduling choice
-  # that keeps each block's dense form small, not a limit on the matrix. The
-  # blocks' arrays are joined once at the end, so the cost is linear in the
-  # values read.
-  cols_per_block <- max(1L, as.integer(floor(.matrix_block_values / max(1, n_rows))))
-  starts <- if (n_cols == 0L) integer(0) else seq(1L, n_cols, by = cols_per_block)
-  i_parts <- vector("list", length(starts))
-  x_parts <- vector("list", length(starts))
-  counts <- vector("list", length(starts))
-  for (block in seq_along(starts)) {
-    cols <- starts[[block]]:min(n_cols, starts[[block]] + cols_per_block - 1L)
-    part <- methods::as(matrix[, cols, drop = FALSE], "dgCMatrix")
-    i_parts[[block]] <- part@i
-    x_parts[[block]] <- part@x
-    counts[[block]] <- diff(part@p)
-  }
-  total <- sum(as.numeric(unlist(counts, use.names = FALSE)))
-  if (total > .Machine$integer.max) {
-    .abort(where, " holds ", format(total, big.mark = ","), " non-zero values, more than a ",
-           "dgCMatrix holds (2^31 - 1).")
-  }
-  out <- methods::new(
-    "dgCMatrix",
-    i = as.integer(unlist(i_parts, use.names = FALSE)),
-    x = as.double(unlist(x_parts, use.names = FALSE)),
-    p = c(0L, as.integer(cumsum(as.numeric(unlist(counts, use.names = FALSE))))),
-    Dim = c(as.integer(n_rows), as.integer(n_cols))
+  .abort(
+    where, " is ", .describe_class(matrix), ", which Cellucid does not read. ",
+    "Convert it to a dgCMatrix first: as(x, \"dgCMatrix\")."
   )
-  dimnames(out) <- dimnames(matrix)
-  out
 }
 
 # The obsm embeddings: each matrix's rows placed in the dataset's cell order
@@ -177,8 +137,9 @@
   for (name in names(embeddings)) {
     matrix <- embeddings[[name]]
     if (is.data.frame(matrix)) matrix <- as.matrix(matrix)
-    matrix <- .in_memory_matrix(matrix, paste0(what, " '", name, "'"))
-    if (inherits(matrix, "Matrix")) matrix <- as.matrix(matrix)
+    matrix <- .readable_matrix(matrix, paste0(what, " '", name, "'"))
+    # An embedding is a few columns a cell, read whole.
+    if (!is.matrix(matrix)) matrix <- as.matrix(matrix)
     if (length(dim(matrix)) != 2L || ncol(matrix) == 0L || !is.numeric(matrix)) {
       notes <- c(notes, paste0(what, " '", name, "' holds no numeric coordinates and was not read."))
       next
@@ -366,9 +327,19 @@
   }
 
   graphs <- methods::slot(object, "graphs")
-  preferred <- c(paste0(active, "_snn"), grep("_snn$", names(graphs), value = TRUE), names(graphs))
-  chosen <- .choose_graph(graphs[unique(intersect(preferred, names(graphs)))], cells, "Seurat graph")
+  # The graphs the viewer's default rule would open with, in its order
+  # (.graph_candidates: connectivities, <active>_snn, any other *_snn); the
+  # first that is a cells x cells symmetric matrix is written.
+  candidates <- .graph_candidates(names(graphs), active)
+  chosen <- .choose_graph(graphs[candidates], cells, "Seurat graph")
   notes <- c(notes, chosen$notes)
+  passed_over <- setdiff(names(graphs), candidates)
+  if (length(passed_over) > 0L) {
+    notes <- c(notes, paste0(
+      "Seurat graph ", paste0("'", passed_over, "'", collapse = ", "),
+      " not read: the viewer draws one undirected neighbour graph, a shared-nearest-neighbour one."
+    ))
+  }
 
   misc <- tryCatch(methods::slot(object, "misc"), error = function(error) list())
   declared <- .declared_components(misc$cellucid, "misc$cellucid")
@@ -408,7 +379,7 @@
     # features (LayerData() would subset it, which copies it).
     layer <- function(kind) {
       if (!kind %in% layer_names) return(NULL)
-      matrix <- .in_memory_matrix(methods::slot(assay, "layers")[[kind]], paste0(where, " layer ", kind))
+      matrix <- .readable_matrix(methods::slot(assay, "layers")[[kind]], paste0(where, " layer ", kind))
       dimnames(matrix) <- list(
         SeuratObject::Features(assay, layer = kind),
         SeuratObject::Cells(assay, layer = kind)
@@ -495,6 +466,15 @@
   cells <- colnames(object)
   if (is.null(cells)) cells <- as.character(seq_len(ncol(object)) - 1L)
   notes <- character()
+  if (anyDuplicated(cells)) {
+    # Made unique as anndata's obs_names_make_unique() does (cellucid-python's
+    # resolve_obs): every part of the object follows its columns, so they are
+    # renamed in place, and the assays and embeddings keep their cells.
+    unique_names <- .make_unique_names(as.character(cells))
+    .inform("Cell names: ", .unique_names_note(0, unique_names$renamed, NULL))
+    cells <- unique_names$names
+    colnames(object) <- cells
+  }
 
   col_data <- SummarizedExperiment::colData(object)
   frame <- if (ncol(col_data) == 0L) {
@@ -542,11 +522,8 @@
   graph <- list(graph = NULL, notes = character())
   if (is_sce) {
     pair_names <- SingleCellExperiment::colPairNames(object)
-    preferred <- unique(c(
-      intersect("connectivities", pair_names),
-      grep("snn", pair_names, value = TRUE, ignore.case = TRUE),
-      pair_names
-    ))
+    # The colPairs the viewer's default rule would open with, in its order (.graph_candidates).
+    preferred <- .graph_candidates(pair_names)
     pairs <- lapply(stats::setNames(nm = preferred), function(name) {
       SingleCellExperiment::colPair(object, name, asSparse = TRUE)
     })
@@ -587,7 +564,7 @@
   }
   read <- function(assay_name) {
     matrix <- SummarizedExperiment::assay(experiment, assay_name, withDimnames = TRUE)
-    .in_memory_matrix(matrix, paste0(what, " assay '", assay_name, "'"))
+    .readable_matrix(matrix, paste0(what, " assay '", assay_name, "'"))
   }
   row_data <- SummarizedExperiment::rowData(experiment)
   frame <- if (ncol(row_data) == 0L) {

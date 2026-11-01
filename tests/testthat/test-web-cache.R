@@ -45,6 +45,18 @@ test_that("the inventory is parsed with its one exact schema", {
   expect_error(parse(charToRaw("{")), "valid JSON")
 })
 
+test_that("the WebAssembly decoders are listed with the type compileStreaming needs", {
+  # The web app's inventory lists assets/wasm/codecs.wasm as application/wasm;
+  # the viewer serves each file with the type its inventory records.
+  inventory <- cellucid:::.parse_web_inventory(inventory_with(function(x) {
+    wasm <- list(path = "assets/wasm/codecs.wasm", sha256 = strrep("ab", 32L), bytes = 8L, content_type = "application/wasm")
+    x$assets <- c(x$assets[1L], list(wasm), x$assets[-1L])
+    x
+  }))
+  expect_identical(names(inventory$assets), c("assets/app.js", "assets/wasm/codecs.wasm", "index.html"))
+  expect_identical(inventory$assets[["assets/wasm/codecs.wasm"]]$content_type, "application/wasm")
+})
+
 test_that("index.html carries exactly one build id", {
   id <- cellucid:::.web_build_id_of
   expect_identical(id(charToRaw("<meta name=\"cellucid-web-build-id\" content=\"b1\">")), "b1")

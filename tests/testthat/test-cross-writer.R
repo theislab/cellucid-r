@@ -6,18 +6,12 @@
 # encodings, dtypes, shapes, chunks, codecs, fill values and every value.
 # The test runs wherever a Python with cellucid, anndata and zarr is found:
 # the interpreter named by the CELLUCID_PYTHON environment variable, else
-# python3 on the PATH. It is skipped otherwise, and on CRAN.
+# python3 on the PATH (require_python(), helper-objects.R). It is skipped
+# otherwise, and on CRAN; where CELLUCID_PYTHON names an interpreter without
+# them it fails.
 
 cellucid_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import cellucid, anndata, zarr, scipy")),
-      stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
+  require_python("import cellucid, anndata, zarr, scipy", "CELLUCID_PYTHON", "cellucid, anndata and zarr")
 }
 
 # --- The R input, described in JSON -----------------------------------------
@@ -165,10 +159,8 @@ cross_writer_cases <- function() {
 }
 
 test_that("R and Python write the same AnnData from the same input", {
-  skip_on_cran()
   skip_if_not_installed("Matrix")
   python <- cellucid_python()
-  skip_if(is.null(python), "no Python with cellucid, anndata and zarr")
   script <- testthat::test_path("python", "cross_writer.py")
   root <- tempfile("cellucid_cross_")
   dir.create(root)
@@ -186,6 +178,8 @@ test_that("R and Python write the same AnnData from the same input", {
       args$out_path <- file.path(root, paste0("case", index, "-v", zarr_format, ".zarr"))
       args$format <- "zarr"
       args$zarr_format <- zarr_format
+      # Both writers at their default: the cells in priority order.
+      args$priority_seed <- NULL
       store <- suppressMessages(do.call(cellucid_prepare, args))
       pairs <- c(pairs, store, input)
     }
@@ -224,24 +218,18 @@ test_that("R and Python write the same AnnData from the same input", {
 # A multimodal object: R's Cellucid-ready MuData against Python's
 # cellucid.prepare(data = mdata) of the same MuData. It runs wherever a Python
 # with cellucid (with MuData support) and mudata is found:
-# CELLUCID_MUDATA_PYTHON, else CELLUCID_PYTHON, else python3.
+# CELLUCID_MUDATA_PYTHON, else CELLUCID_PYTHON, else python3; it fails where
+# CELLUCID_MUDATA_PYTHON names an interpreter without them.
 cross_writer_mudata_python <- function() {
-  candidates <- c(Sys.getenv("CELLUCID_MUDATA_PYTHON"), Sys.getenv("CELLUCID_PYTHON"), Sys.which("python3"))
-  for (candidate in candidates[nzchar(candidates)]) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import cellucid, mudata, inspect, sys; sys.exit(0 if 'data' in inspect.signature(cellucid.prepare).parameters else 1)")),
-      stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(status, 0L)) return(candidate)
-  }
-  NULL
+  require_python(
+    "import cellucid, mudata, inspect, sys; sys.exit(0 if 'data' in inspect.signature(cellucid.prepare).parameters else 1)",
+    c("CELLUCID_MUDATA_PYTHON", "CELLUCID_PYTHON"), "cellucid (MuData support) and mudata"
+  )
 }
 
 test_that("R and Python write the same MuData from the same multimodal input", {
-  skip_on_cran()
   skip_without_sce()
   python <- cross_writer_mudata_python()
-  skip_if(is.null(python), "no Python with cellucid (MuData support) and mudata (set CELLUCID_MUDATA_PYTHON)")
   root <- tempfile("cellucid_cross_mudata_")
   dir.create(root)
   on.exit(unlink(root, recursive = TRUE), add = TRUE)
@@ -257,6 +245,21 @@ test_that("R and Python write the same MuData from the same multimodal input", {
   ))
   expect_identical(output[length(output)], "ok", info = paste(output, collapse = "\n"))
 })
+
+# A store's file as the writer means it: a metadata document byte for byte, a
+# chunk by its bytes once inflated (a Blosc frame decoded). The deflate data
+# is the platform's zlib's, which differs between zlib releases for some
+# inputs (1.3.2 against 1.2.12): the bytes a writer stores are compared, not
+# the zlib that compressed them (R/zarr-store.R).
+stored_content <- function(path) {
+  bytes <- readBin(path, "raw", file.size(path))
+  if (basename(path) %in% c(".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json") || grepl("\\.json$", path)) {
+    return(bytes)
+  }
+  if (length(bytes) >= 16L && bytes[[1L]] == as.raw(2L) && bytes[[2L]] == as.raw(1L)) return(blosc_decode(bytes))
+  inflated <- tryCatch(memDecompress(bytes, type = "gzip"), error = function(error) NULL)
+  if (is.null(inflated)) bytes else inflated
+}
 
 test_that("the MuData cases cellucid-python checks itself against are what this package writes", {
   skip_on_cran()
@@ -281,7 +284,7 @@ test_that("the MuData cases cellucid-python checks itself against are what this 
       paths <- if (identical(ending, ".json")) paste0(name, ending) else file.path(paste0(name, ending), written)
       for (path in paths) {
         expect_identical(
-          unname(tools::md5sum(file.path(root, path))), unname(tools::md5sum(file.path(fixtures, path))),
+          stored_content(file.path(root, path)), stored_content(file.path(fixtures, path)),
           info = paste(name, path, "(regenerate with fixtures/cross_writer_mudata/generate.R)")
         )
       }

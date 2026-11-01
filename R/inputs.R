@@ -219,11 +219,11 @@
     embedding <- named[[key]]$embedding
     parsed <- .parse_vector_field_key(key, obsm_keys)
     if (is.null(parsed) || !identical(parsed$field, field) ||
-        !identical(paste0(.embedding_key_prefix, parsed$basis), embedding)) {
+        !identical(parsed$embedding, embedding)) {
       reads_as <- if (is.null(parsed)) {
         "an embedding: a key that starts with 'X_' is never a vector field"
       } else {
-        paste0("the field '", parsed$field, "' on '", .embedding_key_prefix, parsed$basis, "'")
+        paste0("the field '", parsed$field, "' on '", parsed$embedding, "'")
       }
       .abort(
         "Vector field '", field, "' on embedding '", embedding, "' would be ",
@@ -249,10 +249,12 @@
   list(8L, c("pca", "scvi", "latent", "harmony", "x_emb"))
 )
 
-# Keys in best-guess order: by tier, then by code point.
-.best_guess_order <- function(keys) {
+# Keys in best-guess order: by tier (of a key's own name, .obsm_namespace),
+# then namespace (the dataset's own keys, then the modality it opens with,
+# then the other modalities), then code point.
+.best_guess_order <- function(keys, modality = NULL) {
   tier <- vapply(keys, function(key) {
-    name <- tolower(key)
+    name <- tolower(.obsm_namespace(key)$local)
     for (entry in .best_guess_tiers) {
       if (any(vapply(entry[[2L]], function(needle) grepl(needle, name, fixed = TRUE), logical(1L)))) {
         return(entry[[1L]])
@@ -260,8 +262,18 @@
     }
     7L
   }, integer(1L))
+  namespace <- vapply(keys, function(key) {
+    prefix <- .obsm_namespace(key)$prefix
+    if (identical(prefix, "")) {
+      0L
+    } else if (!is.null(modality) && identical(prefix, paste0(modality, ":"))) {
+      1L
+    } else {
+      2L
+    }
+  }, integer(1L))
   # Radix order compares strings byte by byte: code-point order for UTF-8.
-  keys[order(tier, enc2utf8(keys), method = "radix")]
+  keys[order(tier, namespace, enc2utf8(keys), method = "radix")]
 }
 
 # The conventional names of one UMAP, in the order the default rule takes
@@ -279,26 +291,33 @@
 # best guess (per dimension the first key of that exact width, else the first
 # wider key in 2D); and every other 1-3 column embedding. The latent space is
 # never guessed or shown beside.
-.shown_embedding_keys <- function(matrices, named_slots, latent_key) {
+.shown_embedding_keys <- function(matrices, named_slots, latent_key, modality = NULL) {
   widths <- vapply(matrices, ncol, integer(1L))
   candidates <- widths[names(widths) != if (is.null(latent_key)) "" else latent_key]
-  dimensional <- intersect(c("X_umap_1d", "X_umap_2d", "X_umap_3d"), names(widths))
-  slots <- if (length(dimensional) > 0L) {
-    dimensional
-  } else {
-    single <- .umap_keys[.umap_keys %in% names(widths)]
-    single <- single[widths[single] %in% 1:3]
-    single[seq_len(min(1L, length(single)))]
+  slots <- character()
+  # The dataset's own names, then (several modalities) the same names in the
+  # namespace of the modality it opens with.
+  for (prefix in if (is.null(modality)) "" else c("", paste0(modality, ":"))) {
+    dimensional <- intersect(paste0(prefix, c("X_umap_1d", "X_umap_2d", "X_umap_3d")), names(widths))
+    slots <- if (length(dimensional) > 0L) {
+      dimensional
+    } else {
+      single <- paste0(prefix, .umap_keys)
+      single <- single[single %in% names(widths)]
+      single <- single[widths[single] %in% 1:3]
+      single[seq_len(min(1L, length(single)))]
+    }
+    if (length(slots) > 0L) break
   }
   if (length(named_slots) > 0L) {
     slots <- c(slots, unlist(named_slots, use.names = FALSE))
   } else if (length(slots) == 0L) {
     for (dimension in 3:1) {
-      exact <- .best_guess_order(names(candidates)[candidates == dimension])
+      exact <- .best_guess_order(names(candidates)[candidates == dimension], modality)
       if (length(exact) > 0L) slots <- c(slots, exact[[1L]])
     }
     if (length(slots) == 0L) {
-      wide <- .best_guess_order(names(candidates)[candidates > 3L])
+      wide <- .best_guess_order(names(candidates)[candidates > 3L], modality)
       if (length(wide) > 0L) slots <- wide[[1L]]
     }
   }
@@ -307,9 +326,34 @@
 
 # --- The neighbour graph ----------------------------------------------------
 
+# The neighbour graph a dataset opens with, of its graph names (the web app's
+# defaultGraph and cellucid-python's default_graph, pinned by the shared
+# conformance fixture): Scanpy's 'connectivities'; else Seurat's
+# shared-nearest-neighbour graph of the modality (assay) it opens with
+# ('<modality>_snn'); else the first other shared-nearest-neighbour graph
+# ('<assay>_snn', or 'SNN', in any case) in code-point order; else NULL.
+# Seurat's '<assay>_nn' (directed) and Scanpy's 'distances' are never the
+# default. .graph_candidates lists them all in that order.
+.graph_candidates <- function(keys, modality = NULL) {
+  keys <- as.character(keys)
+  shared <- keys[tolower(keys) == "snn" | (endsWith(tolower(keys), "_snn") & nchar(keys) > 4L)]
+  shared <- shared[order(enc2utf8(shared), method = "radix")]
+  own <- if (is.null(modality)) character() else intersect(paste0(modality, "_snn"), keys)
+  unique(c(intersect("connectivities", keys), own, shared))
+}
+
+.default_graph <- function(keys, modality = NULL) {
+  candidates <- .graph_candidates(keys, modality)
+  if (length(candidates) == 0L) NULL else candidates[[1L]]
+}
+
 # The graph is stored as obsp['connectivities'], a CSR matrix. It must be a
-# square cells x cells matrix, exactly symmetric, with a zero diagonal and
-# finite non-negative weights; a stored zero is not an edge and is dropped.
+# square cells x cells matrix, exactly symmetric, with finite non-negative
+# weights; a stored zero is not an edge and is dropped, and so is the
+# diagonal: a self-loop is no edge anyone can draw (Seurat's FindNeighbors
+# counts each cell among its own neighbours, so its '<assay>_snn' has 1 on
+# the diagonal), as the web app and cellucid-python drop it. A directed graph
+# (Seurat's '<assay>_nn', Scanpy's 'distances') is refused.
 # For a symmetric matrix the column-compressed arrays of a dgCMatrix are the
 # row-compressed arrays of the same matrix, so they are written as they are.
 .resolve_connectivities <- function(connectivities, n_cells) {
@@ -348,12 +392,14 @@
   if (any(weights < 0)) {
     .abort("Connectivity weights must all be non-negative.")
   }
+  Matrix::diag(graph) <- 0
   graph <- Matrix::drop0(graph)
-  if (any(Matrix::diag(graph) != 0)) {
-    .abort("Connectivity diagonal values must all be exactly zero.")
-  }
   if (!isTRUE(Matrix::isSymmetric(graph, tol = 0))) {
-    .abort("Connectivity matrix must be exactly symmetric.")
+    .abort(
+      "Connectivity matrix must be exactly symmetric: a directed neighbour graph ",
+      "(Seurat's '<assay>_nn', Scanpy's 'distances') is not one the viewer draws; ",
+      "pass a symmetric one (obsp[['connectivities']], or Seurat's '<assay>_snn')."
+    )
   }
   .require_finite_float32(graph@x, "connectivities", positions = FALSE)
   graph

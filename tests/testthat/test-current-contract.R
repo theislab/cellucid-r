@@ -182,11 +182,11 @@ test_that("main is the only workflow branch", {
   expect_false(any(grepl("^[[:space:]]*release:", pkgdown_lines)))
 })
 
-test_that("DESCRIPTION is the one in-repo source of the 0.9.5 release identity", {
+test_that("DESCRIPTION is the one in-repo source of the 0.9.6 release identity", {
   repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
   version <- cellucid_description_version()
-  expect_identical(version, "0.9.5")
+  expect_identical(version, "0.9.6")
 
   description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
   version_line <- which(startsWith(description, "Version:"))
@@ -404,8 +404,11 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
     "cellucid_stop", "cellucid_stop_all", "cellucid_viewers", "cellucid_highlight",
     "cellucid_clear_highlights", "cellucid_color_by", "cellucid_set_visibility",
     "cellucid_reset_camera", "cellucid_freeze", "cellucid_set_data_mapping", "cellucid_on",
-    "cellucid_off", "cellucid_selection", "cellucid_wait_ready", "cellucid_session",
-    "cellucid_clear_web_cache", "cellucid_debug_connection", "cellucid_apply_session"
+    "cellucid_off", "cellucid_selection", "cellucid_wait_ready",
+    "cellucid_clear_web_cache", "cellucid_debug_connection", "cellucid_apply_session",
+    "cellucid_subsample_cells", "cellucid_restore_original_order", "cellucid_pull", "cellucid_results", "cellucid_subset",
+    "cellucid_gene_sets", "cellucid_push", "cellucid_push_gene_set", "cellucid_write_gmt",
+    "cellucid_read_gmt", "cellucid_request_session", "cellucid_session_result"
   )
   documented <- character()
   for (page in names(rd_database)) {

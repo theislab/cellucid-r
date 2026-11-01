@@ -388,14 +388,17 @@
 
 # One declared asset, checked against its digest the first time it is served
 # (and again whenever its file changes), then served from disk: its bytes
-# are neither read nor hashed again for every request.
+# are neither read nor hashed again for every request. A file changes when
+# its version does (.file_version(): size, modification and status-change
+# time, identity), so one rewritten in place with its modification time put
+# back, or replaced by a copy (cp -p), is checked again.
 .read_web_asset <- function(build, path) {
   asset <- build$inventory$assets[[path]]
   if (is.null(asset)) return(NULL)
   file <- file.path(build$dir, path)
-  info <- file.info(file, extra_cols = FALSE)
-  if (is.na(info$size)) .abort("The web build lost ", path, "; clear it with cellucid_clear_web_cache().")
-  stamp <- paste(format(info$size, scientific = FALSE), format(as.numeric(info$mtime), digits = 17))
+  version <- .file_version(file)
+  if (is.null(version)) .abort("The web build lost ", path, "; clear it with cellucid_clear_web_cache().")
+  stamp <- version$etag
   verified <- build$verified
   if (!is.environment(verified) || !identical(get0(.symbol_keys(path), envir = verified, inherits = FALSE), stamp)) {
     .verify_asset_bytes(asset, .read_bytes(file))

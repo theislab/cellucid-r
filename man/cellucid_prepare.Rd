@@ -33,6 +33,7 @@ cellucid_prepare(
   normalize_embeddings = NULL,
   centroid_min_points = NULL,
   modality = NULL,
+  priority_seed = 0,
   zarr_format = NULL,
   force = FALSE
 )
@@ -67,8 +68,12 @@ matrix with one row per cell, such as \code{list(X_umap = umap, X_pca = pca)}.
 A numeric \code{data.frame}, a \pkg{Matrix} matrix, or a plain numeric vector
 (one column) is accepted too. Each one is stored whole, every column, as a
 float32 array at its own coordinates; the viewer chooses the columns it plots
-and scales them to its view. Every value must be finite and within the float32
-range. Each key becomes a path in the store, see the note on names below.}
+and scales them to its view. Every value must be within the float32 range. A
+row holding \code{NA} or \code{NaN} (or an infinity) is a cell the embedding
+does not place (one computed on some of the cells): it is written as given, the
+viewer leaves it out of that embedding's views, and in the latent space it gets
+no outlier quantile; at least one cell must have finite coordinates. Each key
+becomes a path in the store, see the note on names below.}
 \item{dataset_id}{Portable identifier of the dataset, stored as
 \code{uns['cellucid']['id']}: 1--180 ASCII letters, numbers, \code{.},
 \code{_}, or \code{-}, beginning with a letter or number, not ending with
@@ -83,8 +88,11 @@ column is stored, see the note on column encodings below.}
 \code{gene_expression}. Every column is stored. Supplying it without
 \code{gene_expression} is an error.}
 \item{gene_expression}{Optional cells x genes matrix: a \pkg{Matrix} sparse
-matrix (stored as a gene-major \code{csc_matrix}) or a dense numeric matrix
-(stored as a dense array in tall, gene-major chunks). Values must be finite and
+matrix (stored as a gene-major \code{csc_matrix}), a dense numeric matrix
+(stored as a dense array in tall, gene-major chunks), or a matrix held outside
+R's memory -- a \pkg{BPCells} matrix or a \pkg{DelayedArray} backend such as
+\pkg{HDF5Array} -- read block by block (see Details) and stored as a
+\code{csc_matrix}. Values must be finite and
 within the float32 range, and are stored as float32 -- or the whole matrix as
 float64 when every value is a whole number and one exceeds \code{2^24} in
 magnitude: integer counts float32 cannot hold exactly. That is decided on
@@ -96,8 +104,10 @@ Cellucid never transposes the matrix, so transpose a genes x cells matrix with
 \item{connectivities}{Optional cells x cells neighbour graph, a \pkg{Matrix}
 sparse matrix or a numeric matrix, stored as
 \code{obsp['connectivities']} (a float32 \code{csr_matrix}). It must be exactly
-symmetric, with a zero diagonal and finite, non-negative weights; a stored zero
-is not an edge and is dropped.}
+symmetric, with finite, non-negative weights; a stored zero is not an edge and
+is dropped, and so is the diagonal (a self-loop is no edge: Seurat's
+\code{RNA_snn} has 1 there). A directed graph (Seurat's \code{RNA_nn}) is
+refused.}
 \item{vector_fields}{Optional per-cell vectors drawn over an embedding, keyed by
 field and then by the embedding each array belongs to:
 \code{list(velocity = list(X_umap = v2, X_umap_3d = v3, X_branches = vb))}. Each
@@ -153,7 +163,8 @@ shows, in this order. Every column is stored either way. Stored as
 \code{defaults['obsKeys']}.}
 \item{var_gene_id_column}{Optional launch default: the \code{var} column whose
 values name the genes in the viewer, such as gene symbols beside Ensembl row
-names. \code{NULL} names genes by the \code{var} row names. A column of text or
+names. \code{NULL}: the \code{var} row names name them; Data mapping in the
+viewer can choose a column later. A column of text or
 a factor names genes as it is, an integer column by its digits; a double or
 logical column cannot name genes and is refused. Stored as
 \code{defaults['geneIdColumn']}.}
@@ -179,6 +190,20 @@ names a column of that modality's \code{var}. \code{gene_expression},
 \code{var} and \code{gene_identifiers} describe one feature
 space and are refused for an object of several: change its assay first, or
 write one with \code{modalities}.}
+\item{priority_seed}{The seed of the cells' priority order, a whole number in
+[0, 2^32 - 1]. The cells are stored by ascending priority -- the
+\code{"uniform"} rank of \code{\link{cellucid_subsample_cells}()} with this
+seed -- so every subsample Cellucid opens with this seed is the first rows of
+every array and reads nothing of the cells it leaves out. Each row's original
+position is kept in \code{obs[['cellucid_original_position']]};
+\code{\link{cellucid_restore_original_order}()} puts the cells back in the order
+given. \code{NULL} stores the cells in the order given, without a priority.
+An object in a Cellucid-ready file's stored order (its \code{cellucid$priority}
+record describes its cells) is put back in its original order first, whatever
+the seed, so every cell keeps its original position; a
+\code{cellucid_original_position} column with no record that describes the
+cells names no order and is not written (with a warning).
+Python's \code{cellucid.prepare(priority_seed = )} takes the same values.}
 \item{zarr_format}{Optional Zarr format of the store: \code{2} (the default,
 when \code{NULL}), read by every \pkg{anndata} release since 0.8 and by
 zarr-python 2 and 3, or \code{3}, read by \pkg{anndata} 0.11 and later
@@ -213,7 +238,16 @@ The store is an AnnData Zarr group (Zarr format 2 unless \code{zarr_format = 3})
   \code{id}, \code{name}, and, when supplied, \code{description},
   \code{citation} (\code{text}, \code{url}), \code{source} (\code{name},
   \code{url}), \code{defaults} holding only the launch defaults that were
-  set, and, with \code{latent_key}, \code{outlierQuantiles};
+  set, with \code{latent_key}, \code{outlierQuantiles}, and in priority
+  order \code{priority} (\code{seed}, \code{specVersion}, \code{nObs} -- the
+  cell count it was written with, which a reader verifies it by --
+  \code{levels});
+  \item in priority order (the default, \code{priority_seed}): every per-cell
+  element -- \code{obs}, \code{obsm}, \code{X}'s rows, both axes of
+  \code{obsp} -- by ascending priority, \code{obs[['cellucid_original_position']]}
+  (uint32) holding each row's original position, and beside a sparse
+  \code{X} \code{varm[['cellucid_prefix_counts']]} (uint32, one column per
+  level of \code{levels}): each gene's values in the rows below that level;
   \item the consolidated metadata (\code{.zmetadata}; format 3: the root
   \code{zarr.json}), so a store on a web host opens with one request.
 }
@@ -226,11 +260,15 @@ which browsers decompress natively: in format 2 numcodecs' \code{Shuffle}
 filter and the compressor \code{\{"id": "zlib", "level": 6\}}; in format 3
 the \code{blosc} codec (byte shuffle, zlib level 6) for a shuffled array and
 the \code{gzip} codec for every other, only codecs of the Zarr v3
-specification (\code{numcodecs.shuffle} is not one). A chunk is the unit of every read: arrays read whole (data
-frame columns, embeddings as a chunk of rows with every column, the neighbour
-graph) hold up to 262,144 (\code{2^18}) values per chunk, and the data and
-indices of the expression matrix, which the viewer reads one gene at a time,
-65,536 (\code{2^16}). Python's \code{cellucid.prepare()} writes the same store,
+specification (\code{numcodecs.shuffle} is not one). A chunk is the unit of every read: every array with one
+row per cell (data frame columns and index, embeddings as a chunk of rows with
+every column, masks, cell maps, outlier quantiles) holds 65,536
+(\code{2^16}) values per chunk, so a subsample -- the first rows of a store in
+priority order -- reads little beyond its own cells; arrays read whole
+(\code{var}, the expression matrix's pointers, the neighbour graph) up to
+262,144 (\code{2^18}); and the data and indices of the expression matrix,
+which the viewer reads one gene (or its first values) at a time, 16,384
+(\code{2^14}). Python's \code{cellucid.prepare()} writes the same store,
 element for element, from the same input.
 
 A \code{.zarr.zip} holds the same files, byte for byte, as entries of one ZIP
@@ -257,7 +295,9 @@ logical column is a boolean array, or a nullable boolean when it holds
 when it holds \code{NA}; a double column is float64 whether or not its values
 are whole numbers, with \code{NA} stored as NaN, and must hold no infinite
 value. Any other column, a
-\code{Date} for example, is refused with the conversion that makes it storable.
+\code{Date} for example, is refused with the conversion that makes it storable
+when it is given in \code{obs}; a column of an object given as \code{data} is
+left out instead, with a message naming it, as cellucid-python leaves it out.
 
 Note on names: cell names are the row names \code{obs},
 \code{gene_expression}, and the embeddings agree on; where several are set they
@@ -309,11 +349,13 @@ applies to the other:
   written;
   \item \code{var}: \code{meta.features} (Assay5 \code{meta.data}) with the
   variable features as \code{highly_variable}; \code{rowData};
-  \item \code{obsp/connectivities}: the first symmetric neighbour graph, its
-  diagonal removed: Seurat's \code{<active assay>_snn}, then any other
-  \code{_snn} graph, then any other graph; a \code{colPair} named
-  \code{connectivities}, then one named like \code{snn}, then any other; a
-  graph passed over (not symmetric, or not over every cell) is named;
+  \item \code{obsp/connectivities}: the first symmetric neighbour graph the
+  viewer's default rule would open with, its diagonal removed: one named
+  \code{connectivities}, then Seurat's \code{<active assay>_snn}, then any
+  other shared-nearest-neighbour graph (\code{<assay>_snn}, or \code{SNN}, in
+  any case; a \code{colPair} the same), in code-point order; a graph passed
+  over (not symmetric, or not over every cell) or left out (\code{RNA_nn}) is
+  named;
   \item identity and launch defaults: the object's own record,
   \code{misc$cellucid} or \code{metadata(x)$cellucid}, shaped as
   \code{uns['cellucid']}: \code{list(id = , name = , description = ,
@@ -322,8 +364,19 @@ applies to the other:
   \code{project.name} other than \code{"SeuratProject"} names it too.
 }
 Matrices kept outside R's memory (BPCells, HDF5Array and other DelayedArray
-backends) are read into memory block by block, each block a set of whole
-cells. Seurat objects
+backends) stay there and are read a block at a time (about \eqn{2^{24}}
+positions: whole cells, or whole genes when the backend keeps genes together),
+never whole and never as one \code{dgCMatrix}: one pass counts each gene's
+values (and refuses a value that cannot be stored), then each value is placed
+at its gene's position, its cell's row beside it, and each gene sorted by row
+(on every core; its prefix counts read from its sorted rows). The genes one
+pass places hold at most a quarter of the machine's memory (8 bytes a stored
+value, 12 for float64 counts), and the pass reads only their rows; a larger
+matrix takes one pass per quarter, twice when it is written, X's values being
+written before its cells. Nothing else of the matrix is held, and
+there is no limit on its stored values (more than \eqn{2^{31} - 1} are
+written with 64-bit pointers). The bytes are those the same values in a
+\code{dgCMatrix} give. Seurat objects
 made before 3.0, and SingleCellExperiment objects before 1.8, are refused with
 the line that updates them.
 

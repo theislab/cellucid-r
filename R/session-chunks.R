@@ -1,7 +1,7 @@
 # The chunks a current session holds, checked before any is applied: every
 # generic chunk carries exactly the metadata of its profile, every chunk id
-# is one this version knows (highlight cell sets and user-defined codes by
-# their exact id patterns, so an id cannot smuggle a path), and the
+# is one this version knows (highlight cell sets, user-defined codes and
+# values by their exact id patterns, so an id cannot smuggle a path), and the
 # contributors appear in their registered order. cellucid-python's
 # anndata_session/_schema.py and _chunks.py, rule for rule.
 
@@ -17,11 +17,15 @@
 )
 .session_static_ids <- vapply(.session_static_profiles, function(profile) profile$id, character(1L))
 .session_contributor_order <- c(
-  "field-overlays", "user-defined-codes", "cinematic-camera", "core-state", "dockable-layout",
+  "field-overlays", "user-defined-codes", "user-defined-values", "gene-sets", "cinematic-camera",
+  "core-state", "dockable-layout",
   "figure-export", "analysis-windows", "analysis-docked", "highlights-meta", "highlights-cells"
 )
 .highlight_cells_prefix <- "highlights/cells/"
 .user_codes_prefix <- "user-defined/codes/"
+.user_values_prefix <- "user-defined/values/"
+# The gene sets a notebook pushed: written only when there are some.
+.gene_sets_profile <- list(id = "gene-sets/notebook", contributorId = "gene-sets", priority = "eager", kind = "json", codec = "gzip", label = "Notebook gene sets", datasetDependent = FALSE)
 .wire_id_pattern <- "^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$"
 
 .expected_chunk_contributor <- function(id) {
@@ -36,6 +40,11 @@
     field <- substring(id, nchar(.user_codes_prefix) + 1L)
     return(if (grepl(.wire_id_pattern, field)) "user-defined-codes" else NULL)
   }
+  if (startsWith(id, .user_values_prefix)) {
+    field <- substring(id, nchar(.user_values_prefix) + 1L)
+    return(if (grepl(.wire_id_pattern, field)) "user-defined-values" else NULL)
+  }
+  if (identical(id, .gene_sets_profile$id)) return("gene-sets")
   NULL
 }
 
@@ -72,6 +81,15 @@
     } else if (identical(contributor, "user-defined-codes")) {
       if (!identical(meta[["kind"]], "binary") || !identical(meta[["codec"]], "gzip") || !isTRUE(meta[["datasetDependent"]])) {
         .abort("Session chunk '", id, "' must be binary, gzip, and dataset-dependent")
+      }
+    } else if (identical(contributor, "user-defined-values")) {
+      if (!identical(priority, "eager") || !identical(meta[["kind"]], "binary") ||
+          !identical(meta[["codec"]], "gzip") || !isTRUE(meta[["datasetDependent"]])) {
+        .abort("Session chunk '", id, "' must be eager, binary, gzip, and dataset-dependent")
+      }
+    } else if (identical(contributor, "gene-sets")) {
+      for (key in names(.gene_sets_profile)) {
+        if (!identical(meta[[key]], .gene_sets_profile[[key]])) .abort("Session chunk '", id, "' must match its exact current profile")
       }
     } else if (!identical(priority, "lazy") || !identical(meta[["kind"]], "binary") ||
                !identical(meta[["codec"]], "gzip") || !isTRUE(meta[["datasetDependent"]])) {

@@ -28,7 +28,11 @@ reference:
   - title: Write a Cellucid-ready AnnData
     contents:
       - cellucid_prepare
+      - cellucid_restore_original_order
       - cellucid_transition_drift
+  - title: Subsample the cells
+    contents:
+      - cellucid_subsample_cells
   - title: View from R
     contents:
       - cellucid_view
@@ -36,6 +40,10 @@ reference:
       - cellucid_on
       - cellucid_debug_connection
       - cellucid_clear_web_cache
+  - title: Results back into R
+    contents:
+      - cellucid_pull
+      - cellucid_push
   - title: Sessions
     contents:
       - cellucid_apply_session

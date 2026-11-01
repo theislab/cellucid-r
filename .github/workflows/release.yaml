@@ -1,13 +1,13 @@
-# Builds a source package tarball and (optionally) runs `R CMD check --as-cran`.
+# Builds the source package tarball, runs `R CMD check --as-cran` on it and,
+# for a published GitHub Release, submits that exact tarball to CRAN.
 #
-# This workflow is designed for beginners:
-# - Create a GitHub Release (or run manually)
-# - Download the `.tar.gz` artifact from the workflow run
-# - Upload that exact tarball to CRAN
-#
-# This does *not* auto-submit to CRAN (that still requires a human),
-# but it automates the parts that are easy to get wrong: reproducible building
-# and pre-flight checks.
+# - Publishing a GitHub Release tagged `vX.Y.Z` (X.Y.Z = DESCRIPTION's
+#   Version, on main) builds, checks, attaches the tarball to the release and
+#   submits it to CRAN with `cran-comments.md` as the comment. A check with a
+#   WARNING or an ERROR is not submitted.
+# - CRAN then emails the maintainer in DESCRIPTION a confirmation link; the
+#   submission goes ahead only once the maintainer clicks it (CRAN's rule).
+# - Running the workflow by hand builds and checks only; it never submits.
 
 name: Build Release Tarball
 
@@ -67,7 +67,7 @@ jobs:
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck, local::.
+          extra-packages: any::rcmdcheck, any::devtools, any::httr2, local::.
           needs: check
 
       - name: Build source tarball
@@ -111,3 +111,24 @@ jobs:
           files: |
             ${{ steps.build.outputs.tarball }}
             ${{ steps.build.outputs.checksum }}
+
+      - name: Refuse a CRAN submission over a warning or an error
+        if: github.event_name == 'release'
+        run: |
+          STATUS="$(grep -E '^Status:' cellucid.Rcheck/00check.log)"
+          echo "R CMD check --as-cran: ${STATUS}"
+          if grep -qE 'ERROR|WARNING' <<< "${STATUS}"; then
+            echo "::error::R CMD check --as-cran reported '${STATUS}'; not submitted to CRAN."
+            exit 1
+          fi
+        shell: bash
+
+      # devtools' own upload (the two-step form devtools::submit_cran() posts,
+      # without its interactive questions): the comment is cran-comments.md,
+      # the maintainer's name and email come from DESCRIPTION.
+      - name: Submit the checked tarball to CRAN
+        if: github.event_name == 'release'
+        run: |
+          Rscript -e 'devtools:::upload_cran(pkg = ".", built_path = "${{ steps.build.outputs.tarball }}")'
+          echo "::notice::Submitted ${{ steps.build.outputs.tarball }} to CRAN. Confirm it from the email CRAN sends the maintainer."
+        shell: bash

@@ -26,8 +26,8 @@ A beginner-friendly guide to publishing the R package `cellucid` to CRAN and bey
 1. **Bump version**: Update `DESCRIPTION`, `CITATION.cff`, and `NEWS.md`
 2. **Merge to main**: Create a PR, wait for CI, merge
 3. **Create release**: Releases → "Draft new release" → tag `vX.Y.Z` → publish
-4. **Download tarball**: Actions → "Build Release Tarball" → download `r-source-tarball`
-5. **Submit to CRAN**: https://cran.r-project.org/submit.html → upload tarball → confirm email
+4. **Wait for the workflow**: "Build Release Tarball" builds, runs `R CMD check --as-cran`, attaches the tarball to the release and submits it to CRAN
+5. **Confirm the CRAN email**: click the link CRAN sends the maintainer
 
 That's it! Keep reading for detailed explanations.
 
@@ -59,7 +59,7 @@ Check that `.github/workflows/` contains:
 | File | Purpose |
 |------|---------|
 | `R-CMD-check.yaml` | Runs tests on every push/PR (Windows, macOS, Linux) |
-| `release.yaml` | Builds the CRAN-ready tarball when you create a release |
+| `release.yaml` | Builds and checks the tarball when you publish a release, attaches it and submits it to CRAN |
 | `pkgdown.yaml` | Builds and deploys the documentation website |
 
 ---
@@ -124,7 +124,10 @@ lockstep is real but manual:
 
 This automatically triggers the "Build Release Tarball" workflow.
 The workflow requires the tag to equal `v` plus the `DESCRIPTION` version and
-requires the tagged commit to belong to `main`.
+requires the tagged commit to belong to `main`. It builds the tarball, runs
+`R CMD check --as-cran` on it, attaches it to the release and, when the check
+reports no WARNING and no ERROR, submits it to CRAN (see
+[Publishing to CRAN](#publishing-to-cran)).
 
 ### Step 4: Download the tarball
 
@@ -166,6 +169,14 @@ CRAN is the main R package repository. Once accepted, users can install with jus
 
 ### How to Submit
 
+Publishing the GitHub release submits the package: the "Build Release
+Tarball" workflow uploads the checked tarball with `cran-comments.md` as the
+comment (`devtools:::upload_cran()`, the form `devtools::submit_cran()` posts),
+and refuses to when `R CMD check --as-cran` reported a WARNING or an ERROR.
+Keep `cran-comments.md` current before you publish. The steps below are for a
+submission by hand, if the workflow cannot submit (CRAN's form down, a
+failed run).
+
 #### 1. Go to the submission form
 
 Open: **https://cran.r-project.org/submit.html**
@@ -183,8 +194,10 @@ Open: **https://cran.r-project.org/submit.html**
 
 #### 3. Submit and confirm via email
 
-1. Click **"Upload package"**
-2. **Check your email immediately** (within minutes)
+Whether the workflow or you submitted:
+
+1. (By hand only) Click **"Upload package"**
+2. **Check the maintainer's email** (within minutes)
 3. **Click the confirmation link** — this is required!
 
 #### 4. Wait for results
@@ -356,7 +369,7 @@ R package names cannot contain `-`, so the package itself must stay `cellucid`.
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | R-CMD-check | Push, PR | Tests on Windows/macOS/Linux |
-| Build Release Tarball | Release, manual | Creates CRAN-ready `.tar.gz` |
+| Build Release Tarball | Release, manual | Builds and checks the `.tar.gz`; on a release, attaches it and submits it to CRAN |
 | pkgdown | Push to main, manual | Deploys documentation website |
 
 ### Useful Links

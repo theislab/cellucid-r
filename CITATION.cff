@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use Cellucid in your work, please cite the reference under preferred-citation."
 type: software
 title: "cellucid (R): Prepare and View Single-Cell Data in the Cellucid Viewer"
-version: 0.9.5  # CELLUCID_VERSION
+version: 0.9.6  # CELLUCID_VERSION
 authors:
   - family-names: Inecik
     given-names: Kemal

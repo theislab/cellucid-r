@@ -1,13 +1,14 @@
 """Read two Zarr stores with zarr-python and compare them array by array.
 
-    python compare_stores.py PREPARED SERVED
+    python compare_stores.py PREPARED SERVED SERVED_ENTRY_CHUNK
 
 PREPARED is a store cellucid_prepare() wrote; SERVED is the store
 cellucid_view() serves from memory, written key by key to a folder. Both must
 hold the same groups and arrays, with the same attributes, and every array
-the same dtype, shape, chunk shape and values (NaN equal to NaN). The served
-store declares no compressor and no filter but its text codec; the prepared
-one compresses. Prints one line per difference and exits 1 when there is
+the same dtype, shape, chunk shape and values (NaN equal to NaN), except an
+expression matrix's data and indices, which the served store chunks in
+SERVED_ENTRY_CHUNK values. The served store declares no compressor and no
+filter but its text codec; the prepared one compresses. Prints one line per difference and exits 1 when there is
 any, else prints "ok N" (the number of arrays compared) and exits 0.
 """
 
@@ -16,8 +17,13 @@ import warnings
 
 warnings.simplefilter("error")
 
+import re  # noqa: E402
+
 import numpy as np  # noqa: E402
 import zarr  # noqa: E402
+
+#: An expression matrix's data and indices (X, raw/X, a layer, a modality's).
+SERVED_ENTRIES = re.compile(r"(^|/)(X|raw/X|layers/[^/]+)/(data|indices)$")
 
 
 def nodes(root):
@@ -43,7 +49,8 @@ def same_values(left, right):
     return np.array_equal(left, right)
 
 
-def main(prepared_path, served_path):
+def main(prepared_path, served_path, served_entry_chunk):
+    served_entry_chunk = int(served_entry_chunk)
     prepared = zarr.open_group(prepared_path, mode="r")
     served = zarr.open_group(served_path, mode="r")
     differences = []
@@ -65,7 +72,8 @@ def main(prepared_path, served_path):
         arrays += 1
         if b.compressors:
             differences.append(f"{path}: the served array declares a compressor {b.compressors}")
-        if a.dtype != b.dtype or a.shape != b.shape or a.chunks != b.chunks:
+        chunks = (max(1, min(a.shape[0], served_entry_chunk)),) if SERVED_ENTRIES.search(path) else a.chunks
+        if a.dtype != b.dtype or a.shape != b.shape or b.chunks != chunks:
             differences.append(
                 f"{path}: {a.dtype} {a.shape} chunks {a.chunks} and {b.dtype} {b.shape} chunks {b.chunks}"
             )

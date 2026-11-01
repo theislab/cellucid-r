@@ -16,9 +16,9 @@ embeddings, metadata, gene expression, neighbour graph and vector fields) as a *
 AnnData Zarr store that the Cellucid web app opens directly and Python's `anndata` reads like any other. Several assays
 become a **Cellucid-ready MuData**.
 
-> **Active package version — 0.9.5** <!-- CELLUCID_VERSION -->
+> **Active package version — 0.9.6** <!-- CELLUCID_VERSION -->
 >
-> Version 0.9.5 is the active Cellucid for R source and documentation version,
+> Version 0.9.6 is the active Cellucid for R source and documentation version,
 > and it is the CRAN submission release. The CRAN package index is authoritative
 > for registry availability; the Installation guide below gives both exact
 > installation paths.
@@ -30,8 +30,11 @@ become a **Cellucid-ready MuData**.
   gene in about a third of a second, never transposing its matrix), so a 100,000-cell object opens in under a
   second; talk to the
   viewer with `cellucid_highlight()`, `cellucid_color_by()`, `cellucid_on("selection", ...)` and
-  `cellucid_session()`, and write what was made in it back onto the object with
-  `cellucid_apply_session(seu, viewer)`; `cellucid_serve()` for a cluster behind an SSH tunnel
+  `cellucid_request_session()` (then `cellucid_session_result()`), write everything made in it (highlights, labels, scores, gene sets) back onto the
+  object in one call with `cellucid_pull(seu, viewer)` (or from the web app's exports,
+  `cellucid_pull(seu, "exports/")`), and send columns and gene sets to it with `cellucid_push()` and
+  `cellucid_push_gene_set()`; `cellucid_serve()` for a cluster behind an SSH tunnel; in a
+  Jupyter notebook (IRkernel) the viewer is the cell's output, the widget cellucid-python shows, with no port
 - **Objects in, directly**: `cellucid_prepare(data = seu)` reads Seurat (v3–v5), SingleCellExperiment and
   SummarizedExperiment objects as the web app reads them; any argument given replaces that component
 - **One standard format**: an AnnData Zarr store (format 2, or 3 with `zarr_format = 3`) with consolidated
@@ -41,11 +44,17 @@ become a **Cellucid-ready MuData**.
 - **Fast in the browser**: gene-major expression (CSC), chunked for range reads, byte-shuffled where that helps
   and compressed with deflate, which browsers decompress natively; a `.zarr.zip` keeps its metadata at the end
   of the archive, so it opens with one read
+- **Subsamples read only their cells**: the cells are stored (and served by `cellucid_view()`) in priority order
+  (`priority_seed`, default 0), so a share the viewer opens is the first rows of every array and the first values
+  of every gene; `cellucid_subsample_cells()` gives exactly the cells the viewer and Python's
+  `cellucid.subsample_cells()` keep, and `cellucid_restore_original_order()` puts an object read from such a file
+  back in the order its cells were given
 - **Self-describing**: the dataset's id, name, citation, source, and launch defaults live in `uns['cellucid']`,
   with each categorical `obs` column's outlier quantiles in the latent space named by `latent_key`, so the
   viewer's outlier filter works as soon as the file opens
 - **Light dependencies**: `jsonlite`, and `httpuv`, `later` and `curl` for the viewer (optional: `Matrix`,
-  `SeuratObject`, `SingleCellExperiment` / `SummarizedExperiment`, each needed only for its own objects)
+  `SeuratObject`, `SingleCellExperiment` / `SummarizedExperiment`, each needed only for its own objects;
+  `IRkernel` and `IRdisplay` for the viewer in a Jupyter notebook)
 - **Flexible inputs**: R objects, or raw matrices and data frames
 
 Every value is stored as float32 (embeddings, expression, vector fields, the
@@ -94,6 +103,8 @@ library(cellucid)
 viewer <- cellucid_view(seu)                 # a Seurat, SingleCellExperiment or SummarizedExperiment
 cellucid_color_by(viewer, "seurat_clusters")
 cellucid_selection(viewer)                   # the cells you selected in the viewer
+seu <- cellucid_pull(seu, viewer)            # every highlight, label and score made in the viewer, as meta.data columns
+cellucid_push(viewer, seu$seurat_clusters, key = "seurat_clusters")  # a column of yours, into the viewer
 cellucid_stop(viewer)
 
 # Write it for sharing
@@ -119,10 +130,17 @@ cellucid_prepare(
 )
 ```
 
+In a Jupyter notebook show the viewer in one cell and call `cellucid_pull()` in
+the next: R hears the viewer between cells. Seven runnable notebooks, each
+with a Python twin and an "Open in Colab" badge, walk through the round trip:
+[Notebook tutorials](https://docs.cellucid.com/en/latest/user_guide/r_package/f_notebooks_tutorials/index.html).
+
 Open a `.zarr.zip` file from your computer in the web app at
 <https://www.cellucid.com>, or a `.zarr` folder or `.zarr.zip` file published at
 a web address with the **Link or server** address bar; read either in Python with
-`anndata.read_zarr()`.
+`anndata.read_zarr()` (its cells in priority order: `cellucid.restore_original_order()` in Python, or
+`cellucid_restore_original_order()` on what anndataR or zellkonverter read, gives them back in the order you
+passed them).
 
 The store is written beside `out_path` under a temporary name and moved into
 place only when it is complete; `force = TRUE` replaces an existing store.
@@ -142,7 +160,8 @@ column, such as gene symbols beside Ensembl row names, that the viewer shows.
   [Seurat](https://docs.cellucid.com/en/latest/user_guide/r_package/e_integrations_recipes/01_seurat_recipe.html)
   and
   [SingleCellExperiment](https://docs.cellucid.com/en/latest/user_guide/r_package/e_integrations_recipes/02_singlecellexperiment_recipe.html)
-  objects, and for viewing them from R (Viewing and loading)
+  objects, for viewing them from R (Viewing and loading), and
+  [notebook tutorials](https://docs.cellucid.com/en/latest/user_guide/r_package/f_notebooks_tutorials/index.html)
 - [Complete Cellucid documentation](https://docs.cellucid.com/en/latest/)
 - [Live web application](https://www.cellucid.com) and
   [web viewer source](https://github.com/theislab/cellucid)

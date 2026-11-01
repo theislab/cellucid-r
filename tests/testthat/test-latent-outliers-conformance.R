@@ -7,7 +7,7 @@
 # independently of every implementation; both repositories pin the same
 # SHA-256.
 
-.latent_outlier_sha256 <- "99f6a92dc25d0e1e783793bc0bd9e84ab5b2046d550e91a440661e5bb1945fdd"
+.latent_outlier_sha256 <- "a812db4dd25c9b5b44549c001a0e3927043042ca12ad7d8567c73f583ecf498d"
 
 .float32_hex <- function(values) {
   bytes <- writeBin(values, raw(), size = 4L, endian = "little")
@@ -26,10 +26,11 @@
 test_that("the shared conformance cases give the pinned bytes", {
   expect_pinned_fixture("latent_outlier_conformance.json", .latent_outlier_sha256)
   document <- cellucid_read_fixture("latent_outlier_conformance.json")
-  expect_identical(document$version, 1L)
-  expect_length(document$cases, 4L)
+  expect_identical(document$version, 2L)
+  expect_length(document$cases, 5L)
   for (case in document$cases) {
-    values <- vapply(case$latent, as.numeric, numeric(1))
+    # null: a NaN row's value (a cell the latent space does not place).
+    values <- vapply(case$latent, function(value) if (is.null(value)) NaN else as.numeric(value), numeric(1))
     latent <- matrix(values, ncol = case$width, byrow = TRUE)
     codes <- vapply(case$codes, as.integer, integer(1))
     codes[codes < 0L] <- NA_integer_

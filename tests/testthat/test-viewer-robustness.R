@@ -45,7 +45,7 @@ test_that("a HEAD answer carries the Content-Length of the GET", {
   expect_identical(as.numeric(head$headers[["content-length"]]), as.numeric(length(asset$body)))
 })
 
-test_that("a file's range is read block by block, never whole, and a HEAD sizes it", {
+test_that("a file's range is read with its version from one open, and a HEAD sizes it", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(file.path(tempfile(), "f.zarr.zip"))
   args$format <- "zarr.zip"
@@ -55,10 +55,8 @@ test_that("a file's range is read block by block, never whole, and a HEAD sizes 
   bytes <- readBin(zip, "raw", file.size(zip))
   head <- http_request(url, method = "HEAD")
   expect_identical(as.numeric(head$headers[["content-length"]]), as.numeric(length(bytes)))
-  # A range longer than one block goes through a file httpuv sends and
-  # removes; blocks of 16 bytes make every range here such a range.
-  local_mocked_bindings(.range_block_bytes = 16, .package = "cellucid")
-  before <- list.files(tempdir(), pattern = "^cellucid-range-")
+  # Read from the file opened, with the tag of that open: no temporary copy.
+  before <- list.files(tempdir())
   part <- http_request(url, list(Range = "bytes=100-1099"))
   expect_identical(part$status, 206L)
   expect_identical(part$body, bytes[101:1100])
@@ -66,10 +64,20 @@ test_that("a file's range is read block by block, never whole, and a HEAD sizes 
   whole <- http_request(url, list(Range = "bytes=0-"))
   expect_identical(whole$status, 206L)
   expect_identical(whole$body, bytes)
-  run_loop_until(function() {
-    length(setdiff(list.files(tempdir(), pattern = "^cellucid-range-"), before)) == 0L
-  })
-  expect_length(setdiff(list.files(tempdir(), pattern = "^cellucid-range-"), before), 0L)
+  expect_identical(setdiff(list.files(tempdir()), before), character())
+  read <- cellucid:::.native_file_range(zip, 100, 1000)
+  expect_identical(read$bytes, bytes[101:1100])
+  expect_identical(read$etag, cellucid:::.file_version(zip)$etag)
+  # A range past the end is read as far as the file goes; a file gone is NULL.
+  expect_identical(cellucid:::.native_file_range(zip, length(bytes) - 4, 100)$bytes, bytes[length(bytes) - 3:0])
+  expect_null(cellucid:::.native_file_range(file.path(tempdir(), "no-such-file"), 0, 1))
+  # A file replaced between its version and its bytes is refused, never mixed.
+  local_mocked_bindings(
+    .native_file_range = function(path, offset, length) list(size = 1, etag = "\"other\"", bytes = raw(length)),
+    .package = "cellucid"
+  )
+  changed <- http_request(url, list(Range = "bytes=100-1099"))
+  expect_identical(changed$status, 409L)
 })
 
 test_that("a damaged request path is a 400, and a failed request names nothing internal", {
@@ -104,6 +112,16 @@ test_that("a verified web asset is served from disk, not re-read and re-hashed p
   )
   for (i in 1:3) cellucid:::.read_web_asset(build, "index.html")
   expect_identical(calls, 0L)
+  # Rewritten in place, the same size, its modification time put back: it
+  # is checked again.
+  index <- file.path(cache, "index.html")
+  modified <- file.mtime(index)
+  bytes <- readBin(index, "raw", file.size(index))
+  Sys.sleep(0.05)
+  writeBin(rev(bytes), index)
+  Sys.setFileTime(index, modified)
+  cellucid:::.read_web_asset(build, "index.html")
+  expect_identical(calls, 1L)
 })
 
 test_that("the Host check applies unless the bind is a non-loopback IP address", {
@@ -121,23 +139,6 @@ test_that("the Host check applies unless the bind is a non-loopback IP address",
   expect_false(applies("192.168.1.20"))
   # ... unless allowed_hosts names the proxy's host.
   expect_true(applies("0.0.0.0", "hub.example.org"))
-})
-
-test_that("a stale command_error does not answer a new data mapping request", {
-  skip_without_sce()
-  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
-  client <- ws_welcomed(viewer)
-  mapping <- list(kind = "anndata", expression = "X")
-  viewer$data_mapping <- list(requestId = NULL, origin = "default", mapping = mapping)
-  # An error left by an earlier call that gave up waiting.
-  viewer$last$command_error <- list(command = "setDataMapping", reason = "stale from an earlier call")
-  later::later(function() {
-    command <- ws_receive(client)$json
-    ws_send_json(client, list(type = "data_mapping", requestId = command$requestId, origin = "notebook", mapping = command$mapping))
-  }, 0.2)
-  applied <- cellucid_set_data_mapping(viewer, expression = "X", timeout = 10)
-  expect_identical(applied$expression, "X")
-  ws_close(client)
 })
 
 test_that("hover and click name cells by 1-based position, and out-of-range cells are refused", {

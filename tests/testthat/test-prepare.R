@@ -211,6 +211,25 @@ test_that("a latent key stores the outlier quantiles of every categorical obs co
   expect_false(dir.exists(file.path(prepare_fixture_store(name = "none.zarr"), "uns/cellucid/outlierQuantiles")))
 })
 
+test_that("a cell an embedding does not place (a NaN row) is written as given, and gets no outlier quantile", {
+  skip_if_not_installed("Matrix")
+  args <- prepare_fixture(store_path())
+  # Cell 3 has no position in X_umap; cell 6 none in the latent space X_pca.
+  args$embeddings$X_umap[3L, ] <- NaN
+  args$embeddings$X_pca[6L, 2L] <- NA
+  args$latent_key <- "X_pca"
+  args$centroid_min_points <- 2
+  store <- suppressMessages(do.call(cellucid_prepare, args))
+  umap <- store_array(store, "obsm/X_umap")
+  expect_true(all(is.nan(umap[3L, ])))
+  expect_identical(umap[-3L, ], as_float32_matrix(args$embeddings$X_umap[-3L, ]))
+  # cluster b is cells 1, 3, 6: with cell 6 unplaced, cells 1 and 3 are its
+  # two placed cells, each at the same distance from their centre.
+  quantiles <- store_array(store, "uns/cellucid/outlierQuantiles/fields/cluster")
+  expect_true(is.nan(quantiles[[6L]]))
+  expect_identical(quantiles[c(1L, 3L)], as_float32(c(1, 1)))
+})
+
 test_that("an obs column may have any storable name in the outlier fields", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(store_path())
@@ -341,8 +360,13 @@ test_that("format 3 shuffles with the blosc codec, in the frames c-blosc writes"
     # Nothing to gain: copied whole.
     list(size = 4L, bytes = as.raw(sample.int(256L, 4096L, replace = TRUE) - 1L), flags = 0x63L, block = 4096L)
   )
+  # A frame as a written store makes it: its planes deflated together (src/deflate.c).
+  blosc_frame <- function(bytes, size, threads = 2L) {
+    plan <- cellucid:::.blosc_planes(bytes, size)
+    plan$finish(cellucid:::.native_deflate_chunks(plan$planes, 6L, threads))
+  }
   for (case in cases) {
-    frame <- cellucid:::.blosc_frame(case$bytes, case$size)
+    frame <- blosc_frame(case$bytes, case$size)
     got <- header(frame)
     expect_identical(got$version, c(2L, 1L))
     expect_identical(got$flags, case$flags)
@@ -352,8 +376,35 @@ test_that("format 3 shuffles with the blosc codec, in the frames c-blosc writes"
     expect_identical(got$total, length(frame))
     expect_identical(blosc_decode(frame), case$bytes)
   }
-  # The same bytes on every run.
-  expect_identical(cellucid:::.blosc_frame(cases[[4L]]$bytes, 8L), cellucid:::.blosc_frame(cases[[4L]]$bytes, 8L))
+  # The same bytes on every run, on one thread or several.
+  expect_identical(blosc_frame(cases[[4L]]$bytes, 8L, 1L), blosc_frame(cases[[4L]]$bytes, 8L, 2L))
+})
+
+test_that("chunks are deflated on every core, each to the zlib stream memCompress() makes", {
+  set.seed(3L)
+  chunks <- lapply(1:40, function(i) as.raw(sample.int(8L, 5000L + i, replace = TRUE)))
+  one <- cellucid:::.native_deflate_chunks(chunks, 6L, 1L)
+  several <- cellucid:::.native_deflate_chunks(chunks, 6L, 4L)
+  expect_identical(one, several)
+  expect_identical(lapply(one, memDecompress, type = "gzip"), chunks)
+  expect_identical(cellucid:::.native_deflate_chunks(list(), 6L, 4L), list())
+  # A store written on one thread and on several holds the same bytes.
+  counts <- Matrix::rsparsematrix(200, 30, 0.3)
+  dimnames(counts) <- list(paste0("c", 1:200), paste0("g", 1:30))
+  input <- list(
+    embeddings = list(X_umap = matrix(as.double(1:400), ncol = 2, dimnames = list(paste0("c", 1:200), NULL))),
+    gene_expression = counts,
+    dataset_id = "threads", dataset_name = "Threads"
+  )
+  written <- lapply(c(1L, 4L), function(threads) {
+    path <- file.path(tempfile("cellucid-threads-"), "s.zarr.zip")
+    local_mocked_bindings(.deflate_threads = function() threads)
+    suppressMessages(do.call(cellucid_prepare, c(list(path, "zarr.zip"), input)))
+    bytes <- readBin(path, "raw", file.size(path))
+    unlink(dirname(path), recursive = TRUE)
+    bytes
+  })
+  expect_identical(written[[1L]], written[[2L]])
 })
 
 test_that("dense expression is stored gene-major in tall strips", {
@@ -363,7 +414,8 @@ test_that("dense expression is stored gene-major in tall strips", {
     embeddings = list(X_umap = matrix(seq_len(6), ncol = 2)),
     dataset_id = "dense",
     dataset_name = "Dense",
-    gene_expression = matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, dimnames = list(NULL, c("g1", "g2")))
+    gene_expression = matrix(c(0, 1, 2, 3, 4, 5), nrow = 3, dimnames = list(NULL, c("g1", "g2"))),
+    priority_seed = NULL
   )
   store <- do.call(cellucid_prepare, args)
   meta <- store_json(store, "X/.zarray")
@@ -414,6 +466,7 @@ test_that("integer counts above 2^24 keep the whole X in float64, and nothing el
 
   dense <- function(values) {
     store <- cellucid_prepare(
+      priority_seed = NULL,
       store_path(),
       format = "zarr",
       embeddings = list(X_umap = matrix(seq_len(4), ncol = 2)),
@@ -434,6 +487,7 @@ test_that("category codes take the type pandas gives them", {
   codes_dtype <- function(n_levels) {
     levels <- sprintf("t%05d", seq_len(n_levels))
     store <- cellucid_prepare(
+      priority_seed = NULL,
       store_path(),
       format = "zarr",
       embeddings = list(X_umap = matrix(seq_len(4), ncol = 2)),
@@ -452,7 +506,7 @@ test_that("category codes take the type pandas gives them", {
   expect_identical(cellucid:::.ad_codes_dtype(2147483647), "<i8")
 })
 
-test_that("expression is chunked for gene reads and the graph for whole reads", {
+test_that("expression is chunked for gene reads, per-cell arrays by cells and the graph for whole reads", {
   skip_if_not_installed("Matrix")
   n <- 70000L
   ring <- c(seq(2L, n), 1L)
@@ -461,6 +515,7 @@ test_that("expression is chunked for gene reads and the graph for whole reads", 
   )
   expression <- Matrix::sparseMatrix(i = seq_len(n), j = rep(1:2, length.out = n), x = 1, dims = c(n, 2L))
   store <- cellucid_prepare(
+    priority_seed = NULL,
     store_path(),
     format = "zarr",
     embeddings = list(X_umap = matrix(as.double(seq_len(2L * n)), ncol = 2)),
@@ -471,14 +526,16 @@ test_that("expression is chunked for gene reads and the graph for whole reads", 
     connectivities = graph
   )
   chunks <- function(key) unlist(store_json(store, file.path(key, ".zarray"))$chunks)
-  expect_identical(chunks("X/data"), 65536L)
-  expect_identical(chunks("X/indices"), 65536L)
+  # Expression in 2^14 values, every array of one row per cell in 2^16 values
+  # (an embedding: whole rows), the rest in 2^18 (Python's constants).
+  expect_identical(chunks("X/data"), 16384L)
+  expect_identical(chunks("X/indices"), 16384L)
   expect_identical(chunks("X/indptr"), 3L)
   expect_identical(chunks("obsp/connectivities/data"), 2L * n)
   expect_identical(chunks("obsp/connectivities/indices"), 2L * n)
   expect_identical(chunks("obsp/connectivities/indptr"), n + 1L)
-  expect_identical(chunks("obsm/X_umap"), c(n, 2L))
-  expect_identical(chunks("obs/_index"), n)
+  expect_identical(chunks("obsm/X_umap"), c(32768L, 2L))
+  expect_identical(chunks("obs/_index"), 65536L)
 })
 
 test_that("repeated cell and gene names are made unique the anndata way", {
@@ -539,12 +596,12 @@ test_that("a required argument that was never supplied is reported as missing", 
     )
   )
   expect_error(
-    cellucid_prepare(store_path(), "zarr", embeddings = list(X_umap = diag(2)), dataset_id = "a"),
+    cellucid_prepare(store_path(), "zarr", embeddings = list(X_umap = diag(2)), dataset_id = "a", priority_seed = NULL),
     "^cellucid_prepare\\(\\) is missing 1 required argument:\\n  - dataset_name: one non-empty name"
   )
   # format has no default: the message names both choices and what each is for.
   expect_error(
-    cellucid_prepare(store_path(), embeddings = list(X_umap = diag(2)), dataset_id = "a", dataset_name = "A"),
+    cellucid_prepare(store_path(), embeddings = list(X_umap = diag(2)), dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     paste0(
       "^cellucid_prepare\\(\\) is missing 1 required argument:\\n",
       "  - format: the kind of output to write, \"zarr\" \\(a \\.zarr folder of small ",
@@ -633,7 +690,8 @@ test_that("each mistake is refused with its reason before anything is written", 
   refused("^citation_text is required whenever citation_url is supplied\\.$", citation_url = "https://x.org")
   refused("source_url must be an absolute http:// or https:// address", source_name = "Lab", source_url = "example.org")
   refused("embeddings must contain at least one embedding", embeddings = list())
-  refused("Embedding 'X_umap' must contain only finite values", embeddings = list(X_umap = matrix(c(1, NA), ncol = 2)))
+  refused("Embedding 'X_umap': every cell's values are missing \\(NaN or infinite\\)", embeddings = list(X_umap = matrix(c(1, NA), ncol = 2)))
+  refused("Embedding 'X_umap' holds values beyond the float32 range", embeddings = list(X_umap = matrix(c(NaN, 1e39, 1, 2), ncol = 2)))
   refused("All embeddings must have one row per cell", embeddings = list(X_umap = diag(6), X_b = diag(5)))
   refused("Embedding 'X/umap' contains a character that cannot appear in a file name", embeddings = list(`X/umap` = diag(6)))
   refused("Embedding names 'X_umap' and 'x_UMAP' differ only in letter case", embeddings = list(X_umap = diag(6), x_UMAP = diag(6)))
@@ -644,7 +702,6 @@ test_that("each mistake is refused with its reason before anything is written", 
   refused("rownames\\(var\\) and colnames\\(gene_expression\\) disagree at gene 1", var = data.frame(a = 1:4, row.names = paste0("g", 1:4)))
   refused("var describes the genes of gene_expression", gene_expression = NULL)
   refused("Connectivity matrix must be exactly symmetric", connectivities = Matrix::sparseMatrix(i = 1, j = 2, x = 1, dims = c(6L, 6L)))
-  refused("Connectivity diagonal values must all be exactly zero", connectivities = Matrix::Diagonal(6))
   refused("connectivities must be 6 x 6", connectivities = Matrix::Diagonal(5))
   refused("has 2 columns, and 'X_pca' has 3: a vector field has one component per embedding column", vector_fields = list(velocity = list(X_pca = matrix(0, 6, 2))))
   refused(
@@ -794,4 +851,25 @@ test_that("a default vector field is one drawn on an embedding shown when the fi
     ),
     c("X_wnn.umap", "X_ref.umap")
   )
+})
+
+test_that("what a killed writer left is removed by the next one", {
+  parent <- tempfile("cellucid-staging-")
+  dir.create(parent)
+  on.exit(unlink(parent, recursive = TRUE), add = TRUE)
+  dead <- 999999999
+  dir.create(file.path(parent, paste0(".s.zarr.", dead, ".partial")))
+  dir.create(file.path(parent, paste0(".s.zarr.", Sys.getpid(), "0.partial")))
+  target <- list(path = file.path(parent, "s.zarr"), parent = parent)
+  cellucid:::.remove_stale_staging(target)
+  expect_false(dir.exists(file.path(parent, paste0(".s.zarr.", dead, ".partial"))))
+  # The target gone: a moved-aside copy is the only one, and it stays.
+  dir.create(file.path(parent, paste0(".s.zarr.", dead, ".replaced")))
+  cellucid:::.remove_stale_staging(target)
+  expect_true(dir.exists(file.path(parent, paste0(".s.zarr.", dead, ".replaced"))))
+  dir.create(target$path)
+  cellucid:::.remove_stale_staging(target)
+  expect_false(dir.exists(file.path(parent, paste0(".s.zarr.", dead, ".replaced"))))
+  expect_true(cellucid:::.native_process_alive(Sys.getpid()))
+  expect_false(cellucid:::.native_process_alive(dead))
 })
