@@ -1,14 +1,13 @@
 # The round trip: what a person made in the viewer, pulled onto the object in
-# one call, and columns and gene sets pushed into the viewer. The viewer is
-# played by a WebSocket client in this process that answers each command as
-# app/viewer-host-results.js does: one result per result with the request's
-# id, then the results inventory.
+# one call, and columns pushed into the viewer. The viewer is played by a
+# WebSocket client in this process that sends what app/viewer-host-results.js
+# sends: one result per result, then the results inventory.
 
 # One result frame as the viewer sends it: header, then cells (0-based) and values.
-result_frame <- function(kind, id, meta, cells, values = NULL, type = NULL, request_id = NULL,
+result_frame <- function(kind, id, meta, cells, values = NULL, type = NULL,
                          revision = 1, n_obs, epoch = "0123456789abcdef") {
   header <- list(
-    type = "result", requestId = request_id, epoch = epoch, revision = revision, kind = kind, id = id, nObs = n_obs,
+    type = "result", epoch = epoch, revision = revision, kind = kind, id = id, nObs = n_obs,
     meta = meta, cells = if (is.null(cells)) NULL else length(cells), values = type
   )
   text <- as.character(jsonlite::toJSON(header, auto_unbox = TRUE, null = "null", digits = NA))
@@ -165,7 +164,7 @@ test_that("a new page replaces the old one's results; another dataset's are refu
   ws_close(client)
 })
 
-test_that("push sends at once; gene sets, subsets and selections read what the viewer sent", {
+test_that("push sends the field.push action at once; gene sets, subsets and selections read what the viewer sent", {
   skip_without_seurat()
   object <- pbmc_seurat()
   n <- ncol(object)
@@ -174,14 +173,18 @@ test_that("push sends at once; gene sets, subsets and selections read what the v
   send_snapshot(viewer, client, viewer_results(n), n)
   some <- c(2.5, -1)
   names(some) <- colnames(object)[c(5, 2)]
-  cellucid_push(viewer, some, key = "score")
+  pushed <- cellucid_push(viewer, some, key = "score")
   frame <- ws_receive(client)
-  expect_identical(frame$json$type, "setField")
-  expect_identical(frame$json$key, "score")
-  expect_identical(frame$json$cells[1:2], c(1L, 4L))
+  expect_identical(frame$opcode, 2L)
+  expect_identical(frame$json$action, "field.push")
+  expect_identical(frame$json$requestId, pushed$id)
+  # Cells ascending by original position, each value with its cell, float32.
+  expect_identical(frame$json$params, list(key = "score", kind = "continuous", categories = NULL, n_obs = as.integer(n),
+                                           cells = c(1, 4), values = c(-1, 2.5)))
+  expect_identical(vapply(frame$json$arrays, function(array) array$type, ""), c("uint32", "float32"))
   expect_error(cellucid_push(viewer, c(nope = 1), key = "x"), "not cells of the viewer's dataset")
-  cellucid_push_gene_set(viewer, "T cells", c("CD3E", "CD3E", "CD3D"))
-  expect_identical(ws_receive(client)$json$genes, list("CD3E", "CD3D"))
+  cellucid_gene_set_save(viewer, "T cells", c("CD3E", "CD3D"))
+  expect_identical(ws_receive(client)$json$params, list(name = "T cells", genes = list("CD3E", "CD3D")))
 
   expect_identical(cellucid_gene_sets(viewer), list(T = "CD3E"))
   # Named by the var index, the viewer sends no symbols: the names shown are
@@ -252,6 +255,39 @@ test_that("a subsampled viewer leaves its unopened cells NA", {
   columns <- stats::setNames(lapply(planned$candidates, `[[`, "values"), vapply(planned$candidates, `[[`, "", "wanted"))
   expect_identical(columns$cellucid_highlight__highlight_1, c(TRUE, NA, TRUE, FALSE, FALSE, NA))
   expect_identical(as.character(columns$annotation), c("B", NA, "T", NA, "T", NA))
+})
+
+test_that("a session file pulls the state it shows, its columns named with every other one of the pull", {
+  skip_without_sce()
+  expected <- jsonlite::read_json(testthat::test_path("fixtures", "history_golden", "history_golden.expected.json"), simplifyVector = FALSE)
+  dataset <- expected$dataset
+  cells <- unlist(dataset$obs_names)
+  genes <- unlist(dataset$var_names)
+  obs <- S4Vectors::DataFrame(row.names = cells)
+  for (name in names(dataset$obs)) {
+    categories <- unlist(dataset$obs[[name]]$categories)
+    obs[[name]] <- factor(categories[unlist(dataset$obs[[name]]$codes) + 1L], levels = categories)
+  }
+  object <- SingleCellExperiment::SingleCellExperiment(
+    assays = list(logcounts = Matrix::Matrix(0, length(genes), length(cells), sparse = TRUE, dimnames = list(genes, cells))),
+    colData = obs,
+    reducedDims = list(umap = do.call(rbind, lapply(dataset$obsm$X_umap, function(row) as.double(unlist(row)))))
+  )
+  path <- testthat::test_path("fixtures", "history_golden", "history_golden.cellucid-session")
+  out <- cellucid_pull(object, path, highlight_prefix = "hl_", return_summary = TRUE)
+  added <- SummarizedExperiment::colData(out$data)
+  expect_true(all(c("hl_highlight_1", "cell_type (merged)", "score") %in% names(added)))
+  # A pull writes columns; the labels a session renames are cellucid_apply_session()'s.
+  expect_identical(levels(added$cell_type), c("B cell", "T cell", "NK cell"))
+  record <- S4Vectors::metadata(out$data)$cellucid
+  expect_identical(record$pulled$hl_highlight_1$pulled_from, "history_golden.cellucid-session")
+  expect_identical(record$gene_sets[["T cell markers"]]$genes, c("CD3E", "NKG7"))
+  expect_identical(record$gene_sets[["T cell markers"]]$origin, "notebook")
+  # Pulled again: the same columns, replaced; only the fields asked for.
+  again <- cellucid_pull(out$data, path, highlight_prefix = "hl_")
+  expect_identical(names(SummarizedExperiment::colData(again)), names(added))
+  fields_only <- cellucid_pull(object, path, highlights = FALSE, return_summary = TRUE)
+  expect_setequal(names(fields_only$summary$columns), c("score", "cell_type (merged)"))
 })
 
 test_that("the web app's exports pull onto a data frame in one call", {
@@ -329,51 +365,55 @@ test_that("gene sets of one name are named by one rule; a logical column is push
   expect_identical(named[[1L]]$entry$genes, "ENSG00000198851")
   expect_identical(named[[1L]]$entry$symbols, "CD3E")
   expect_null(sets[[1L]]$entry$symbols)
-  command <- cellucid:::.field_command(c(TRUE, FALSE, NA), "flag", 3, NULL)
-  expect_identical(unlist(command$categories), c("false", "true"))
-  expect_identical(command$values, c(1, 0, 255))
+  params <- cellucid:::.field_push_params(c(TRUE, FALSE, NA), "flag", 3, NULL)
+  expect_identical(unlist(params$categories), c("false", "true"))
+  expect_identical(params$values$values, c(1, 0, 255))
+  expect_identical(params$values$type, "uint8")
 })
 
-test_that("a pushed column is encoded as the protocol's setField", {
-  command <- cellucid:::.field_command(factor(c("a", NA, "b")), "k", 3, NULL)
-  expect_identical(command$values, c(0, 255, 1))
-  frame <- cellucid:::.viewer_command_frame(utils::modifyList(command, list(requestId = "r1")))
-  header_length <- readBin(frame[1:4], "integer", size = 4L, endian = "little")
-  header <- jsonlite::fromJSON(rawToChar(frame[4L + seq_len(header_length)]), simplifyVector = FALSE)
-  expect_identical(header$values, "uint8")
-  expect_identical(as.integer(frame[-seq_len(4L + header_length)]), c(0L, 255L, 1L))
-  expect_error(cellucid:::.field_command(c(1, Inf, 0), "k", 3, NULL), "infinity")
-  expect_error(cellucid:::.field_command(1:2, "k", 3, NULL), "2 values for the viewer's 3 cells")
+test_that("a pushed column is the field.push action, encoded as the protocol's binary action", {
+  params <- cellucid:::.field_push_params(factor(c("a", NA, "b")), "k", 3, NULL)
+  expect_identical(params$values$values, c(0, 255, 1))
+  frame <- cellucid:::.encode_viewer_action("r1", "field.push", params)
+  command <- binary_command(frame)
+  expect_identical(command$params, list(key = "k", kind = "categorical", categories = list("a", "b"), n_obs = 3L,
+                                        cells = NULL, values = c(0, 255, 1)))
+  expect_identical(vapply(command$arrays, function(array) array$type, ""), "uint8")
+  # Past 255 categories the codes are 16-bit, their largest value no category.
+  wide <- cellucid:::.field_push_params(factor(c(paste0("c", 1:300), NA)), "k", 301, NULL)
+  expect_identical(wide$values$type, "uint16")
+  expect_identical(wide$values$values[[301L]], 65535)
+  expect_error(cellucid:::.field_push_params(c(1, Inf, 0), "k", 3, NULL), "infinity")
+  expect_error(cellucid:::.field_push_params(1:2, "k", 3, NULL), "2 values for the viewer's 3 cells")
+  # Before the dataset's cell count is known (a file only the browser reads,
+  # before the viewer said), the column names every cell in order and the
+  # viewer refuses one of another length.
+  unknown <- cellucid:::.field_push_params(c(0.5, 1), "k", NULL, NULL)
+  expect_identical(unknown$n_obs, 2L)
+  expect_null(unknown$cells)
 })
 
-test_that("Run All: a push and a data mapping set before the viewer opened go once it can take them", {
+test_that("Run All: a push and a data mapping sent before the viewer opened go once it connects, answered by the viewer", {
   skip_without_seurat()
   object <- pbmc_seurat()
   n <- ncol(object)
   viewer <- test_viewer(object, dataset_id = "p", dataset_name = "P")
-  # As for a format only the browser reads: the cell count comes with ready.
+  # As for a format only the browser reads: the cell count is not known yet.
   viewer$n_cells <- NULL
-  expect_null(cellucid_push(viewer, seq_len(n) / n, key = "score"))
-  expect_null(cellucid_push(viewer, 1:2, key = "short"))
-  expect_null(cellucid_set_data_mapping(viewer, expression = "X"))
-  expect_error(cellucid_set_data_mapping(viewer, nope = 1), "has no field")
+  score <- cellucid_push(viewer, seq_len(n) / n, key = "score")
+  short <- cellucid_push(viewer, 1:2, key = "short")
+  mapping <- cellucid_mapping_set(viewer, expression = "X")
+  expect_identical(score$state, "waiting for the viewer")
   client <- ws_welcomed(viewer)
-  errors <- list()
-  cellucid_on(viewer, "command_error", function(event) errors[[length(errors) + 1L]] <<- event)
-  ws_send_json(client, list(type = "ready", n_cells = n, n_obs = n, dimensions = 2))
-  pushed <- ws_receive(client)
-  expect_identical(pushed$json$type, "setField")
-  expect_identical(pushed$json$key, "score")
-  run_loop_until(function() length(errors) == 1L)
-  expect_identical(errors[[1L]]$command, "setField")
-  expect_match(errors[[1L]]$reason, "2 values")
-  umap <- list(key = "X_umap", columns = c(0L, 1L))
-  mapping <- list(kind = "anndata", embeddings = list(enabled = list(umap), defaults = list(`1d` = NULL, `2d` = umap, `3d` = NULL)),
-                  knn = NULL, geneNames = "index", expression = "layer:counts", log1p = structure(list(), names = character()),
-                  highlyVariable = NULL, latent = NULL, vectorFields = list())
-  ws_send_json(client, list(type = "data_mapping", requestId = NULL, origin = "default", mapping = mapping))
-  sent <- ws_receive(client)
-  expect_identical(sent$json$type, "setDataMapping")
-  expect_identical(sent$json$mapping$expression, "X")
+  sent <- lapply(1:3, function(i) ws_receive(client)$json)
+  expect_identical(vapply(sent, function(command) command$action, ""), c("field.push", "field.push", "mapping.set"))
+  expect_identical(sent[[1L]]$params$n_obs, as.integer(n))
+  expect_identical(sent[[2L]]$params$n_obs, 2L)
+  expect_identical(sent[[3L]]$params, list(expression = "X"))
+  # The viewer refuses the column of another dataset, by its request.
+  ws_send_json(client, list(type = "command_error", command = "action", requestId = short$id,
+                            reason = "The column \"short\" has 2 cells and this dataset 80 cells: it belongs to another dataset."))
+  expect_warning(run_loop_until(function() short$done), "The viewer did not take cellucid_push\\(\\): The column \"short\" has 2 cells")
+  expect_error(cellucid_action_result(short), "belongs to another dataset")
   ws_close(client)
 })

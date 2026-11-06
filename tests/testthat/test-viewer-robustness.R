@@ -260,7 +260,7 @@ test_that("a logical vector of cells with NA is refused", {
   cells <- rep(FALSE, 12L)
   cells[[1L]] <- TRUE
   cells[[3L]] <- NA
-  expect_error(cellucid_highlight(viewer, cells), "holds NA at cell 3")
+  expect_error(cellucid_highlight_cells(viewer, cells), "holds NA at cell 3")
 })
 
 test_that("quiet = TRUE silences the notes reading the data writes", {

@@ -225,7 +225,12 @@ cellucid_serve <- function(
   viewer$hooks <- list()
   viewer$last <- list()
   viewer$session_requests <- list()
+  viewer$action_requests <- list()
+  viewer$session_loads <- list()
+  viewer$turn <- NULL
   viewer$running <- FALSE
+  # Its end of local agent connections (cellucid_mcp(); R/agent-link.R).
+  .agent_port(viewer)
 
   if (is.character(data) && length(data) == 1L && !is.na(data)) {
     allowed <- .view_path_arguments
@@ -272,8 +277,12 @@ cellucid_serve <- function(
     version = viewer$health$version, type = "anndata", format = viewer$served$kind,
     host = if (bind) host, port = viewer$port, n_cells = viewer$n_cells, n_genes = viewer$n_genes,
     # The program serving the viewer, which the viewer names ("R").
-    runtime = "r"
+    runtime = .agent_runtime
   )
+  # A viewer with a server is published to agent apps on this computer
+  # (cellucid_mcp(), cellucid-python's cellucid mcp); a notebook widget's,
+  # which has none, is not (R/agent-link.R).
+  if (bind) .agent_publish(viewer)
   viewer
 }
 
@@ -575,6 +584,10 @@ print.cellucid_viewer <- function(x, ...) {
 cellucid_stop <- function(viewer) {
   .require_viewer(viewer)
   if (isTRUE(viewer$running)) {
+    # Agent apps waiting on this viewer hear it stopped, and it is no longer
+    # published to them: told before its server stops (R/agent-link.R).
+    .agent_port_stopped(viewer, "the viewer was stopped")
+    .agent_tell_withdrawn(.agent_withdraw(viewer), .viewer_close_seconds)
     if (!is.null(viewer$socket)) {
       # An open page is told to freeze first, as cellucid-python's stop() tells
       # it: it keeps its last view instead of losing its data source.
@@ -599,7 +612,9 @@ cellucid_stop <- function(viewer) {
       if (!is.null(viewer$server)) viewer$server$stop()
       NULL
     }, error = conditionMessage)
-    for (request in names(viewer$session_requests)) viewer$session_requests[[request]] <- NULL
+    .stop_session_requests(viewer)
+    .stop_action_requests(viewer)
+    .stop_session_loads(viewer)
     # Its matrices' layouts stop now, their scratch files let go.
     if (!is.null(viewer$store$layouts)) .native_layouts_stop(viewer$store$layouts)
     if (!is.null(viewer$store)) .backed_release_layouts(viewer$store)
@@ -632,8 +647,9 @@ cellucid_viewers <- function() {
 # --- Hooks and events -----------------------------------------------------------
 
 .hook_events <- c(
-  "selection", "hover", "click", "ready", "data_mapping", "command_error", "pong",
-  "debug_snapshot", "session_bundle", "result", "result_removed", "results", "color_by"
+  "selection", "hover", "click", "ready", "data_mapping", "command_error", "action_result", "pong",
+  "debug_snapshot", "session_bundle", "result", "result_removed", "results", "color_by", "history_changed",
+  "session_loaded"
 )
 
 cellucid_on <- function(viewer, event, handler) {
@@ -791,185 +807,166 @@ cellucid_debug_connection <- function(viewer, timeout = 5) {
 
 # --- Commands -------------------------------------------------------------------
 
-# Cells as the viewer's 0-based indices: 1-based positions, cell names, or a
-# logical vector over the cells.
-.cell_indices <- function(viewer, cells, what) {
-  n <- viewer$n_cells
-  if (is.logical(cells)) {
-    if (!is.null(n) && length(cells) != n) .abort(what, " as TRUE/FALSE needs one value per cell (", n, ").")
-    if (anyNA(cells)) {
-      .abort(what, " as TRUE/FALSE holds NA at cell ", which(is.na(cells))[[1L]], "; say TRUE or FALSE for every cell.")
-    }
-    cells <- which(cells)
-  } else if (is.character(cells)) {
-    if (is.null(viewer$cell_names)) .abort(what, " by name needs a viewer of an R object; give positions.")
-    positions <- match(cells, viewer$cell_names)
-    if (anyNA(positions)) {
-      .abort(what, " names cells the dataset does not have: ", .format_value_list(utils::head(cells[is.na(positions)], 5L)), ".")
-    }
-    cells <- positions
-  } else if (!is.numeric(cells)) {
-    .refuse_cells(what, n)
-  }
-  if (length(cells) > 0L) {
-    # One pass, no copy (src/extent.c): no NA, every position a whole number
-    # from 1 to the number of cells.
-    extent <- .native_extent(cells, whole = is.double(cells))
-    if (extent[[3L]] > 0 || extent[[1L]] < 1 || (!is.null(n) && extent[[2L]] > n) ||
-        extent[[2L]] > 4294967296 || (is.double(cells) && extent[[5L]] != 1)) {
-      .refuse_cells(what, n)
-    }
-  }
-  # Ascending and each once, as the wire carries them: positions given so
-  # (which(), a range) are used as they are, others sorted once; the frame is
-  # then written from them in one pass (.binary_command_frame()).
-  if (is.unsorted(cells, strictly = TRUE)) {
-    cells <- sort(cells, method = "radix")
-    if (length(cells) > 1L) cells <- cells[c(TRUE, cells[-1L] != cells[-length(cells)])]
-  }
-  cells - 1L
-}
-
-.refuse_cells <- function(what, n) {
-  .abort(what, " must be cell names, 1-based positions", if (!is.null(n)) paste0(" from 1 to ", n), ", or TRUE/FALSE per cell.")
-}
-
-cellucid_highlight <- function(viewer, cells, color = "#e41a1c", label = NULL) {
-  .require_viewer(viewer)
-  indices <- .cell_indices(viewer, cells, "cells")
-  if (length(indices) == 0L) .abort("cells selects no cell to highlight.")
-  .viewer_send(viewer, list(type = "highlight", cells = indices, color = color, label = label))
-}
-
-cellucid_clear_highlights <- function(viewer) {
-  .viewer_send(.require_viewer(viewer), list(type = "clearHighlights"))
-}
-
-cellucid_color_by <- function(viewer, field) {
-  .viewer_send(.require_viewer(viewer), list(type = "setColorBy", field = field))
-}
-
-cellucid_set_visibility <- function(viewer, cells = NULL, visible = TRUE) {
-  .require_viewer(viewer)
-  indices <- if (is.null(cells)) NULL else .cell_indices(viewer, cells, "cells")
-  .viewer_send(viewer, list(type = "setVisibility", cells = indices, visible = visible))
-}
-
-cellucid_reset_camera <- function(viewer) {
-  .viewer_send(.require_viewer(viewer), list(type = "resetCamera"))
-}
-
+# Everything else R changes or reads in the viewer is an action (R/actions.R);
+# freeze is the one command that is not: the host stopped, and the page keeps
+# its last complete view.
 cellucid_freeze <- function(viewer) {
   .viewer_send(.require_viewer(viewer), list(type = "freeze"))
 }
 
-# The viewer's data mapping with the named fields replaced, sent without
-# waiting: at once when the viewer has reported its mapping (an invalid value
-# stops here, the viewer untouched), or as soon as it reports one (after its
-# dataset opens). The viewer's answer becomes cellucid_data_mapping(viewer);
-# a mapping it refuses arrives as a command_error.
-cellucid_set_data_mapping <- function(viewer, ...) {
-  .require_viewer(viewer)
-  fields <- list(...)
-  if (length(fields) == 0L || is.null(names(fields)) || any(!nzchar(names(fields)))) {
-    .abort("Name the fields to change, for example expression = \"layer:counts\".")
-  }
-  if ("kind" %in% names(fields)) .abort("cellucid_set_data_mapping() cannot change the mapping kind.")
-  unknown <- setdiff(names(fields), .settable_mapping_fields)
-  if (length(unknown) > 0L) {
-    .abort("A data mapping has no field ", .format_value_list(unknown), "; it has ",
-           .format_value_list(.settable_mapping_fields), ".")
-  }
-  pending <- viewer$pending_mapping_fields %||% list()
-  for (name in names(fields)) pending[name] <- list(fields[[name]])
-  viewer$pending_mapping_fields <- pending
-  if (!is.null(viewer$data_mapping)) .send_pending_mapping(viewer, raise_errors = TRUE)
-  invisible(NULL)
-}
-
-# The top-level fields cellucid_set_data_mapping() replaces.
-.settable_mapping_fields <- c("embeddings", "knn", "geneNames", "expression", "log1p", "highlyVariable", "latent",
-                              "vectorFields", "modality")
-
-# Send the data-mapping fields set so far, merged into the mapping the viewer
-# last reported: an invalid merge stops the call that sent it
-# (raise_errors), or is reported as a command_error when it waited.
-.send_pending_mapping <- function(viewer, raise_errors = FALSE) {
-  fields <- viewer$pending_mapping_fields
-  if (length(fields) == 0L || is.null(viewer$data_mapping)) return(invisible(NULL))
-  viewer$pending_mapping_fields <- NULL
-  mapping <- viewer$data_mapping$mapping
-  failure <- NULL
-  unknown <- setdiff(names(fields), names(mapping))
-  if (length(unknown) > 0L) {
-    failure <- paste0("This dataset's data mapping has no field ", .format_value_list(unknown), ".")
-  } else {
-    for (name in names(fields)) mapping[name] <- list(fields[[name]])
-    failure <- tryCatch({
-      .validate_data_mapping(mapping, "data mapping")
-      NULL
-    }, error = function(error) conditionMessage(error))
-  }
-  if (!is.null(failure)) {
-    if (raise_errors) .abort(failure)
-    return(.report_local_command_error(viewer, "setDataMapping", failure))
-  }
-  .viewer_send(viewer, list(type = "setDataMapping", requestId = paste0("r", .random_hex(6L)), mapping = mapping))
-  invisible(NULL)
-}
-
 # The one way to get the viewer's session, in a notebook and outside one
-# (cellucid-python's viewer.request_session_bundle()): ask without waiting,
-# then collect it with cellucid_session_result() -- in a Jupyter notebook in a
+# (cellucid-python's viewer.request_session()): ask without waiting, then
+# collect it with cellucid_session_result() -- in a Jupyter notebook in a
 # later cell, since the viewer answers between cells; where R can wait (a
-# browser or RStudio viewer) the same call waits for it.
+# browser or RStudio viewer) the same call waits for it. The viewer answers
+# with a .cellucid-session file of format 4: its history, every tracker and
+# every step (R/session-file.R).
 cellucid_request_session <- function(viewer) {
   .require_viewer(viewer)
   id <- paste0("s", .random_hex(6L))
-  viewer$session_requests[[id]] <- list(asked = Sys.time())
+  record <- new.env(parent = emptyenv())
+  record$asked <- Sys.time()
+  record$waiting <- FALSE
+  viewer$session_requests[[id]] <- record
   .viewer_send(viewer, list(type = "requestSessionBundle", requestId = id))
   structure(list(viewer = viewer, id = id), class = "cellucid_session_request")
 }
 
 cellucid_session_result <- function(request, file = NULL, timeout = 60) {
   if (!inherits(request, "cellucid_session_request")) .abort("request must be what cellucid_request_session() returned.")
+  if (!is.null(file)) file <- .validate_required_string(file, "file")
   viewer <- request$viewer
-  answered <- function() {
-    held <- viewer$session_requests[[request$id]]
-    !is.null(held$answer) || !is.null(held$failed)
-  }
-  held <- viewer$session_requests[[request$id]]
-  if (is.null(held)) .abort("This session request was collected or withdrawn already; ask again with cellucid_request_session().")
+  record <- viewer$session_requests[[request$id]]
+  if (is.null(record)) .abort("This session request was collected or withdrawn already; ask again with cellucid_request_session().")
+  answered <- function() !is.null(record$answer) || !is.null(record$failed) || isTRUE(record$stopped)
   if (!answered()) {
     if (!is.null(viewer$widget)) {
       .abort("The viewer has not sent the session yet: in a Jupyter notebook it answers between cells. ",
              "Run cellucid_session_result() again in a later cell.")
     }
+    record$waiting <- TRUE
+    on.exit(record$waiting <- FALSE, add = TRUE)
     .wait_for(viewer, answered, timeout, "the session")
   }
-  held <- viewer$session_requests[[request$id]]
   viewer$session_requests[[request$id]] <- NULL
-  if (!is.null(held$failed)) .abort(held$failed, " Ask again with cellucid_request_session().")
-  path <- held$answer$path
+  if (!is.null(record$failed)) .abort(record$failed, " Ask again with cellucid_request_session().")
+  if (isTRUE(record$stopped)) .abort("The viewer was stopped before it sent the session.")
+  path <- record$answer$path
   if (!is.null(file)) {
-    file <- .validate_required_string(file, "file")
-    if (!file.copy(path, file, overwrite = TRUE)) .abort("Could not write the session to ", file, ".")
+    if (!file.copy(path, path.expand(file), overwrite = TRUE)) .abort("Could not write the session to ", file, ".")
     unlink(path)
-    path <- normalizePath(file, winslash = "/")
+    path <- normalizePath(path.expand(file), winslash = "/")
   }
-  path
+  cellucid_read_session(path)
 }
 
-.withdraw_session_request <- function(request) {
-  held <- request$viewer$session_requests[[request$id]]
-  if (!is.null(held$answer$path)) unlink(held$answer$path)
-  request$viewer$session_requests[[request$id]] <- NULL
+# Every session request still open when the viewer stops: none will be
+# answered; a file sent and not collected is removed.
+.stop_session_requests <- function(viewer) {
+  for (id in names(viewer$session_requests)) {
+    record <- viewer$session_requests[[id]]
+    if (!is.null(record$answer$path)) unlink(record$answer$path)
+    record$answer <- NULL
+    record$stopped <- TRUE
+  }
+  viewer$session_requests <- list()
   invisible(NULL)
 }
 
 print.cellucid_session_request <- function(x, ...) {
-  held <- x$viewer$session_requests[[x$id]]
-  state <- if (is.null(held)) "collected" else if (!is.null(held$answer)) "answered" else if (!is.null(held$failed)) "failed" else "waiting"
+  record <- x$viewer$session_requests[[x$id]]
+  state <- if (is.null(record)) "collected" else if (!is.null(record$answer)) "answered" else if (!is.null(record$failed)) "failed" else "waiting"
   cat("<cellucid session request ", x$id, ": ", state, ">\n", sep = "")
+  invisible(x)
+}
+
+# --- The history, live ------------------------------------------------------------
+
+# The viewer tells every change of its history (a step recorded, the step
+# shown moved, an edit of the history's structure, a tracker started, used,
+# renamed or removed, a session loaded) as a history_changed event:
+# cellucid_last_history_change() is the latest, cellucid_on(viewer,
+# "history_changed", handler) runs code on each. The history is read as a
+# session (cellucid_request_session(), then the reading model of
+# R/history.R) and changed through the history's actions, the generated
+# cellucid_history_*() functions (R/actions-generated.R), as the State panel
+# and agents change it. cellucid-python's viewer.history (LiveHistory),
+# viewer.turn() and viewer.load_session() are the same calls.
+# Hand-written help: man/cellucid_turn.Rd, man/cellucid_load_session.Rd.
+
+cellucid_last_history_change <- function(viewer) {
+  .require_viewer(viewer)
+  viewer$last$history_changed
+}
+
+# A notebook turn: every action sent while `code` runs is one turn of the
+# viewer's history (the State panel shows them as one group and
+# cellucid_history_turn_undo() takes them back together). Returns the turn's
+# id ("r-" and 12 hexadecimal digits), invisibly.
+cellucid_turn <- function(viewer, label, code) {
+  .require_viewer(viewer)
+  if (missing(code)) .abort("cellucid_turn() runs code inside the turn: cellucid_turn(viewer, \"QC\", { ... }).")
+  if (!is.character(label) || length(label) != 1L || is.na(label)) .abort("A turn's label is one string: what it does.")
+  label <- gsub("[[:space:]]+", " ", trimws(enc2utf8(label)))
+  if (!nzchar(label)) .abort("A turn needs a label: what it does, such as \"Normalise and cluster\".")
+  if (!is.null(viewer$turn)) .abort("A turn (\"", viewer$turn$label, "\") is open already; turns do not nest.")
+  id <- paste0("r-", .random_hex(6L))
+  viewer$turn <- list(id = id, label = label)
+  on.exit(viewer$turn <- NULL, add = TRUE)
+  force(code)
+  invisible(id)
+}
+
+# Push a .cellucid-session file into the viewer: its trackers are added
+# beside the person's own, and the viewer shows the session's active tracker.
+# Returns a request; cellucid_load_session_result() collects what the viewer
+# shows then (in a Jupyter notebook, in a later cell).
+cellucid_load_session <- function(viewer, path) {
+  .require_viewer(viewer)
+  path <- .validate_required_string(path, "path")
+  if (!file.exists(path) || dir.exists(path)) .abort("No session file at ", path, ".")
+  bytes <- readBin(path, "raw", n = file.size(path))
+  name <- basename(path)
+  id <- paste0("l", .random_hex(6L))
+  frame <- .encode_viewer_load_session(id, name, bytes)
+  record <- new.env(parent = emptyenv())
+  record$name <- name
+  record$waiting <- FALSE
+  viewer$session_loads[[id]] <- record
+  .viewer_send_frame(viewer, frame)
+  invisible(structure(list(viewer = viewer, id = id, name = name), class = "cellucid_load_session_request"))
+}
+
+cellucid_load_session_result <- function(request, timeout = 60) {
+  if (!inherits(request, "cellucid_load_session_request")) .abort("request must be what cellucid_load_session() returned.")
+  viewer <- request$viewer
+  record <- viewer$session_loads[[request$id]]
+  if (is.null(record)) .abort("This session load was collected already.")
+  answered <- function() !is.null(record$answer) || !is.null(record$failed) || isTRUE(record$stopped)
+  if (!answered()) {
+    if (!is.null(viewer$widget)) {
+      .abort("The viewer has not loaded ", request$name, " yet: in a Jupyter notebook it answers between cells. ",
+             "Run cellucid_load_session_result() again in a later cell.")
+    }
+    record$waiting <- TRUE
+    on.exit(record$waiting <- FALSE, add = TRUE)
+    .wait_for(viewer, answered, timeout, paste0("the viewer to load ", request$name))
+  }
+  viewer$session_loads[[request$id]] <- NULL
+  if (!is.null(record$failed)) .abort("The viewer did not load ", request$name, ": ", record$failed)
+  if (isTRUE(record$stopped)) .abort("The viewer was stopped before it loaded ", request$name, ".")
+  record$answer[c("tracker", "head")]
+}
+
+.stop_session_loads <- function(viewer) {
+  for (id in names(viewer$session_loads)) viewer$session_loads[[id]]$stopped <- TRUE
+  viewer$session_loads <- list()
+  invisible(NULL)
+}
+
+print.cellucid_load_session_request <- function(x, ...) {
+  record <- x$viewer$session_loads[[x$id]]
+  state <- if (is.null(record)) "collected" else if (!is.null(record$answer)) "answered" else if (!is.null(record$failed)) "failed" else "waiting"
+  cat("<cellucid session load ", x$name, ": ", state, ">\n", sep = "")
   invisible(x)
 }

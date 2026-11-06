@@ -519,60 +519,6 @@ SEXP cellucid_raw_slice(SEXP bytes, SEXP offset, SEXP count, SEXP total) {
 }
 
 /*
- * One binary command frame of the viewer channel (R/viewer-protocol.R): the
- * header's length (uint32, little-endian), the header (UTF-8 JSON, padded by
- * the caller to a multiple of 4 bytes), then `cells` as little-endian uint32.
- * The cells are checked in the same pass that writes them: whole numbers from
- * 0 to 2^32 - 1, strictly ascending, at least one (or none, `allow_empty`,
- * for a setVisibility of every cell). NULL when they are not, for the caller
- * to say so; one allocation, the frame, either way.
- */
-SEXP cellucid_cells_frame(SEXP header, SEXP cells, SEXP allow_empty) {
-  if (TYPEOF(header) != RAWSXP) Rf_error("The frame's header must be bytes.");
-  int type = TYPEOF(cells);
-  if (type != INTSXP && type != REALSXP && !(Rf_isNull(cells) && Rf_asLogical(allow_empty) == TRUE)) {
-    return R_NilValue;
-  }
-  R_xlen_t n = Rf_isNull(cells) ? 0 : XLENGTH(cells);
-  if (n == 0 && Rf_asLogical(allow_empty) != TRUE) return R_NilValue;
-  R_xlen_t header_length = XLENGTH(header);
-  /* The header's length is a uint32 of the frame (compared in 64 bits). */
-  if ((uint64_t)header_length > UINT32_MAX) Rf_error("The frame's header is too long.");
-  SEXP out = PROTECT(Rf_allocVector(RAWSXP, raw_length(4 + (double)header_length + 4 * (double)n, 1, "A command frame")));
-  unsigned char *bytes = RAW(out);
-  put32(bytes, (uint32_t)header_length);
-  memcpy(bytes + 4, RAW(header), (size_t)header_length);
-  unsigned char *body = bytes + 4 + header_length;
-  double previous = -1;
-  if (type == INTSXP) {
-    const int *x = INTEGER(cells);
-    for (R_xlen_t k = 0; k < n; k++) {
-      int v = x[k];
-      if (v == NA_INTEGER || v < 0 || (double)v <= previous) {
-        UNPROTECT(1);
-        return R_NilValue;
-      }
-      previous = v;
-      put32(body + 4 * k, (uint32_t)v);
-    }
-  } else if (type == REALSXP) {
-    const double *x = REAL(cells);
-    for (R_xlen_t k = 0; k < n; k++) {
-      double v = x[k];
-      if (!(v >= 0) || v > 4294967295.0 || v != floor(v) || v <= previous) {
-        UNPROTECT(1);
-        return R_NilValue;
-      }
-      previous = v;
-      put32(body + 4 * k, (uint32_t)v);
-    }
-  }
-  UNPROTECT(1);
-  return out;
-}
-
-
-/*
  * The `n` pairs in ascending row (rows are distinct and below 2^`bits`), into
  * `pairs`; `spare` is as long. A short column (a graph's row) by insertion;
  * a long one (a gene) by a least-significant-digit radix sort, a byte of the

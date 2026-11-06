@@ -45,6 +45,19 @@
 }
 
 # The format and layout of the longest name ending `name` ends with.
+# Which of Cellucid's own files a name is (the registry's cellucidFiles: id,
+# label, names, said), or NULL (input-formats.js cellucidFileOfName). They are
+# not datasets: a library file goes to the web app's My datasets, a session
+# file to its dataset (or cellucid_read_session()), and the viewer functions
+# say so in the registry's words, as the web app and cellucid serve do.
+.cellucid_file_of_name <- function(name) {
+  lower <- tolower(name)
+  for (entry in .input_formats()$cellucidFiles) {
+    if (any(endsWith(lower, unlist(entry$names)))) return(entry)
+  }
+  NULL
+}
+
 .format_of_name <- function(name, layouts) {
   lower <- tolower(name)
   best <- NULL
@@ -86,6 +99,8 @@
 .classify_path <- function(path) {
   resolved <- normalizePath(path.expand(path), winslash = "/", mustWork = FALSE)
   if (!file.exists(resolved)) .abort("Nothing exists at ", resolved, ".")
+  own <- .cellucid_file_of_name(basename(resolved))
+  if (!is.null(own)) .abort(basename(resolved), ": ", own$said)
   if (dir.exists(resolved)) {
     zarr_format <- if (file.exists(file.path(resolved, "zarr.json"))) {
       3L

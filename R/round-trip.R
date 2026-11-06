@@ -1,6 +1,7 @@
 # The round trip: what a person made in the Cellucid viewer, written onto the
-# object in one call (cellucid_pull()), and columns and gene sets pushed into
-# the viewer (cellucid_push(), cellucid_push_gene_set()). cellucid-python's
+# object in one call (cellucid_pull()), and a column pushed into the viewer
+# (cellucid_push(), the field.push action built from an R vector; a gene set
+# is the gene-set.save action, cellucid_gene_set_save()). cellucid-python's
 # anndata_session/_results.py and AnnDataViewer.pull()/push(), rule for rule:
 # the same column names, dtypes and missing-value rules, the same results.
 #
@@ -63,19 +64,6 @@
   if (is.null(cells)) return(values)
   out <- rep(NA_real_, n)
   out[cells + 1] <- values
-  out
-}
-
-# A column of some cells (one value per 0-based position in `rows`) placed in
-# a column of all `n`: the others NA.
-.place_rows <- function(values, rows, n) {
-  if (is.factor(values)) {
-    out <- factor(rep(NA_character_, n), levels = levels(values))
-    out[rows + 1] <- values
-    return(out)
-  }
-  out <- if (is.logical(values)) rep(NA, n) else rep(NA_real_, n)
-  out[rows + 1] <- values
   out
 }
 
@@ -462,7 +450,6 @@ cellucid_pull <- function(
     data,
     source,
     ...,
-    expected_dataset_id = NULL,
     highlights = TRUE,
     fields = TRUE,
     scores = TRUE,
@@ -498,48 +485,36 @@ cellucid_pull <- function(
   found <- .result_candidates(data, files$results, options)
   candidates <- found$candidates
   sets <- .gene_sets_of(files$results)
-  extra <- list(...)
-  for (session in files$sessions) {
-    dataset_id <- expected_dataset_id %||% .object_record(data)$id
-    if (is.null(dataset_id)) {
-      .abort(basename(session), ": pass expected_dataset_id (the dataset id the session was saved on).")
-    }
-    # Planned against no existing column: its names are then settled with
-    # every other column of this pull (on_conflict, reuse).
-    planned <- .plan_session(data, session, extra, .validate_required_string(dataset_id, "expected_dataset_id"),
-                             highlights, highlight_prefix, fields, field_prefix, FALSE, character())
-    for (plan in planned$plans) {
-      info <- c(plan$metadata, list(id = plan$metadata$group_id %||% plan$metadata$field_id,
-                                    pulled_from = basename(session)))
-      candidates[[length(candidates) + 1L]] <- list(key = .pulled_key(info), wanted = plan$name,
-                                                     values = plan$values, metadata = info)
+  extra <- .session_view_arguments(list(...))
+  for (path in files$sessions) {
+    # The state the session shows (its active tracker's head), checked as an
+    # apply checks it; its names are then settled with every other column of
+    # this pull (on_conflict, reuse). A pull writes results; renaming the
+    # object's own columns is cellucid_apply_session()'s.
+    shown <- .session_columns(data, cellucid_read_session(path), extra)
+    source <- basename(path)
+    for (column in shown$columns) {
+      kind <- column$metadata$kind
+      if ((identical(kind, "highlight") && !highlights) || (!identical(kind, "highlight") && !fields)) next
+      id <- column$metadata$group_id %||% column$metadata$field_id
+      wanted <- if (identical(kind, "highlight")) paste0(highlight_prefix, id) else paste0(field_prefix, column$metadata$key)
+      info <- c(column$metadata, list(id = id, pulled_from = source))
+      candidates[[length(candidates) + 1L]] <- list(key = .pulled_key(info), wanted = wanted, values = column$values,
+                                                     metadata = info)
     }
     taken <- vapply(sets, `[[`, "", "name")
-    for (entry in .session_gene_sets(planned$bundle)) {
-      name <- .unique_gene_set_name(entry$name, taken)
+    for (set in shown$gene_sets) {
+      name <- .unique_gene_set_name(set$name, taken)
       taken <- c(taken, name)
       sets[[length(sets) + 1L]] <- list(
-        key = paste(basename(session), "geneSet", entry$name, sep = "\r"), name = name,
-        entry = list(genes = entry$genes, description = entry$description, origin = "notebook",
-                     pulled_from = basename(session), id = entry$name)
+        key = paste(source, "geneSet", set$name, sep = "\r"), name = name,
+        entry = list(genes = set$genes, description = set$description, origin = "notebook", pulled_from = source, id = set$name)
       )
     }
   }
   named <- .name_candidates(data, candidates, on_conflict)
   written <- .write_pulled(data, named$plans, named$previous, character(), if (gene_sets) sets, NULL, found$skipped)
   if (return_summary) written else written$data
-}
-
-# The gene sets a notebook pushed, saved with a session: each its name,
-# description and genes.
-.session_gene_sets <- function(bundle) {
-  if (!.gene_sets_profile$id %in% names(bundle$chunks)) return(list())
-  payload <- .parse_json_bytes(.session_chunk(bundle, .gene_sets_profile$id), .gene_sets_profile$id)
-  lapply(payload, function(entry) {
-    .session_check_keys(entry, c("name", "description", "genes"), "gene-sets/notebook entry")
-    list(name = .session_text(entry$name, "gene-sets/notebook name"), description = entry$description,
-         genes = as.character(unlist(entry$genes)))
-  })
 }
 
 # --- The web app's exports ----------------------------------------------------
@@ -797,9 +772,12 @@ cellucid_gene_sets <- function(viewer, symbols = FALSE) {
 
 # --- Pushing into the viewer --------------------------------------------------
 
-# The setField command of one column: a named vector or factor aligned by its
-# names to the viewer's cells (some or all), or one value per cell in order.
-.field_command <- function(values, key, n, cell_names) {
+# The field.push parameters of one column: a named vector or factor aligned by
+# its names to the viewer's cells (some or all), or one value per cell in
+# order. `n` is the dataset's cell count, or NULL before it is known (a file
+# only the browser reads, before the viewer said: the column then names every
+# cell in order, and the viewer refuses one of another length).
+.field_push_params <- function(values, key, n, cell_names) {
   cells <- NULL
   given <- names(values)
   if (!is.null(given) && !is.null(cell_names) && !identical(given, cell_names)) {
@@ -813,80 +791,44 @@ cellucid_gene_sets <- function(viewer, symbols = FALSE) {
     values <- values[order_of]
     cells <- positions[order_of] - 1
     if (length(cells) == n) cells <- NULL
-  } else if (length(values) != n) {
+  } else if (!is.null(n) && length(values) != n) {
     .abort("The column has ", length(values), " ", .plural(length(values), "value"), " for the viewer's ", n, " ", .plural(n, "cell"),
            "; give one per cell in order, or name them by cell.")
   }
+  n_obs <- n %||% length(values)
   if (is.logical(values)) {
     # A logical column's labels are "false" and "true", in every language.
     labels <- ifelse(values, "true", "false")
     values <- factor(labels, levels = intersect(c("false", "true"), labels))
   }
+  cells <- if (is.null(cells)) NULL else .typed_array(cells, "uint32")
   if (is.factor(values) || is.character(values)) {
     factor_values <- if (is.factor(values)) values else factor(values)
     categories <- levels(factor_values)
     if (length(categories) == 0L) .abort("The column has no value to push.")
     type <- if (length(categories) < 255) "uint8" else if (length(categories) < 65535) "uint16" else "uint32"
-    missing <- 2^(8 * .viewer_value_types[[type]]) - 1
-    codes <- as.integer(factor_values) - 1
-    codes[is.na(codes)] <- missing
-    return(list(type = "setField", requestId = "", key = key, kind = "categorical", categories = as.list(categories),
-                nObs = n, cells = cells, values = codes, valueType = type))
+    codes <- as.double(as.integer(factor_values) - 1L)
+    codes[is.na(codes)] <- 2^(8 * .viewer_value_types[[type]]) - 1
+    return(list(key = key, kind = "categorical", categories = as.list(categories), n_obs = n_obs, cells = cells,
+                values = .typed_array(codes, type)))
   }
   if (!is.numeric(values)) .abort("Push labels (a factor, characters, TRUE/FALSE) or numbers.")
   if (any(is.infinite(values))) .abort("The column holds an infinity; the viewer takes finite numbers (NA for no value).")
-  list(type = "setField", requestId = "", key = key, kind = "continuous", categories = NULL, nObs = n,
-       cells = cells, values = as.double(values), valueType = "float32")
+  list(key = key, kind = "continuous", categories = NULL, n_obs = n_obs, cells = cells,
+       values = .typed_array(as.double(values), "float32"))
 }
 
 # The cells of the dataset this viewer serves: read by R, or reported by the
 # viewer (its ready event); NULL before either.
 .dataset_cell_count <- function(viewer) viewer$n_cells %||% viewer$ready$n_obs
 
-# A pushed column is sent at once, or -- for a format only the browser reads
-# -- once the viewer has said how many cells it has (its ready event): a
-# cell run before that ("Run All") is fine. Nothing waits for the viewer.
+# A column of the object as the viewer's field.push action: codes into its
+# categories (a factor, characters, TRUE/FALSE) or float32 numbers, sent at
+# once (or when the viewer's channel opens). Nothing waits for the viewer.
 cellucid_push <- function(viewer, values, key = NULL) {
   .require_viewer(viewer)
   if (is.null(key)) .abort("Name the field in the viewer: key = \"...\".")
   key <- .validate_required_string(trimws(key), "key")
-  n <- .dataset_cell_count(viewer)
-  if (is.null(n)) {
-    viewer$pending_pushes <- c(viewer$pending_pushes, list(list(values = values, key = key)))
-    return(invisible(NULL))
-  }
-  command <- .field_command(values, key, n, viewer$cell_names)
-  command$requestId <- paste0("p", .random_hex(6L))
-  .viewer_send(viewer, command)
-}
-
-# The columns pushed before the viewer's cell count was known: each sent, or
-# reported as a command_error of setField when it does not fit the dataset.
-.send_pending_pushes <- function(viewer) {
-  pending <- viewer$pending_pushes
-  n <- .dataset_cell_count(viewer)
-  if (length(pending) == 0L || is.null(n)) return(invisible(NULL))
-  viewer$pending_pushes <- NULL
-  for (push in pending) {
-    command <- tryCatch(.field_command(push$values, push$key, n, viewer$cell_names),
-                        error = function(error) conditionMessage(error))
-    if (is.character(command)) {
-      .report_local_command_error(viewer, "setField", command)
-      next
-    }
-    command$requestId <- paste0("p", .random_hex(6L))
-    .viewer_send(viewer, command)
-  }
-  invisible(NULL)
-}
-
-cellucid_push_gene_set <- function(viewer, name, genes, description = "") {
-  .require_viewer(viewer)
-  name <- .validate_required_string(name, "name")
-  genes <- unique(trimws(as.character(genes)))
-  genes <- genes[nzchar(genes)]
-  .viewer_send(viewer, list(
-    type = "setGeneSet", requestId = paste0("p", .random_hex(6L)), name = name, description = description,
-    genes = as.list(genes)
-  ))
+  .act(viewer, "field.push", .field_push_params(values, key, .dataset_cell_count(viewer), viewer$cell_names),
+       "cellucid_push()")
 }

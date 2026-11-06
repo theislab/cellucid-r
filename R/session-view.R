@@ -40,19 +40,25 @@
   if (inherits(matrix, "cellucid_feature_major")) matrix$matrix else matrix
 }
 
-# The genes a mapping shows, named by its gene-name set and made unique by
-# the shared rule, as the viewer named them; narrowed to gene_identifiers
-# when cellucid_view() was given them.
-.session_gene_names <- function(view, mapping) {
+# The name of every gene of the modality a mapping reads, one per row of its
+# matrix (and var), named by the mapping's gene-name set and made unique by
+# the shared rule, as the viewer named them.
+.session_all_gene_names <- function(view, mapping) {
   modality <- .session_modality(view, mapping)
   var <- modality$var
   if (is.null(var)) var <- data.frame(row.names = rownames(.modality_matrix(modality)))
   gene_names <- mapping[["geneNames"]]
-  names <- if (identical(gene_names, "index")) {
+  if (identical(gene_names, "index")) {
     .make_unique_names(rownames(var))$names
   } else {
     .resolve_gene_name_set(var, substring(gene_names, 8L), "geneNames")$names
   }
+}
+
+# The genes a mapping shows: every gene's name, narrowed to gene_identifiers
+# when cellucid_view() was given them.
+.session_gene_names <- function(view, mapping) {
+  names <- .session_all_gene_names(view, mapping)
   if (!is.null(view$gene_identifiers)) names <- names[match(view$gene_identifiers, names)]
   names
 }

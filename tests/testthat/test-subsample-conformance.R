@@ -48,23 +48,123 @@ test_that("ranks and sizes are the specification's", {
   }
 })
 
-test_that("a fraction's shortest decimal is the one Python's repr gives, ties to the even digit, on every platform", {
-  # Found in exact integer arithmetic (src/subsample.c), not by the C
+test_that("a number's text is the one JavaScript's String() and Python's repr give, ties to the even digit, on every platform", {
+  # Found in exact integer arithmetic (src/number_text.c), not by the C
   # library's printf, which breaks a tie as each likes: Windows' wrote 2^-25
   # as "...313", and the fixture's 2^-25 of 50,331,648 cells then came out 2.
-  shortest <- function(x) cellucid:::.native_shortest_decimal(x)
-  expect_identical(shortest(2^-25), "2.9802322387695312e-08")
-  expect_identical(shortest(2^-24), "5.960464477539063e-08")
-  expect_identical(shortest(2^-53), "1.1102230246251565e-16")
-  expect_identical(shortest(2^-60), "8.673617379884035e-19")
-  expect_identical(shortest(2^-1074), "5e-324")
-  expect_identical(shortest(2^-1022), "2.2250738585072014e-308")
-  expect_identical(shortest(2^-1022 - 2^-1074), "2.225073858507201e-308")
-  expect_identical(shortest(0.1), "1e-01")
-  expect_identical(shortest(1 / 3), "3.333333333333333e-01")
-  expect_identical(shortest(0x1.9769d41p-4), "9.946616017259657e-02") # R reads "0.0994...57" one ulp low on some builds
-  expect_identical(shortest(1 - 2^-53), "9.999999999999999e-01")
-  expect_identical(shortest(1), "1e+00")
+  # The texts are node's (JSON.stringify); the same digits a share's
+  # subsample size is taken from, and a session value is hashed by.
+  text <- function(x) cellucid:::.native_number_text(x)
+  cases <- list(
+    list(2^-25, "2.9802322387695312e-8"), list(2^-24, "5.960464477539063e-8"),
+    list(2^-53, "1.1102230246251565e-16"), list(2^-60, "8.673617379884035e-19"), list(2^-1074, "5e-324"),
+    list(2^-1022, "2.2250738585072014e-308"), list(2^-1022 - 2^-1074, "2.225073858507201e-308"),
+    list(0.1, "0.1"), list(1 / 3, "0.3333333333333333"),
+    list(0x1.9769d41p-4, "0.09946616017259657"), # R reads "0.0994...57" one ulp low on some builds
+    list(1 - 2^-53, "0.9999999999999999"), list(1, "1"), list(1e21, "1e+21"), list(1e-7, "1e-7"),
+    list(1.5e-7, "1.5e-7"), list(2^66, "73786976294838210000"), list(2^70, "1.1805916207174113e+21"),
+    list(2^66 + 2^14, "73786976294838220000"), list(-0, "0"),
+    list(.Machine$double.xmax, "1.7976931348623157e+308"), list(0.000001, "0.000001"), list(-3.875, "-3.875"),
+    list(4294967295, "4294967295"), list(2^53 + 2, "9007199254740994")
+  )
+  for (case in cases) expect_identical(text(case[[1L]]), case[[2L]], info = case[[2L]])
+  expect_identical(text(c(5L, -2L, 0L, .Machine$integer.max, -.Machine$integer.max)),
+                   c("5", "-2", "0", "2147483647", "-2147483647"))
+  expect_error(text(NA_real_), "finite")
+  expect_error(text(Inf), "finite")
+})
+
+test_that("a number's text at the extremes of a double is node's, each double named by its IEEE 754 bits", {
+  # Named by bits, since R's own reading of a literal is not correctly rounded
+  # on every build. The texts are node's, generated from these bits; among
+  # them the doubles a decimal one digit shorter reaches by rounding up to the
+  # next power of ten (1e23, 1e-7, 1e-323: the double lies just below it).
+  double_of <- function(bits) {
+    bytes <- as.raw(strtoi(substring(bits, seq(1L, 15L, 2L), seq(2L, 16L, 2L)), 16L))
+    readBin(bytes, "double", 1L, size = 8L, endian = "big")
+  }
+  text <- function(x) cellucid:::.native_number_text(x)
+  cases <- c(
+    "7fefffffffffffff" = "1.7976931348623157e+308",
+    "ffefffffffffffff" = "-1.7976931348623157e+308",
+    "0000000000000001" = "5e-324",
+    "8000000000000001" = "-5e-324",
+    "0010000000000000" = "2.2250738585072014e-308",
+    "000fffffffffffff" = "2.225073858507201e-308",
+    "444b1ae4d6e2ef50" = "1e+21",
+    "3e7ad7f29abcaf48" = "1e-7",
+    "3eb0c6f7a0b5ed8d" = "0.000001",
+    "444b1ae4d6e2ef4f" = "999999999999999900000",
+    "444b1ae4d6e2ef51" = "1.0000000000000001e+21",
+    "44b52d02c7e14af6" = "1e+23",
+    "4480f0cf064dd592" = "1e+22",
+    "0000000000000002" = "1e-323",
+    "0000000000000004" = "2e-323",
+    "0000000000000014" = "1e-322",
+    "0000000000000013" = "9.4e-323",
+    "7e37e43c8800759c" = "1e+300",
+    "7fe1ccf385ebc8a0" = "1e+308",
+    "01a56e1fc2f8f359" = "1e-300",
+    "000730d67819e8d2" = "1e-308",
+    "000012688b70e62b" = "1e-310",
+    "44b52d02c7e14af7" = "1.0000000000000001e+23",
+    "3ea0c6f7a0b5ed8d" = "5e-7",
+    "3e8421f5f40d8376" = "1.5e-7",
+    "3fb999999999999a" = "0.1",
+    "3fc999999999999a" = "0.2",
+    "3fd3333333333334" = "0.30000000000000004",
+    "3fd5555555555555" = "0.3333333333333333",
+    "3fe5555555555555" = "0.6666666666666666",
+    "40fe240c9fbe76c9" = "123456.789",
+    "4011666666666666" = "4.35",
+    "4004000000000000" = "2.5",
+    "3eb4b3fd5942cd96" = "0.000001234",
+    "7feffffffffffffe" = "1.7976931348623155e+308",
+    "3e60000000000000" = "2.9802322387695312e-8",
+    "0008000000000000" = "1.1125369292536007e-308",
+    "7fe0000000000000" = "8.98846567431158e+307",
+    "4450000000000000" = "1.1805916207174113e+21",
+    "4340000000000000" = "9007199254740992",
+    "4340000000000001" = "9007199254740994",
+    "4350000000000000" = "18014398509481984",
+    "43b0000000000000" = "1152921504606847000",
+    "43e0000000000000" = "9223372036854776000",
+    "43f0000000000000" = "18446744073709552000",
+    "2b2bff2ee48e0530" = "1e-100",
+    "358dee7a4ad4b81f" = "1e-50",
+    "3bc79ca10c924223" = "1e-20",
+    "3ddb7cdfd9d7bdbb" = "1e-10",
+    "3ee4f8b588e368f1" = "0.00001",
+    "3f50624dd2f1a9fc" = "0.001",
+    "408f400000000000" = "1000",
+    "430c6bf526340000" = "1000000000000000",
+    "4341c37937e08000" = "10000000000000000",
+    "4376345785d8a000" = "100000000000000000",
+    "43abc16d674ec800" = "1000000000000000000",
+    "43e158e460913d00" = "10000000000000000000",
+    "4415af1d78b58c40" = "100000000000000000000",
+    "45208b2a2c280291" = "1e+25",
+    "46293e5939a08cea" = "1e+30",
+    "483d6329f1c35ca5" = "1e+40",
+    "54b249ad2594c37d" = "1e+100",
+    "6974e718d7d7625a" = "1e+200"
+  )
+  for (bits in names(cases)) {
+    expect_identical(text(double_of(bits)), cases[[bits]], info = bits)
+  }
+  # The extremes as R names them.
+  expect_identical(text(.Machine$double.xmax), "1.7976931348623157e+308")
+  expect_identical(text(-.Machine$double.xmax), "-1.7976931348623157e+308")
+  expect_identical(text(.Machine$double.xmin), "2.2250738585072014e-308")
+  expect_identical(text(.Machine$double.eps), "2.220446049250313e-16")
+  # A whole number written by hand: every length up to 2^53's, and its ends.
+  powers <- cumprod(rep(10, 15L))
+  for (digits in seq_along(powers)) {
+    expect_identical(text(powers[[digits]] - 1), strrep("9", digits), info = digits)
+    expect_identical(text(powers[[digits]]), paste0("1", strrep("0", digits)), info = digits)
+  }
+  expect_identical(text(2^53 - 1), "9007199254740991")
+  expect_identical(text(2^53), "9007199254740992")
 })
 
 test_that("every case keeps the cells the fixture lists, with its digest", {

@@ -1,28 +1,29 @@
-# Builds the source package tarball, runs `R CMD check --as-cran` on it and,
-# for a published GitHub Release, submits that exact tarball to CRAN.
+# Publishing a GitHub Release named `vX.Y.Z` (X.Y.Z = DESCRIPTION's Version,
+# its tag on main) is the one way to release the R package. This workflow then
+# builds the source tarball, runs `R CMD check --as-cran` on it, attaches the
+# tarball and its SHA-256 to the release and submits that exact tarball to
+# CRAN with `cran-comments.md` as the comment.
 #
-# - Publishing a GitHub Release tagged `vX.Y.Z` (X.Y.Z = DESCRIPTION's
-#   Version, on main) builds, checks, attaches the tarball to the release and
-#   submits it to CRAN with `cran-comments.md` as the comment. A check with a
-#   WARNING or an ERROR is not submitted.
+# - It runs on `release: published` only: a tag push, a draft release and a
+#   release marked pre-release publish nothing (CRAN takes final X.Y.Z
+#   versions only).
+# - A check with a WARNING or an ERROR is not submitted.
 # - CRAN then emails the maintainer in DESCRIPTION a confirmation link; the
 #   submission goes ahead only once the maintainer clicks it (CRAN's rule).
-# - Running the workflow by hand builds and checks only; it never submits.
+# - A failed run is retried with "Re-run jobs" on that run.
 
-name: Build Release Tarball
+name: Publish to CRAN
 
 on:
-  workflow_dispatch:
-    inputs:
-      run_as_cran:
-        description: "Run R CMD check --as-cran (recommended for CRAN submission)"
-        required: false
-        default: "true"
   release:
     types: [published]
 
 permissions:
   contents: write
+
+concurrency:
+  group: cran-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -36,23 +37,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify the release, its tag and main-branch provenance
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          VERSION="$(sed -n 's/^Version: //p' DESCRIPTION)"
+          EXPECTED_TAG="v${VERSION}"
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::DESCRIPTION's Version '${VERSION}' is not a final X.Y.Z version; CRAN is never sent a pre-release."
+            exit 1
+          fi
+          if [[ "${RELEASE_DRAFT}" != "false" ]]; then
+            echo "::error::A draft release is never published."
+            exit 1
+          fi
+          if [[ "${RELEASE_PRERELEASE}" != "false" ]]; then
+            echo "::error::The release is marked pre-release, but ${VERSION} is a final version: untick 'Set as a pre-release'."
+            exit 1
+          fi
+          test "${GITHUB_REF_TYPE}" = "tag"
+          test "${RELEASE_TAG}" = "${GITHUB_REF_NAME}"
+          test "${GITHUB_REF_NAME}" = "${EXPECTED_TAG}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+        shell: bash
+
       - uses: r-lib/actions/setup-pandoc@v2
 
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: "release"
           use-public-rspm: true
-
-      - name: Verify release tag and main-branch provenance
-        if: github.event_name == 'release'
-        run: |
-          VERSION="$(Rscript -e 'cat(read.dcf("DESCRIPTION")[1, "Version"])')"
-          EXPECTED_TAG="v${VERSION}"
-          test "${GITHUB_REF_TYPE}" = "tag"
-          test "${GITHUB_REF_NAME}" = "${EXPECTED_TAG}"
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
-        shell: bash
 
       - uses: r-lib/actions/setup-tinytex@v2
 
@@ -84,14 +102,7 @@ jobs:
           echo "Built: ${TARBALL}"
         shell: bash
 
-      - name: R CMD check (default)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_as_cran != 'true'
-        run: |
-          R CMD check "${{ steps.build.outputs.tarball }}"
-        shell: bash
-
       - name: R CMD check --as-cran
-        if: github.event_name != 'workflow_dispatch' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_as_cran == 'true')
         run: |
           R CMD check --as-cran "${{ steps.build.outputs.tarball }}"
         shell: bash
@@ -105,7 +116,6 @@ jobs:
             ${{ steps.build.outputs.checksum }}
 
       - name: Attach tarball to GitHub Release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -113,7 +123,6 @@ jobs:
             ${{ steps.build.outputs.checksum }}
 
       - name: Refuse a CRAN submission over a warning or an error
-        if: github.event_name == 'release'
         run: |
           STATUS="$(grep -E '^Status:' cellucid.Rcheck/00check.log)"
           echo "R CMD check --as-cran: ${STATUS}"
@@ -127,7 +136,6 @@ jobs:
       # without its interactive questions): the comment is cran-comments.md,
       # the maintainer's name and email come from DESCRIPTION.
       - name: Submit the checked tarball to CRAN
-        if: github.event_name == 'release'
         run: |
           Rscript -e 'devtools:::upload_cran(pkg = ".", built_path = "${{ steps.build.outputs.tarball }}")'
           echo "::notice::Submitted ${{ steps.build.outputs.tarball }} to CRAN. Confirm it from the email CRAN sends the maintainer."

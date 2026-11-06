@@ -21,15 +21,19 @@ A beginner-friendly guide to publishing the R package `cellucid` to CRAN and bey
 
 ## Quick Start
 
-**To release a new version:**
+**To release the R package, publish a GitHub Release `vX.Y.Z` in
+`theislab/cellucid-r`; the workflow `release.yaml` ("Publish to CRAN")
+submits it to CRAN.** Nothing else publishes: pushing a tag does nothing.
 
-1. **Bump version**: Update `DESCRIPTION`, `CITATION.cff`, and `NEWS.md`
-2. **Merge to main**: Create a PR, wait for CI, merge
-3. **Create release**: Releases → "Draft new release" → tag `vX.Y.Z` → publish
-4. **Wait for the workflow**: "Build Release Tarball" builds, runs `R CMD check --as-cran`, attaches the tarball to the release and submits it to CRAN
+1. **Bump version**: Update `DESCRIPTION`, `CITATION.cff`, `NEWS.md` and the other sites below
+2. **Merge to main**: wait for CI to be green on `main`
+3. **Publish the release**: Releases → "Draft a new release" → tag `vX.Y.Z` on `main` → "Publish release"
+4. **Wait for the workflow**: "Publish to CRAN" builds, runs `R CMD check --as-cran`, attaches the tarball to the release and submits it to CRAN
 5. **Confirm the CRAN email**: click the link CRAN sends the maintainer
 
-That's it! Keep reading for detailed explanations.
+The order across the Python, R and npm packages and the shared checklist are in
+[Releasing Cellucid](https://docs.cellucid.com/en/latest/contributing/releasing.html).
+Keep reading for detailed explanations.
 
 ---
 
@@ -59,7 +63,7 @@ Check that `.github/workflows/` contains:
 | File | Purpose |
 |------|---------|
 | `R-CMD-check.yaml` | Runs tests on every push/PR (Windows, macOS, Linux) |
-| `release.yaml` | Builds and checks the tarball when you publish a release, attaches it and submits it to CRAN |
+| `release.yaml` | "Publish to CRAN": runs only when you publish a GitHub Release; builds and checks the tarball, attaches it and submits it to CRAN |
 | `pkgdown.yaml` | Builds and deploys the documentation website |
 
 ---
@@ -79,7 +83,7 @@ Update these files with the new version number:
 |------|----------------|
 | `DESCRIPTION` | `Version:` field (e.g., `Version: 0.9.6`) |
 | `CITATION.cff` | `version:` field (e.g., `version: 0.9.6`) |
-| `NEWS.md` | Add a new section header (e.g., `# cellucid 0.9.6`) |
+| `NEWS.md` | Add a new section header (e.g., `# cellucid 0.9.6`); headers carry no date (CRAN records the publication day) |
 | `README.md` | The "Active package version" block |
 | `vignettes/installation.Rmd` | Every version mention, including the `packageVersion()` output |
 | `tests/testthat/test-current-contract.R` | The one pinned literal in `expect_identical(version, ...)` |
@@ -113,25 +117,33 @@ lockstep is real but manual:
 3. Wait for CI checks to pass (green checkmark)
 4. Merge to `main`
 
-### Step 3: Create a GitHub Release
+### Step 3: Publish a GitHub Release
 
 1. Go to **Releases** → **"Draft a new release"**
 2. Click **"Choose a tag"** → type `vX.Y.Z` (e.g., `v0.9.6`) → **"Create new tag"**
 3. Target: `main`
 4. Title: `cellucid X.Y.Z`
-5. Description: copy from `NEWS.md` or write release notes
-6. Click **"Publish release"**
+5. Description: copy from `NEWS.md`
+6. Leave **"Set as a pre-release"** unticked, then click **"Publish release"**
 
-This automatically triggers the "Build Release Tarball" workflow.
-The workflow requires the tag to equal `v` plus the `DESCRIPTION` version and
-requires the tagged commit to belong to `main`. It builds the tarball, runs
+Publishing it starts the "Publish to CRAN" workflow (`release.yaml`), which
+runs on `release: published` and on nothing else. It refuses, before building
+anything, a draft, a release marked pre-release, a `DESCRIPTION` version that
+is not `X.Y.Z`, a tag other than `v` plus the `DESCRIPTION` version, and a
+tagged commit that is not on `main`. It then builds the tarball, runs
 `R CMD check --as-cran` on it, attaches it to the release and, when the check
 reports no WARNING and no ERROR, submits it to CRAN (see
 [Publishing to CRAN](#publishing-to-cran)).
 
+**A failed run** (a runner, network or CRAN-form failure): open the run under
+**Actions** and click **"Re-run jobs"** (or "Re-run failed jobs"). It runs the
+same release again. Do not re-run a run whose submission step already succeeded:
+that submits to CRAN a second time. If the source itself must change, delete the
+release and its tag, fix `main`, and publish the release again.
+
 ### Step 4: Download the tarball
 
-1. Go to **Actions** → find the **"Build Release Tarball"** run
+1. Go to **Actions** → find the **"Publish to CRAN"** run
 2. Scroll down to **"Artifacts"**
 3. Download **`r-source-tarball`**
 4. Unzip it — you'll get `cellucid_X.Y.Z.tar.gz` and its `.sha256` checksum
@@ -169,38 +181,19 @@ CRAN is the main R package repository. Once accepted, users can install with jus
 
 ### How to Submit
 
-Publishing the GitHub release submits the package: the "Build Release
-Tarball" workflow uploads the checked tarball with `cran-comments.md` as the
+Publishing the GitHub release submits the package: the "Publish to CRAN"
+workflow uploads the checked tarball with `cran-comments.md` as the
 comment (`devtools:::upload_cran()`, the form `devtools::submit_cran()` posts),
 and refuses to when `R CMD check --as-cran` reported a WARNING or an ERROR.
-Keep `cran-comments.md` current before you publish. The steps below are for a
-submission by hand, if the workflow cannot submit (CRAN's form down, a
-failed run).
+Keep `cran-comments.md` current before you publish. If the upload fails (CRAN's
+form down), re-run the run's jobs; there is no submission by hand.
 
-#### 1. Go to the submission form
+#### 1. Confirm via email
 
-Open: **https://cran.r-project.org/submit.html**
+1. **Check the maintainer's email** (within minutes)
+2. **Click the confirmation link** — this is required!
 
-#### 2. Fill out the form
-
-| Field | Value |
-|-------|-------|
-| Package tar.gz file | Upload `cellucid_X.Y.Z.tar.gz` |
-| Package name | `cellucid` |
-| Package version | `X.Y.Z` |
-| Maintainer name | Your name |
-| Maintainer email | Must match email in DESCRIPTION |
-| Optional comment | Paste contents of `cran-comments.md` |
-
-#### 3. Submit and confirm via email
-
-Whether the workflow or you submitted:
-
-1. (By hand only) Click **"Upload package"**
-2. **Check the maintainer's email** (within minutes)
-3. **Click the confirmation link** — this is required!
-
-#### 4. Wait for results
+#### 2. Wait for results
 
 - **Automatic checks**: 30 minutes to a few hours
 - **Manual review** (first submission): A few days to 2 weeks
@@ -225,7 +218,7 @@ Don't panic — most first submissions get feedback.
    ## R CMD check results
    ...
    ```
-4. **Create a new release** and **resubmit**
+4. **Publish a new GitHub Release** for the new version; the workflow resubmits
 
 ### CRAN Tips
 
@@ -369,7 +362,7 @@ R package names cannot contain `-`, so the package itself must stay `cellucid`.
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | R-CMD-check | Push, PR | Tests on Windows/macOS/Linux |
-| Build Release Tarball | Release, manual | Builds and checks the `.tar.gz`; on a release, attaches it and submits it to CRAN |
+| Publish to CRAN (`release.yaml`) | Published GitHub Release only | Builds and checks the `.tar.gz`, attaches it to the release and submits it to CRAN |
 | pkgdown | Push to main, manual | Deploys documentation website |
 
 ### Useful Links

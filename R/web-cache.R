@@ -102,7 +102,22 @@
   value
 }
 
-.media_type <- function(content_type) tolower(trimws(strsplit(content_type, ";", fixed = TRUE)[[1L]][[1L]]))
+# The names one kind of file goes by on hosts: JavaScript is text/javascript
+# (RFC 9239), and its historic names are still what many hosts send (GitHub
+# Pages and nginx application/javascript; Node's and Python's own servers
+# text/javascript). The response check only tells a file of another kind (an
+# HTML error page) apart.
+.media_type_aliases <- c(
+  "application/javascript" = "text/javascript",
+  "application/x-javascript" = "text/javascript",
+  "application/ecmascript" = "text/javascript",
+  "text/ecmascript" = "text/javascript"
+)
+
+.media_type <- function(content_type) {
+  bare <- tolower(trimws(strsplit(content_type, ";", fixed = TRUE)[[1L]][[1L]]))
+  if (bare %in% names(.media_type_aliases)) unname(.media_type_aliases[[bare]]) else bare
+}
 
 # The one accepted inventory schema.
 .parse_web_inventory <- function(bytes) {

@@ -15,11 +15,11 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Current version and availability
 
-**The active Cellucid for R source and documentation version is 0.9.6.** It is <!-- CELLUCID_VERSION -->
+**The active Cellucid for R source and documentation version is 0.9.7.** It is <!-- CELLUCID_VERSION -->
 the CRAN submission release. The
 [CRAN package index](https://cran.r-project.org/web/packages/available_packages_by_name.html)
 is authoritative for registry availability. Use the CRAN command below when
-the index lists `cellucid` 0.9.6; otherwise use the GitHub command.
+the index lists `cellucid` 0.9.7; otherwise use the GitHub command. <!-- CELLUCID_VERSION -->
 
 ## Requirements
 
@@ -47,15 +47,15 @@ Check your R version with:
 R.version.string
 ```
 
-## Install version 0.9.6 from CRAN
+## Install version 0.9.7 from CRAN
 
-When the CRAN package index lists `cellucid` 0.9.6, install it with:
+When the CRAN package index lists `cellucid` 0.9.7, install it with: <!-- CELLUCID_VERSION -->
 
 ```{r, eval=FALSE}
 install.packages("cellucid")
 ```
 
-If the index does not list version 0.9.6 yet, install the active source from
+If the index does not list version 0.9.7 yet, install the active source from <!-- CELLUCID_VERSION -->
 the official GitHub repository:
 
 ```{r, eval=FALSE}
@@ -84,7 +84,7 @@ current session.
 ## Update an existing installation
 
 Install again from the source currently available to you. Use CRAN when its
-package index lists version 0.9.6:
+package index lists version 0.9.7: <!-- CELLUCID_VERSION -->
 
 ```{r, eval=FALSE}
 install.packages("cellucid")
@@ -106,7 +106,7 @@ Load Cellucid and confirm that R reports the active version:
 ```{r, eval=FALSE}
 library(cellucid)
 packageVersion("cellucid")
-#> [1] '0.9.6'
+#> [1] '0.9.7'
 ```
 
 You can then open the preparation function reference:

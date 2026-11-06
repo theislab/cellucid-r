@@ -10,6 +10,9 @@
 #   GET  /_cellucid/anndata/<name>[/<key>]  the store's bytes, with Range,
 #                                           If-Range, If-None-Match and ETag
 #   WS   /_cellucid/ws                      the viewer channel
+#   GET  /_cellucid/agent/<viewer id>[/events], POST .../command
+#                                           the viewer's endpoint for agents on
+#                                           this computer (R/agent-link.R)
 #
 # An R object is served as a Cellucid-ready AnnData (or MuData) Zarr store
 # held in memory, its cells in priority order under the served seed
@@ -148,6 +151,9 @@
 }
 
 .on_headers <- function(viewer, req) {
+  # The agents' endpoint takes loopback requests only, whatever the server
+  # is bound to, and no browser's: its own checks, stricter than these.
+  if (.is_agent_request(req)) return(.agent_request_refusal(req))
   if (!.host_is_authorized(viewer, req)) {
     return(.with_cors(.text_response(421L, "Host header does not name this server"), req))
   }
@@ -340,6 +346,12 @@
 # --- HTTP routes -----------------------------------------------------------------
 
 .on_call <- function(viewer, req) {
+  if (.is_agent_request(req)) {
+    return(tryCatch(.agent_endpoint_call(viewer, req), error = function(error) {
+      .inform("Cellucid viewer: an agent's request failed: ", conditionMessage(error))
+      .agent_answer(500L, list(error = "Internal server error."))
+    }))
+  }
   response <- tryCatch(.route(viewer, req), error = function(error) {
     # The error is the R session's to read, not the page's: a request is
     # answered without the internal message.
@@ -486,12 +498,20 @@
       state$welcomed <- TRUE
       if (!is.null(previous)) {
         try(previous$close(.viewer_close_codes[["replaced"]], "Replaced by a newer connection"), silent = TRUE)
+        # The page that held it is gone (reloaded, opened again elsewhere):
+        # the agent calls it was running get no answer now.
+        .agent_port_page_gone(viewer)
       }
       ws$send(.json_text(list(type = "welcome")))
       queued <- viewer$queue
       viewer$queue <- list()
-      for (frame in queued) ws$send(frame)
+      for (entry in queued) {
+        ws$send(entry$frame)
+        if (!is.null(entry$record)) entry$record$sent <- TRUE
+      }
       .keep_alive(viewer, ws, state)
+      # A page took the channel: what its tool list says may differ.
+      .agent_port_page_back(viewer)
       return(invisible(NULL))
     }
     event <- tryCatch(
@@ -503,7 +523,11 @@
   })
   ws$onClose(function() {
     state$closed <- TRUE
-    if (identical(viewer$socket, ws)) viewer$socket <- NULL
+    if (identical(viewer$socket, ws)) {
+      viewer$socket <- NULL
+      # The page holding the channel went: its agent calls end now.
+      .agent_port_page_gone(viewer)
+    }
   })
   invisible(NULL)
 }
@@ -545,16 +569,23 @@
   event
 }
 
-# Send one checked command, or keep it until the viewer's channel is open.
+# Send one checked command (not an action: .act()), or keep it until the
+# viewer's channel is open.
 .viewer_send <- function(viewer, command) {
-  frame <- .viewer_command_frame(command)
+  .viewer_send_frame(viewer, .viewer_command_frame(command))
+}
+
+# Send one frame, or keep it (in order) until the viewer's channel is open;
+# `record`, an action's request record, learns when it went.
+.viewer_send_frame <- function(viewer, frame, record = NULL) {
   if (!isTRUE(viewer$running)) {
     .abort("This viewer is stopped; open a new one with cellucid_view().")
   }
   if (is.null(viewer$socket)) {
-    viewer$queue[[length(viewer$queue) + 1L]] <- frame
+    viewer$queue[[length(viewer$queue) + 1L]] <- list(frame = frame, record = record)
   } else {
     viewer$socket$send(frame)
+    if (!is.null(record)) record$sent <- TRUE
   }
   invisible(viewer)
 }
@@ -564,14 +595,25 @@
 .deliver_event <- function(viewer, event) {
   type <- event$type
   payload <- event$payload
-  # Cells are R's 1-based positions in every event, as cellucid_highlight()
-  # and the other commands take them; the viewer's wire is 0-based.
+  # Cells are R's 1-based positions in every event, as the actions take them
+  # (cellucid_highlight_cells()); the viewer's wire is 0-based.
+  waited <- FALSE
+  caller <- NULL
   position <- function(index) {
     index <- index + 1
     if (all(index <= .Machine$integer.max)) as.integer(index) else index
   }
   if (identical(type, "pong") && startsWith(payload$requestId, .keepalive_prefix)) {
     return(invisible(NULL))
+  }
+  # An agent app's answers (cellucid_mcp(), cellucid mcp) are its own: they
+  # reach the viewer's agent port (R/agent-link.R), never the hooks, the
+  # viewer's last events or a printed notice -- a refused agent command too.
+  if (type %in% .viewer_agent_events) {
+    return(.agent_port_deliver(viewer, type, payload))
+  }
+  if (identical(type, "command_error") && startsWith(payload$command, "agent_")) {
+    return(.agent_port_command_failed(viewer, payload))
   }
   if (identical(type, "selection")) {
     indices <- position(payload$cells)
@@ -594,8 +636,8 @@
     if (!.is_session_bundle(event$body)) {
       # The one waiting is told now, in the form its wait accepts.
       return(.deliver_event(viewer, list(type = "command_error", payload = list(
-        command = "requestSessionBundle",
-        reason = paste0("The viewer sent an invalid session bundle: ",
+        command = "requestSessionBundle", requestId = payload$requestId,
+        reason = paste0("The viewer sent an invalid session file: ",
                         .session_signature_refusal(event$body[seq_len(min(length(event$body), length(.session_magic)))]))
       ))))
     }
@@ -604,7 +646,12 @@
     payload <- list(requestId = payload$requestId, status = "ok", bytes = length(event$body), path = path)
     # The request holds its answer until it is collected
     # (cellucid_session_result()).
-    viewer$session_requests[[payload$requestId]] <- list(answer = payload)
+    request$answer <- payload
+  } else if (identical(type, "action_result")) {
+    .settle_action(viewer, payload$requestId, outcome = payload$outcome, step = payload$step)
+  } else if (identical(type, "session_loaded")) {
+    load <- viewer$session_loads[[payload$requestId]]
+    if (!is.null(load)) load$answer <- payload
   } else if (type %in% c("result", "result_removed", "results") && !identical(payload$epoch, viewer$results_epoch)) {
     # Another epoch -- a reloaded page, the viewer shown again elsewhere,
     # another dataset opened in it -- starts afresh; its snapshot follows.
@@ -637,11 +684,27 @@
     viewer$results <- viewer$results[intersect(names(viewer$results), listed)]
     viewer$results_inventory <- listed
     viewer$results_dataset <- payload$dataset
-  } else if (identical(type, "command_error") && identical(payload$command, "requestSessionBundle")) {
-    # The viewer could not capture a session: every request still open
-    # learns why.
-    for (id in names(viewer$session_requests)) {
-      if (is.null(viewer$session_requests[[id]]$answer)) viewer$session_requests[[id]] <- list(failed = payload$reason)
+  } else if (identical(type, "command_error")) {
+    # The request the viewer refused learns why: an action's, or a session's
+    # (every open one, for a refusal that names none).
+    if (identical(payload$command, "action") && !is.null(payload$requestId)) {
+      caller <- viewer$action_requests[[payload$requestId]]$caller
+      waited <- .settle_action(viewer, payload$requestId, reason = payload$reason)
+    } else if (identical(payload$command, "load_session") && !is.null(payload$requestId)) {
+      load <- viewer$session_loads[[payload$requestId]]
+      if (!is.null(load)) {
+        load$failed <- payload$reason
+        waited <- isTRUE(load$waiting)
+      }
+    } else if (identical(payload$command, "requestSessionBundle")) {
+      ids <- if (is.null(payload$requestId)) names(viewer$session_requests) else payload$requestId
+      for (id in intersect(ids, names(viewer$session_requests))) {
+        request <- viewer$session_requests[[id]]
+        if (is.null(request$answer)) {
+          request$failed <- payload$reason
+          waited <- waited || isTRUE(request$waiting)
+        }
+      }
     }
   } else if (identical(type, "data_mapping")) {
     viewer$data_mapping <- payload
@@ -654,34 +717,29 @@
       .warn("A cellucid_on(\"", type, "\") hook failed: ", conditionMessage(error))
     })
   }
-  # A command the viewer refused (or that could not be built once the viewer
-  # could take it) is said, unless a hook handles it: commands never wait.
-  if (identical(type, "command_error") && length(viewer$hooks[["command_error"]]) == 0L) {
-    .warn("The viewer did not take ", .command_r_callers[[payload$command]] %||% payload$command, ": ", payload$reason)
+  # A command the viewer refused is said, unless a hook handles it or the
+  # call that asked waits for it (and stops with the reason): nothing else
+  # waits for a command.
+  if (identical(type, "command_error") && length(viewer$hooks[["command_error"]]) == 0L && !waited) {
+    caller <- caller %||% .command_r_callers[[payload$command]] %||% payload$command
+    .warn("The viewer did not take ", caller, ": ", payload$reason)
   }
-  # What waited for this event goes now.
-  if (identical(type, "ready")) .send_pending_pushes(viewer)
-  if (identical(type, "data_mapping")) .send_pending_mapping(viewer)
   invisible(NULL)
 }
 
-# The R call behind each command, for what a refused one says.
+# The R call behind each command other than an action (an action's request
+# names its own), for what a refused one says.
 .command_r_callers <- list(
-  requestSessionBundle = "cellucid_request_session()", highlight = "cellucid_highlight()",
-  clearHighlights = "cellucid_clear_highlights()", setColorBy = "cellucid_color_by()",
-  setVisibility = "cellucid_set_visibility()", resetCamera = "cellucid_reset_camera()", freeze = "cellucid_freeze()",
-  setDataMapping = "cellucid_set_data_mapping()", setField = "cellucid_push()", setGeneSet = "cellucid_push_gene_set()"
+  requestSessionBundle = "cellucid_request_session()", freeze = "cellucid_freeze()", action = "an action",
+  ping = "a ping", debug_snapshot = "cellucid_debug_connection()", load_session = "cellucid_load_session()",
+  # Their refusals reach the agent that sent them (.agent_port_command_failed()).
+  agent_list = "cellucid_mcp()", agent_call = "cellucid_mcp()", agent_cancel = "cellucid_mcp()",
+  agent_answer = "cellucid_mcp()"
 )
 
-# A command that waited for the viewer and could not be built once it could:
-# reported as the viewer reports a refused command (a command_error event).
-.report_local_command_error <- function(viewer, command, reason) {
-  .deliver_event(viewer, list(type = "command_error", payload = list(command = command, reason = substr(reason, 1L, 240L))))
-}
-
 # A .cellucid-session file starts with its format's signature (.session_magic,
-# session-bundle.R: the web app's bundle/format.js, cellucid-python's
-# SESSION_BUNDLE_MAGIC).
+# R/session-file.R: the web app's bundle/format.js); the whole file is read and
+# checked when it is collected (cellucid_session_result()).
 .is_session_bundle <- function(body) {
   length(body) >= length(.session_magic) &&
     identical(body[seq_along(.session_magic)], .session_magic)

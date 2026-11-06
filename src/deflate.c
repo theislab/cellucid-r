@@ -98,9 +98,9 @@ SEXP cellucid_deflate_chunks(SEXP chunks, SEXP level, SEXP threads) {
   job.status = (int *)R_alloc(n > 0 ? n : 1, sizeof(int));
   for (R_xlen_t index = 0; index < n; index++) {
     SEXP chunk = VECTOR_ELT(chunks, index);
-    if (TYPEOF(chunk) != RAWSXP) error("chunk %lld is not a raw vector", (long long)index + 1);
+    if (TYPEOF(chunk) != RAWSXP) error("chunk %.0f is not a raw vector", (double)index + 1);
     /* zlib counts a buffer in uLong: 32 bits on Windows. A chunk is far smaller. */
-    if ((double)XLENGTH(chunk) > (double)((uLong)-1) / 2) error("chunk %lld is too large for zlib", (long long)index + 1);
+    if ((double)XLENGTH(chunk) > (double)((uLong)-1) / 2) error("chunk %.0f is too large for zlib", (double)index + 1);
     job.in[index] = (const Bytef *)RAW(chunk);
     job.in_length[index] = (uLong)XLENGTH(chunk);
     job.out[index] = NULL;

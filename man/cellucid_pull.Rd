@@ -13,7 +13,6 @@ cellucid_pull(
   data,
   source,
   ...,
-  expected_dataset_id = NULL,
   highlights = TRUE,
   fields = TRUE,
   scores = TRUE,
@@ -55,8 +54,6 @@ file does not list \code{NA}), \code{.gmt} gene sets and
 \item{...}{For a session file: the arguments \code{\link{cellucid_view}()} was
 given that choose what is shown (as \code{\link{cellucid_apply_session}()}
 takes them).}
-\item{expected_dataset_id}{For a session file: the dataset id it must have
-been saved on; by default the object's own (\code{cellucid$id}).}
 \item{highlights}{Write the highlight groups.}
 \item{fields}{Write the user-defined fields (labels, annotations, clusters).}
 \item{scores}{Write the scores an analysis made (a gene signature's).}
@@ -132,8 +129,12 @@ exports. cellucid-python's \code{viewer.pull(adata)} and
 \details{
 \code{\link{cellucid_apply_session}()} writes a saved session's highlight
 groups and fields with the same column rules; \code{cellucid_pull()} of a
-\code{.cellucid-session} file plans its columns the same way and names them
-with every other column of the pull.
+\code{.cellucid-session} file writes the highlight groups and user-defined
+fields of the state it shows (its active tracker's head), checked against
+the object as an apply checks it (the dataset, the cells and their order, the
+fields that state uses), keeps its gene sets, and names the columns with
+every other column of the pull (the labels a session renames are
+\code{cellucid_apply_session()}'s to write).
 }
 \examples{
 if (interactive() && requireNamespace("SeuratObject", quietly = TRUE)) {

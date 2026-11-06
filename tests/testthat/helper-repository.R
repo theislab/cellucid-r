@@ -71,12 +71,14 @@ cellucid_required_paths <- function() {
       "man", "directory", "both",
       "man/cellucid_prepare.Rd", "file", "both",
       "inst/CITATION", "file", "both",
+      "inst/action_catalog.json", "file", "both",
       "vignettes", "directory", "both",
       "vignettes/installation.Rmd", "file", "both",
       ".Rbuildignore", "file", "checkout",
       "CITATION.cff", "file", "checkout",
       "publishing.md", "file", "checkout",
       "_pkgdown.yml", "file", "checkout",
+      "tools/generate-actions.R", "file", "checkout",
       ".github/workflows/R-CMD-check.yaml", "file", "checkout",
       ".github/workflows/pkgdown.yaml", "file", "checkout",
       ".github/workflows/release.yaml", "file", "checkout"
@@ -86,4 +88,31 @@ cellucid_required_paths <- function() {
     dimnames = list(NULL, c("path", "kind", "layout"))
   )
   as.data.frame(specification, stringsAsFactors = FALSE)
+}
+
+# The web app's checkout: CELLUCID_WEB_ROOT when set (a worktree of it), else
+# the sibling `cellucid` beside this repository. The sibling-copy tests compare
+# the shared files (catalogue, history model, golden history, viewer protocol)
+# with it, as the web suite reads this package through CELLUCID_R_ROOT.
+cellucid_web_root <- function() {
+  root <- Sys.getenv("CELLUCID_WEB_ROOT", "")
+  if (nzchar(root)) {
+    if (!dir.exists(file.path(root, "assets", "js"))) stop("CELLUCID_WEB_ROOT (", root, ") is not a checkout of the web app (it has no assets/js).")
+    return(root)
+  }
+  file.path(cellucid_repository_root(), "..", "cellucid")
+}
+
+# A file of a sibling checkout ("cellucid" for the web app, as
+# cellucid_web_root() finds it, or "cellucid-python"): the test is skipped,
+# saying so, only when that checkout is absent (this repository checked out
+# alone, as in its own CI); a checkout present that lacks the file fails it (a
+# shared file renamed or deleted on one side is a divergence, never a skip).
+cellucid_sibling_file <- function(repository, ...) {
+  root <- if (identical(repository, "cellucid")) cellucid_web_root() else file.path(cellucid_repository_root(), "..", repository)
+  present <- if (identical(repository, "cellucid")) dir.exists(file.path(root, "assets", "js")) else dir.exists(root)
+  if (!present) testthat::skip(paste0(repository, " is not checked out beside this repository (CELLUCID_WEB_ROOT names the web app's)."))
+  path <- file.path(root, ...)
+  if (!file.exists(path)) testthat::fail(paste0("The ", repository, " checkout (", root, ") has no ", file.path(...), "."))
+  path
 }

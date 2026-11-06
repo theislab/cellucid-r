@@ -238,32 +238,80 @@ test_that("the channel welcomes the viewer's credentials and refuses others", {
   ws_close(second)
 })
 
-test_that("commands wait for the channel and go out in order", {
+test_that("actions wait for the channel and go out in order, each answered or refused by its request", {
   skip_without_sce()
   object <- small_sce(alt = FALSE)
   viewer <- test_viewer(object, dataset_id = "s", dataset_name = "S")
-  cellucid_highlight(viewer, c("cell3", "cell1"), color = "#123456")
-  cellucid_color_by(viewer, "cluster")
-  cellucid_set_visibility(viewer, c(TRUE, FALSE, rep(TRUE, 10)), visible = FALSE)
-  cellucid_reset_camera(viewer)
-  cellucid_clear_highlights(viewer)
+  highlight <- cellucid_highlight_cells(viewer, c("cell3", "cell1"), color = "#123456")
+  colour <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
+  hide <- cellucid_cells_visibility_set(viewer, c(TRUE, FALSE, rep(TRUE, 10)), visible = FALSE)
+  reset <- cellucid_camera_reset(viewer, "live")
   cellucid_freeze(viewer)
+  expect_identical(highlight$state, "waiting for the viewer")
   client <- ws_welcomed(viewer)
-  frames <- lapply(1:6, function(i) ws_receive(client))
+  frames <- lapply(1:5, function(i) ws_receive(client))
   received <- lapply(frames, function(frame) frame$json)
-  # Commands that name cells are binary frames; every other one is text.
-  expect_identical(vapply(frames, function(frame) frame$opcode, 0L), c(2L, 1L, 2L, 1L, 1L, 1L))
-  expect_identical(received[[1L]], list(type = "highlight", color = "#123456", label = NULL, cells = c(0L, 2L)))
-  expect_identical(received[[2L]], list(type = "setColorBy", field = "cluster"))
-  expect_identical(received[[3L]], list(type = "setVisibility", visible = FALSE, all = FALSE, cells = c(0L, 2:11)))
-  expect_identical(vapply(received, function(x) x$type, ""), c("highlight", "setColorBy", "setVisibility", "resetCamera", "clearHighlights", "freeze"))
-  cellucid_set_visibility(viewer, NULL, visible = TRUE)
-  expect_identical(ws_receive(client)$json, list(type = "setVisibility", visible = TRUE, all = TRUE, cells = integer(0)))
-  # Once welcomed, a command goes out at once.
-  cellucid_highlight(viewer, 12)
-  expect_identical(ws_receive(client)$json$cells, 11L)
-  expect_error(cellucid_highlight(viewer, 13), "1-based positions from 1 to 12")
-  expect_error(cellucid_highlight(viewer, "nope"), "names cells the dataset does not have")
+  # An action that names cells is a binary frame; every other one is text.
+  expect_identical(vapply(frames, function(frame) frame$opcode, 0L), c(2L, 1L, 2L, 1L, 1L))
+  expect_identical(vapply(received, function(x) x$type, ""), c("action", "action", "action", "action", "freeze"))
+  expect_identical(vapply(received[1:4], function(x) x$action, ""), c("highlight.cells", "color.by", "cells.visibility.set", "camera.reset"))
+  # Cells by original position, 0-based, in the order given.
+  expect_identical(received[[1L]]$params, list(color = "#123456", cells = c(2, 0)))
+  expect_identical(received[[2L]]$params, list(field = list(source = "obs", key = "cluster")))
+  expect_identical(received[[3L]]$params, list(visible = FALSE, cells = c(0, 2:11)))
+  expect_identical(received[[4L]]$params, list(view = "live"))
+  expect_identical(highlight$state, "sent")
+  expect_identical(received[[1L]]$requestId, highlight$id)
+  # Once welcomed, an action goes out at once.
+  everyone <- cellucid_cells_visibility_set(viewer, NULL, visible = TRUE)
+  expect_identical(ws_receive(client)$json$params, list(cells = NULL, visible = TRUE))
+  single <- cellucid_highlight_cells(viewer, 12)
+  expect_identical(ws_receive(client)$json$params$cells, 11)
+  expect_error(cellucid_highlight_cells(viewer, 13), "1-based positions from 1 to 12")
+  expect_error(cellucid_highlight_cells(viewer, "nope"), "names cells the dataset does not have")
+  expect_error(cellucid_highlight_cells(viewer, c(2, 2)), "names the cell 2 twice")
+
+  # The viewer answers each: an outcome and the step it made, or a refusal
+  # naming its request.
+  answer <- function(id, outcome, step) {
+    header <- charToRaw(as.character(jsonlite::toJSON(list(type = "action_result", requestId = id, step = step), auto_unbox = TRUE, null = "null")))
+    body <- charToRaw(as.character(jsonlite::toJSON(outcome, auto_unbox = TRUE, null = "null")))
+    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, body))
+  }
+  answer(highlight$id, list(group = "highlight_1", page = "Page 1", cells = 2L), list(id = "s1", label = "Highlighted 2 cells"))
+  answer(colour$id, NULL, list(id = "s2", label = "Coloured by cluster"))
+  ws_send_json(client, list(type = "command_error", command = "action", requestId = hide$id,
+                            reason = "There is no field \"nope\"."))
+  seen <- list()
+  cellucid_on(viewer, "action_result", function(event) seen[[length(seen) + 1L]] <<- event)
+  expect_warning(
+    run_loop_until(function() hide$done),
+    "The viewer did not take cellucid_cells_visibility_set\\(\\): There is no field"
+  )
+  expect_identical(cellucid_action_result(highlight, timeout = 5), list(group = "highlight_1", page = "Page 1", cells = 2L))
+  expect_identical(highlight$step, list(id = "s1", label = "Highlighted 2 cells"))
+  expect_null(cellucid_action_result(colour, timeout = 5))
+  expect_identical(colour$state, "answered")
+  expect_error(cellucid_action_result(hide, timeout = 5), "The viewer did not take cellucid_cells_visibility_set\\(\\): There is no field")
+  expect_identical(hide$state, "refused")
+  expect_output(print(highlight), "highlight.cells .*answered, step s1: Highlighted 2 cells")
+  # A refusal the call that asked waits for is said by that call alone.
+  later::later(function() {
+    ws_send_json(client, list(type = "command_error", command = "action", requestId = reset$id, reason = "No view."))
+  }, 0.1)
+  expect_no_warning(expect_error(cellucid_action_result(reset, timeout = 10), "did not take cellucid_camera_reset\\(\\): No view"))
+  expect_length(seen, 2L)
+  # The answer is kept while the request is; an answer to a request nobody
+  # holds any more is let go as it arrives.
+  orphan <- everyone$id
+  rm(everyone)
+  invisible(gc())
+  expect_true(viewer$action_requests[[orphan]]$orphan)
+  answer(orphan, NULL, NULL)
+  answer(single$id, list(group = "highlight_2"), list(id = "s3", label = "Highlighted 1 cell"))
+  run_loop_until(function() is.null(viewer$action_requests[[orphan]]) && single$done)
+  expect_identical(cellucid_action_result(single), list(group = "highlight_2"))
+  expect_identical(cellucid_action_result(single), list(group = "highlight_2"))
   ws_close(client)
 })
 
@@ -312,7 +360,7 @@ test_that("a large selection is decoded at once", {
   ws_close(client)
 })
 
-test_that("a session bundle arrives as the file it asked for", {
+test_that("a session bundle arrives as the session file it asked for, read and checked", {
   skip_without_sce()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
   client <- ws_welcomed(viewer)
@@ -321,30 +369,37 @@ test_that("a session bundle arrives as the file it asked for", {
   ws_send_binary(client, c(cellucid:::.encode_uint32(length(unasked)), unasked, charToRaw("CELLUCID")))
   suppressWarnings(for (i in 1:20) later::run_now(0.02))
   expect_null(viewer$last$session_bundle)
-  answer <- function() {
-    command <- ws_receive(client)$json
-    header <- charToRaw(paste0("{\"type\":\"session_bundle\",\"requestId\":\"", command$requestId, "\"}"))
-    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("CELLUCID_SESSION/3\nbody")))
+  fixture <- testthat::test_path("fixtures", "history_golden", "history_golden.cellucid-session")
+  send <- function(body) {
+    function() {
+      command <- ws_receive(client)$json
+      header <- charToRaw(paste0("{\"type\":\"session_bundle\",\"requestId\":\"", command$requestId, "\"}"))
+      ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, body))
+    }
   }
-  later::later(answer, 0.2)
+  later::later(send(readBin(fixture, "raw", file.size(fixture))), 0.2)
   target <- tempfile(fileext = ".cellucid-session")
-  path <- cellucid_session_result(cellucid_request_session(viewer), file = target, timeout = 10)
-  expect_identical(readLines(path, warn = FALSE), c("CELLUCID_SESSION/3", "body"))
+  session <- cellucid_session_result(cellucid_request_session(viewer), file = target, timeout = 10)
+  expect_s3_class(session, "cellucid_session")
+  expect_identical(session$path, normalizePath(target, winslash = "/"))
+  expect_identical(cellucid_file_sha256(target), cellucid_file_sha256(fixture))
+  expect_identical(cellucid_trackers(session)$name, c("Annotation", "Annotation (replay)", "Annotation"))
   expect_length(viewer$session_requests, 0L)
-  # A bundle without the signature is reported to the one waiting for it.
-  bad <- function() {
-    command <- ws_receive(client)$json
-    header <- charToRaw(paste0("{\"type\":\"session_bundle\",\"requestId\":\"", command$requestId, "\"}"))
-    ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, charToRaw("not a session")))
-  }
-  later::later(bad, 0.2)
-  # The one waiting stops with why; with no command_error hook, the refusal
-  # is also said as it arrives (as every refused command is).
+  # A file of another session format is reported to the one waiting for it,
+  # in the viewer's own words.
+  later::later(send(charToRaw("CELLUCID_SESSION/3\nbody")), 0.2)
+  expect_no_warning(expect_error(
+    cellucid_session_result(cellucid_request_session(viewer), timeout = 10),
+    "invalid session file: This session was saved by an earlier version of Cellucid \\(session format 3\\).*Ask again with cellucid_request_session\\(\\)"
+  ))
+  # One nobody waits for is said as it arrives (as every refused command is).
+  request <- cellucid_request_session(viewer)
+  send(charToRaw("not a session"))()
   expect_warning(
-    expect_error(cellucid_session_result(cellucid_request_session(viewer), timeout = 10),
-                 "invalid session bundle.*CELLUCID_SESSION/3.*Ask again with cellucid_request_session\\(\\)"),
-    "The viewer did not take cellucid_request_session\\(\\): The viewer sent an invalid session bundle"
+    run_loop_until(function() !is.null(viewer$session_requests[[request$id]]$failed)),
+    "The viewer did not take cellucid_request_session\\(\\): The viewer sent an invalid session file: This file is not a Cellucid session file of format 4"
   )
+  expect_error(cellucid_session_result(request, timeout = 1), "not a Cellucid session file of format 4")
   ws_close(client)
 })
 
@@ -370,7 +425,7 @@ test_that("stopping freezes the page, closes the channel and frees the port for 
   expect_identical(ws_receive(client)$code, 1001L)
   ws_close(client)
   expect_false(viewer$running)
-  expect_error(cellucid_highlight(viewer, 1), "This viewer is stopped")
+  expect_error(cellucid_highlight_cells(viewer, 1), "This viewer is stopped")
   cellucid_stop(viewer)
   again <- cellucid_serve(object, dataset_id = "s", dataset_name = "S", port = port, web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL, quiet = TRUE)
   on.exit(cellucid_stop(again))

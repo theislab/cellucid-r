@@ -1,8 +1,8 @@
 # What the package says about privacy matches what Cellucid does: community
 # annotation signs in with GitHub on www.cellucid.com (port 8765 is Google
 # Drive's local address, not community annotation's); a server on 127.0.0.1 is
-# readable by every user of a shared machine; a session applied to an object
-# records no `source`.
+# readable by every user of a shared machine; the record of a session applied
+# to an object holds no `source` (only the whole file, when kept, does).
 
 test_that("no R surface repeats a privacy claim the code contradicts", {
   repository_root <- cellucid_repository_root()
@@ -26,5 +26,5 @@ test_that("no R surface repeats a privacy claim the code contradicts", {
   view <- paste(readLines(file.path(repository_root, "man", "cellucid_view.Rd"), warn = FALSE), collapse = "\n")
   expect_match(view, "is every user of it", fixed = TRUE)
   apply <- paste(readLines(file.path(repository_root, "man", "cellucid_apply_session.Rd"), warn = FALSE), collapse = "\n")
-  expect_match(apply, "without\n\\code{source}", fixed = TRUE)
+  expect_match(apply, "A record\nholds no \\code{source}", fixed = TRUE)
 })

@@ -76,7 +76,7 @@
 # The subsample size a fraction of n_obs cells stands for, exactly: the
 # fraction as the rational its shortest round-trip decimal names (as the web
 # app's String(x) and Python's repr, a tie to the even digit; found in exact
-# integer arithmetic in C, src/subsample.c, since neither R's own text
+# integer arithmetic in C, src/number_text.c, since neither R's own text
 # conversion nor the C library's printf gives it on every build),
 # round-half-up(n_obs * fraction) in integer arithmetic (decimal digits in
 # doubles, every step exact), at least 1 and at most n_obs.
@@ -84,7 +84,7 @@
   if (!is.numeric(fraction) || length(fraction) != 1L || !is.finite(fraction) || fraction <= 0 || fraction > 1) {
     .abort("fraction must be one number in (0, 1].")
   }
-  text <- .native_shortest_decimal(fraction)
+  text <- .native_number_text(as.double(fraction))
   parts <- regmatches(text, regexec("^(\\d+)(?:\\.(\\d*))?(?:[eE]([+-]?\\d+))?$", text))[[1]]
   decimals <- parts[3]
   mantissa <- sub("^0+(?=.)", "", paste0(parts[2], decimals), perl = TRUE)
@@ -179,45 +179,72 @@ cellucid_subsample_cells <- function(x, n_cells = NULL, fraction = NULL, method 
 # The rank of 0-based positions under a seed (the conformance test reads it).
 .subsample_rank <- function(seed, positions) .native_subsample_rank(seed, positions)
 
+# A subsampling specification, checked (data/subsample.js
+# requireSubsampleSpec, cellucid-python's _validate_subsample_spec): exactly
+# the keys of its method; returns it normalized (numbers as doubles, columns
+# a vector).
+.validate_subsample_spec <- function(spec, label) {
+  if (!.is_json_object(spec)) .session_damaged(label, " must be an object.")
+  method <- spec[["method"]]
+  if (!.is_json_string(method) || !method %in% .subsample_methods) .session_damaged(label, " names an unknown subsample method.")
+  method_keys <- list(uniform = character(), blocks = "blockSize", stratified = c("field", "allocation", "minPerCategory"),
+                      spatial = c("embedding", "columns", "gridSize"))[[method]]
+  allowed <- c("method", "nObs", "k", "seed", method_keys)
+  if (!setequal(names(spec), allowed) || anyDuplicated(names(spec))) {
+    .session_damaged(label, " of ", method, " must have exactly ", paste(allowed, collapse = ", "), ".")
+  }
+  uint32 <- function(value, what, minimum = 0) {
+    if (!.is_safe_integer(value) || is.logical(value) || value < minimum || value > 4294967295) {
+      .session_damaged(label, " ", what, " must be a whole number from ", minimum, " to 2^32 - 1.")
+    }
+    as.double(value)
+  }
+  out <- list(method = method, nObs = uint32(spec[["nObs"]], "nObs"), k = uint32(spec[["k"]], "k", 1), seed = uint32(spec[["seed"]], "seed"))
+  if (out$k >= out$nObs) .session_damaged(label, " keeps every cell; it is no subsample.")
+  if (identical(method, "blocks")) out$blockSize <- uint32(spec[["blockSize"]], "blockSize", 1)
+  if (identical(method, "stratified")) {
+    if (!.is_text(spec[["field"]])) .session_damaged(label, " must name its obs field.")
+    if (!.is_json_string(spec[["allocation"]]) || !spec[["allocation"]] %in% c("proportional", "balanced")) {
+      .session_damaged(label, " allocation must be proportional or balanced.")
+    }
+    out$field <- spec[["field"]]
+    out$allocation <- spec[["allocation"]]
+    out$minPerCategory <- uint32(spec[["minPerCategory"]], "minPerCategory")
+  }
+  if (identical(method, "spatial")) {
+    if (!.is_text(spec[["embedding"]])) .session_damaged(label, " must name its embedding.")
+    columns <- spec[["columns"]]
+    if (!.is_json_array(columns) || length(columns) < 1L || length(columns) > 3L ||
+        !all(vapply(columns, function(column) .is_safe_integer(column) && !is.logical(column) && column >= 0, TRUE))) {
+      .session_damaged(label, " must name one to three embedding columns.")
+    }
+    out$embedding <- spec[["embedding"]]
+    out$columns <- vapply(columns, as.double, 0)
+    out$gridSize <- uint32(spec[["gridSize"]], "gridSize", 1)
+  }
+  out
+}
+
 # The `cells` record of a session saved on a subsample, checked and decoded:
-# list(spec, kept = 0-based positions ascending, digest). Every per-cell
-# chunk of a session names its cells by original position, ascending: cell i
-# of a subsample's session is obs row kept[i], 0-based.
+# list(spec (normalized), kept = 0-based positions ascending, digest). Every
+# value of a session names its cells by original position: a subsample's
+# session knows the cells kept.
 .session_cells <- function(cells, cell_count) {
   if (!is.list(cells) || !setequal(names(cells), c("spec", "kept", "digest")) || anyDuplicated(names(cells))) {
     .session_manifest_error("cells must have exactly spec, kept and digest")
   }
-  spec <- cells[["spec"]]
-  if (!is.list(spec) || !is.character(spec[["method"]]) || !spec[["method"]] %in% .subsample_methods) {
-    .session_manifest_error("cells.spec must name a subsample method")
-  }
-  # Exactly the keys of its method, as the web app's requireSubsampleSpec.
-  method_keys <- list(uniform = character(), blocks = "blockSize", stratified = c("field", "allocation", "minPerCategory"),
-                      spatial = c("embedding", "columns", "gridSize"))[[spec[["method"]]]]
-  if (!setequal(names(spec), c("method", "nObs", "k", "seed", method_keys)) || anyDuplicated(names(spec))) {
-    .session_manifest_error("cells.spec of ", spec[["method"]], " must have exactly method, nObs, k, seed",
-                            paste0(", ", method_keys, collapse = ""))
-  }
-  n_obs <- spec[["nObs"]]
-  k <- spec[["k"]]
-  if (!is.numeric(n_obs) || !is.numeric(k) || length(n_obs) != 1L || length(k) != 1L ||
-      !(k >= 1 && k < n_obs && n_obs <= 4294967295)) {
-    .session_manifest_error("cells.spec must keep 1 <= k < nObs cells")
-  }
-  if (!identical(as.numeric(k), as.numeric(cell_count))) {
+  spec <- .validate_subsample_spec(cells[["spec"]], "its manifest cells.spec")
+  if (!identical(spec$k, as.numeric(cell_count))) {
     .session_manifest_error("cells must keep exactly the fingerprint cell count")
   }
-  if (!is.character(cells[["kept"]]) || !grepl("^[A-Za-z0-9+/]*={0,2}$", cells[["kept"]])) {
+  if (!is.character(cells[["kept"]]) || length(cells[["kept"]]) != 1L || !grepl("^[A-Za-z0-9+/]*={0,2}$", cells[["kept"]])) {
     .session_manifest_error("cells.kept must be base64")
   }
-  kept <- .subsample_decode_cell_set(jsonlite::base64_dec(cells[["kept"]]), n_obs)
-  if (length(kept) != k) .session_manifest_error("cells.kept must list exactly k cells")
-  if (!identical(.subsample_digest(n_obs, kept), cells[["digest"]])) {
+  kept <- .subsample_decode_cell_set(jsonlite::base64_dec(cells[["kept"]]), spec$nObs)
+  if (length(kept) != spec$k) .session_manifest_error("cells.kept must list exactly k cells")
+  if (!is.character(cells[["digest"]]) || length(cells[["digest"]]) != 1L ||
+      !identical(.subsample_digest(spec$nObs, kept), cells[["digest"]])) {
     .session_manifest_error("cells.digest does not match its cells")
-  }
-  if (identical(spec[["method"]], "blocks") &&
-      !(is.numeric(spec[["blockSize"]]) && length(spec[["blockSize"]]) == 1L && spec[["blockSize"]] >= 1)) {
-    .session_manifest_error("cells.spec must give a blocks subsample its blockSize")
   }
   list(spec = spec, kept = kept, digest = cells[["digest"]])
 }

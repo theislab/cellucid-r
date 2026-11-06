@@ -16,9 +16,9 @@ embeddings, metadata, gene expression, neighbour graph and vector fields) as a *
 AnnData Zarr store that the Cellucid web app opens directly and Python's `anndata` reads like any other. Several assays
 become a **Cellucid-ready MuData**.
 
-> **Active package version — 0.9.6** <!-- CELLUCID_VERSION -->
+> **Active package version — 0.9.7** <!-- CELLUCID_VERSION -->
 >
-> Version 0.9.6 is the active Cellucid for R source and documentation version,
+> Version 0.9.7 is the active Cellucid for R source and documentation version, <!-- CELLUCID_VERSION -->
 > and it is the CRAN submission release. The CRAN package index is authoritative
 > for registry availability; the Installation guide below gives both exact
 > installation paths.
@@ -28,12 +28,20 @@ become a **Cellucid-ready MuData**.
 - **View an object from R**: `cellucid_view(seu)` serves the object from memory as the store `cellucid_prepare()`
   would write, uncompressed over loopback and making only what the viewer reads (a million-cell object's first
   gene in about a third of a second, never transposing its matrix), so a 100,000-cell object opens in under a
-  second; talk to the
-  viewer with `cellucid_highlight()`, `cellucid_color_by()`, `cellucid_on("selection", ...)` and
-  `cellucid_request_session()` (then `cellucid_session_result()`), write everything made in it (highlights, labels, scores, gene sets) back onto the
+  second; do anything a person can do in the
+  viewer from R -- every action of its catalogue, `cellucid_act(viewer, "color.by", ...)` or its own function,
+  `cellucid_color_by()`, `cellucid_highlight_cells()`, `cellucid_history_get()`, ... -- each one step of the
+  viewer's history, labelled as R's; listen with `cellucid_on("selection", ...)`; ask for its session (its whole
+  history) with `cellucid_request_session()` (then `cellucid_session_result()`), read it with
+  `cellucid_read_session()` -- trackers, branches, groups, steps, notes and turns as data frames (`cellucid_steps()`,
+  `cellucid_groups()`, `cellucid_turns()`, ...), the methods paragraph and pseudocode of a branch -- and apply any step or branch back
+  onto the object with `cellucid_apply_session()` (a plan first, then `cellucid_apply_plan()`; each apply recorded);
+  group R's actions into one turn of the history with `cellucid_turn()`, hear every change with
+  `cellucid_on("history_changed", ...)` and push a session file into the viewer with `cellucid_load_session()`;
+  write everything made in it (highlights, labels, scores, gene sets) back onto the
   object in one call with `cellucid_pull(seu, viewer)` (or from the web app's exports,
-  `cellucid_pull(seu, "exports/")`), and send columns and gene sets to it with `cellucid_push()` and
-  `cellucid_push_gene_set()`; `cellucid_serve()` for a cluster behind an SSH tunnel; in a
+  `cellucid_pull(seu, "exports/")`), and send a column to it with `cellucid_push()` (a gene set with
+  `cellucid_gene_set_save()`); `cellucid_serve()` for a cluster behind an SSH tunnel; in a
   Jupyter notebook (IRkernel) the viewer is the cell's output, the widget cellucid-python shows, with no port
 - **Objects in, directly**: `cellucid_prepare(data = seu)` reads Seurat (v3–v5), SingleCellExperiment and
   SummarizedExperiment objects as the web app reads them; any argument given replaces that component
@@ -101,7 +109,7 @@ library(cellucid)
 
 # View an object
 viewer <- cellucid_view(seu)                 # a Seurat, SingleCellExperiment or SummarizedExperiment
-cellucid_color_by(viewer, "seurat_clusters")
+cellucid_color_by(viewer, field = list(source = "obs", key = "seurat_clusters"))
 cellucid_selection(viewer)                   # the cells you selected in the viewer
 seu <- cellucid_pull(seu, viewer)            # every highlight, label and score made in the viewer, as meta.data columns
 cellucid_push(viewer, seu$seurat_clusters, key = "seurat_clusters")  # a column of yours, into the viewer
@@ -152,6 +160,27 @@ from a cell-cell transition matrix (CellRank's, for example), the computation of
 `compute_transition_drift()`. Repeated cell or gene names are made unique the way
 anndata does it (`MATR3`, `MATR3-1`), and `var_gene_id_column` names the `var`
 column, such as gene symbols beside Ensembl row names, that the viewer shows.
+
+## Agent apps on your computer
+
+`cellucid_mcp()` is a local MCP server that lets an agent app on your computer
+(Claude Code, Claude Desktop, Cursor) work in a Cellucid viewer, with the web
+app's own tools under your permission settings: every change is a step of
+your history, asked in the viewer's confirm card (and in the app) when your
+settings say so, and one Undo turn takes the agent's turn back. Register it
+once:
+
+```sh
+claude mcp add cellucid -- Rscript -e "cellucid::cellucid_mcp()"
+```
+
+It drives the newest viewer open on this computer (`cellucid_view()` or
+`cellucid_serve()` in R, `show_anndata()` in Python); `viewer =` names one,
+and `open = "data.zarr"` serves a file in a viewer of its own. A notebook
+widget's viewer (IRkernel) has no server and is not reached;
+`CELLUCID_AGENTS=off` publishes no viewer to agents at all. A dataset's
+"Agents see names and summaries only" switch, set in the viewer, applies to
+these agents too. See `?cellucid_mcp`.
 
 ## Documentation and ecosystem
 

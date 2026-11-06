@@ -27,23 +27,32 @@ cellucid_session_result(request, file = NULL, timeout = 60)
 \item{viewer}{A viewer \code{\link{cellucid_view}()} or
 \code{\link{cellucid_serve}()} returned.}
 \item{event}{One of \code{"selection"}, \code{"hover"}, \code{"click"},
-\code{"ready"}, \code{"data_mapping"}, \code{"command_error"}, \code{"pong"},
-\code{"debug_snapshot"}, \code{"session_bundle"}, \code{"result"} (a result
-made or changed, as \code{\link{cellucid_results}()} lists them),
-\code{"result_removed"}, \code{"results"} (every result the viewer holds) and
-\code{"color_by"} (the field it colours by: \code{field}, a gene by its
-identifier, the var index; \code{source}, \code{"obs"} or \code{"var"};
-\code{symbol}, the name the viewer shows for a gene when it differs from
-its identifier, else \code{NULL}; and \code{cells_read}, for a gene read
-for a sample of the open cells of a large dataset stored cell by cell, how
-many of them it is read for, the first in their order, else \code{NULL};
-sent again when that grows). A command the viewer
-refused, or one that waited for the viewer and could not be built once it
-could, arrives as \code{"command_error"}; with no handler for it, R warns.
-For \code{cellucid_off()},
-\code{NULL} removes every handler.}
+\code{"ready"}, \code{"data_mapping"}, \code{"command_error"},
+\code{"action_result"}, \code{"pong"}, \code{"debug_snapshot"},
+\code{"session_bundle"}, \code{"result"} (a result made or changed, as
+\code{\link{cellucid_results}()} lists them), \code{"result_removed"},
+\code{"results"} (every result the viewer holds), \code{"history_changed"}
+(every change of the viewer's history: \code{kind}, \code{tracker},
+\code{head}, \code{step}, \code{branch}; see
+\code{\link{cellucid_last_history_change}()}), \code{"session_loaded"} (a
+session \code{\link{cellucid_load_session}()} pushed in, loaded) and
+\code{"color_by"} (the
+field it colours by: \code{field}, a gene by its identifier, the var index;
+\code{source}, \code{"obs"} or \code{"var"}; \code{symbol}, the name the
+viewer shows for a gene when it differs from its identifier, else
+\code{NULL}; and \code{cells_read}, for a gene read for a sample of the open
+cells of a large dataset stored cell by cell, how many of them it is read
+for, the first in their order, else \code{NULL}; sent again when that grows).
+An action the viewer carried out arrives as \code{"action_result"}
+(\code{requestId}, the history \code{step} it made, \code{list(id, label)} or
+\code{NULL}, and its \code{outcome}); one it refused, or another command it
+could not carry out, as \code{"command_error"} (\code{command},
+\code{requestId}, \code{reason}): with no handler for it, and no
+\code{\link{cellucid_action_result}()} or \code{cellucid_session_result()}
+waiting for it, R warns. For \code{cellucid_off()}, \code{NULL} removes every
+handler.}
 \item{handler}{A function of one argument, the event: a list of its fields.
-Cells are 1-based positions in every event, as the commands take them:
+Cells are 1-based positions in every event, as the actions take them:
 \code{selection} gives \code{cells} and (for an object) \code{cell_names};
 \code{hover} and \code{click} give \code{cell} (\code{NULL} for no cell under
 the pointer) and \code{cell_name}. cellucid-python's events are 0-based, as
@@ -52,7 +61,7 @@ Python indexes. The \code{pong} and \code{debug_snapshot} events answer
 are answered without an event.}
 \item{timeout}{Seconds to wait for the viewer.}
 \item{request}{What \code{cellucid_request_session()} returned.}
-\item{file}{Where to save the session; a temporary file when \code{NULL}.}
+\item{file}{Where to save the session file; a temporary file when \code{NULL}.}
 }
 \value{
 \code{cellucid_on()} and \code{cellucid_off()} return the viewer invisibly.
@@ -64,24 +73,28 @@ object), and the tool that made it; \code{NULL} before the first.
 \code{n_obs} when the viewer opened a subsample), the cells in the dataset,
 and the dimensions shown. \code{cellucid_request_session()} returns the
 request (printed as waiting, answered or failed);
-\code{cellucid_session_result()} the path of the \code{.cellucid-session}
-file. A session is always asked for, then collected -- the one way, in a
-notebook and outside one (cellucid-python's
-\code{viewer.request_session_bundle()} and \code{request.result()}). In a
-Jupyter notebook the viewer answers between cells, so collect it in a later
-cell (\code{cellucid_session_result()} says so at once before then), or
-apply it there with \code{\link{cellucid_apply_session}(object, request)};
-where R can wait (a browser or RStudio viewer) \code{cellucid_session_result()}
-waits for it.
+\code{cellucid_session_result()} the session the viewer sent, read and
+checked (\code{\link{cellucid_read_session}()}: its history, every tracker
+and every step), its \code{.cellucid-session} file kept at \code{file} (or a
+temporary file). A session is always asked for, then collected -- the one
+way, in a notebook and outside one (cellucid-python's
+\code{viewer.request_session()} and \code{request.result()}). In a Jupyter
+notebook the viewer answers between cells, so collect it in a later cell
+(\code{cellucid_session_result()} says so at once before then), or apply it
+there with \code{\link{cellucid_apply_session}(object, request)}; where R can
+wait (a browser or RStudio viewer) \code{cellucid_session_result()} waits for
+it.
 }
 \description{
 The viewer sends its events back over its channel: a selection (every
 selected cell, however many), the cell under the pointer, a click, the data
-mapping it applied, a command it could not carry out. \code{cellucid_on()} runs
+mapping it applied, an action's answer, a command it could not carry out.
+\code{cellucid_on()} runs
 a handler for each event of a kind, whenever R is idle; a handler that fails
 gives a warning and the others still run. \code{cellucid_request_session()}
-asks the viewer for its whole session (what you highlighted, coloured, annotated and
-arranged), the file the viewer's Save session writes.
+asks the viewer for its session, the file the viewer's Save session writes:
+the history of every step taken in it (what you highlighted, coloured,
+annotated and arranged, and what R and agents did), every tracker and branch.
 }
 \details{
 Handlers run on R's main thread while R is idle, so an RStudio or Positron

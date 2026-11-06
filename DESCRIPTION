@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
 Title: Prepare and View Single-Cell Data in the Cellucid Viewer
-Version: 0.9.6
+Version: 0.9.7
 Config/cellucid/version-marker: CELLUCID_VERSION
 Authors@R: c(
     person(
@@ -36,6 +36,7 @@ Imports:
     later,
     methods,
     parallel,
+    promises,
     stats,
     tools,
     utils
@@ -45,6 +46,7 @@ Suggests:
     IRkernel,
     knitr,
     Matrix,
+    processx,
     rmarkdown,
     S4Vectors,
     SeuratObject,

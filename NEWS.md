@@ -1,4 +1,166 @@
-# cellucid 0.9.6 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.7 <!-- CELLUCID_VERSION -->
+
+Version 0.9.7 is the CRAN submission release.
+
+It is a patch release on 0.9.6 and stays in step with the Python
+package of the same version. Stores written by `cellucid_prepare()` in 0.9.6
+are read as before. Session files are format 4: a session saved with 0.9.6 or
+earlier (format 3 or before) is refused, saying which format it is. The viewer
+protocol is schema 5: use this release with the web app of this release.
+
+## The R package
+
+- **Every action of the viewer, from R.** `cellucid_act(viewer, "<type>",
+  ...)` sends any action of the catalogue (`inst/action_catalog.json`, byte
+  for byte the web app's, pinned in the three repositories), and each of its
+  177 actions has its own generated function with a help page
+  (`cellucid_color_by()`, `cellucid_highlight_cells()`,
+  `cellucid_category_rename()`, `cellucid_history_get()`,
+  `cellucid_view_picture()`, `cellucid_dataset_open()`, ...), among them
+  `cellucid_history_anndata_save(viewer, file)`, which has the viewer write
+  a new Cellucid-ready AnnData `.zarr.zip` of its dataset with the state
+  shown applied (downloaded by the browser), and
+  `cellucid_history_saved_delete(viewer, saved)`, which deletes a saved
+  state of the viewer's browser by its id. A change is one step
+  of the viewer's history, labelled as R's; `cellucid_history_undo()`,
+  `cellucid_history_redo()` and `cellucid_history_jump()` move the history
+  and record no step. The functions of acts outside the viewer's state and
+  history record no step either, and Undo does not take them back (their
+  help pages say so): writing a file the browser downloads
+  (`cellucid_history_share()`, `cellucid_history_report()`,
+  `cellucid_history_anndata_save()`, `cellucid_figure_export()`,
+  `cellucid_cells_export()`, `cellucid_field_export()`), publishing
+  (`cellucid_annotation_vote()`, `cellucid_annotation_suggest()`,
+  `cellucid_dataset_share_link()`; a vote or suggestion publishes only itself
+  and is asked of the person first), and what
+  the browser keeps (`cellucid_history_save()`,
+  `cellucid_history_saved_delete()`, `cellucid_my_datasets_forget()`,
+  `cellucid_stored_remove()`). `cellucid_history_tour_start()` and
+  `cellucid_history_tour_stop()` play the viewer's guided tour;
+  `cellucid_stored_list()` and `cellucid_annotation_suggestions()` read;
+  `cellucid_datasets_list()` gives each dataset's size. A request returns at once; `cellucid_action_result()`
+  collects the outcome or stops with the viewer's reason. Cells are given as
+  R gives them (1-based positions, `TRUE`/`FALSE`, cell names). The
+  functions, their help pages and the NAMESPACE exports are written by
+  `Rscript tools/generate-actions.R`. A notebook's viewer refuses
+  `dataset.open`.
+- **Removed, no aliases:** `cellucid_highlight()` (use
+  `cellucid_highlight_cells()`), `cellucid_clear_highlights()`
+  (`cellucid_highlight_clear_all()`), `cellucid_color_by(viewer, "name")`
+  (`cellucid_color_by(viewer, field = list(source = "obs", key = "name"))`),
+  `cellucid_set_visibility()` (`cellucid_cells_visibility_set()`),
+  `cellucid_reset_camera()` (`cellucid_camera_reset(viewer, view = "live")`),
+  `cellucid_set_data_mapping()` (`cellucid_mapping_set()`) and
+  `cellucid_push_gene_set()` (`cellucid_gene_set_save()`). `cellucid_push()`
+  sends `field.push` and returns its request.
+- **Reading web sessions.** `cellucid_read_session()` reads every format-4
+  file the web app writes (the history, the current state only, or the steps
+  only), checked whole against the history model
+  (`inst/history_model.schema.json`, pinned in the three repositories), in
+  time near linear in the steps. A damaged file says what is wrong, and a
+  file from a newer Cellucid asks you to update the package. The history as
+  data frames and records: `cellucid_trackers()`, `cellucid_tracker()`,
+  `cellucid_branches()`, `cellucid_branch()`, `cellucid_groups()`,
+  `cellucid_group()`, `cellucid_steps()` (with the columns `kind`, `v` and
+  `group`), `cellucid_step()`, `cellucid_step_state()`,
+  `cellucid_step_diff()`, `cellucid_stale()`, `cellucid_notes()`,
+  `cellucid_turns()`, `cellucid_journal()`, `cellucid_conversations()`, and
+  `cellucid_methods()` and `cellucid_pseudocode()` in the web app's wording.
+  `session$chrome` holds the selection tool, read only. A squashed step's
+  record says why it was made (`squashed`), and the trackers table whether
+  each records (`recording`, `paused_at`). Removed, no aliases:
+  `cellucid_session_trackers()`, `cellucid_session_steps()`,
+  `cellucid_session_state()`.
+- **Applying a history, a plan first.** `cellucid_apply_session(data,
+  session, tracker = NULL, branch = NULL, step = NULL, ..., dry_run = TRUE,
+  overwrite = FALSE, keep_session = FALSE)` returns a `cellucid_apply_plan`
+  (one row per change, with its status and why), following the same rules as
+  cellucid-python row for row. `cellucid_apply_plan(plan)` (or
+  `dry_run = FALSE`) writes it onto a Seurat, SingleCellExperiment or
+  SummarizedExperiment object and records the apply in
+  `cellucid$history_applied` (`cellucid_history_applied()`). Applying again
+  changes nothing, and a column you made is never replaced. A steps-only file
+  is read, not applied. Each gene set written or replaced is also a
+  `TRUE`/`FALSE` column `cellucid_gene_set__<name>` of the feature metadata
+  of the gene axis the data mapping reads (a Seurat assay's, `rowData()` of
+  the main experiment or of an `altExp()`), `TRUE` on the set's genes, as
+  cellucid-python and the web app's "Save AnnData with this state..." write
+  it (pinned by the shared golden history's `apply.sequence[].var_columns`);
+  missing genes, a mapping reading the raw matrix and a column of that name
+  the object owns are warned. A plan that would write, rename or replace the
+  cell-metadata column `cellucid_original_position` is refused, dry runs
+  included. Removed, no aliases: `expected_dataset_id`,
+  `apply_labels`, `add_highlights`, `highlights_prefix`,
+  `add_user_defined_fields`, `user_defined_prefix`,
+  `include_deleted_user_defined_fields`, `store_metadata`, `return_summary`
+  (of `cellucid_apply_session()`). `cellucid_pull()` lost
+  `expected_dataset_id`. The packaged demo session is
+  `extdata/history_golden.cellucid-session`.
+- **The viewer's history, live.** `cellucid_turn(viewer, label, code)` makes
+  every action `code` sends one turn of the history and returns the turn's
+  id, for `cellucid_history_turn_undo()` or a note on the turn. Follow every
+  change with
+  `cellucid_last_history_change()` and `cellucid_on(viewer,
+  "history_changed", ...)`. `cellucid_load_session()` and
+  `cellucid_load_session_result()` push a session file into the viewer.
+  New events: `action_result`, `history_changed` and `session_loaded`;
+  `command_error` names the request it refused.
+- **`cellucid_mcp()`**, run by an agent app as
+  `Rscript -e "cellucid::cellucid_mcp()"`: a local MCP server for Claude
+  Code, Claude Desktop and Cursor, with the web connector's tools,
+  permissions, confirm cards (also asked in the app as an MCP elicitation),
+  turns, Stop and Undo turn. It drives R's and Python's viewers alike, and
+  Python's `cellucid mcp` drives R's. The protocol is written in the package:
+  the handshake of 2024-11-05 to 2025-11-25 and the per-request 2026-07-28
+  protocol, with elicitation, progress, cancellation and
+  `tools/list_changed`. Every R viewer with a server is published to agent
+  apps on this computer through a record readable by your user only (a folder
+  others own or may write in is refused), and `CELLUCID_AGENTS=off` publishes
+  nothing. A dataset's "Agents see names and summaries only" switch, set in
+  the viewer, applies to these agents too. New Imports: promises (already
+  httpuv's). Its arguments: `open` serves a file in a viewer of its own
+  (`port`, `browser`, `web_source_url`, `web_cache_dir` as for
+  `cellucid_view()`), `viewer` names a published viewer by viewer id,
+  dataset id or dataset name, and with neither it drives the most recently
+  opened viewer whose page is open. A page reloaded or closed mid-call fails
+  the call with one sentence, and a page back makes the app list the tools
+  again. A notebook widget's viewer is not published. A Windows console is
+  refused: an agent app starts the server over a pipe.
+- `cellucid_serve()` and `cellucid_view()` refuse a `.cellucid-session` or
+  `.cellucid-library` file, saying what it is.
+- A session's cell sets are read in the three encodings the web app writes;
+  the reader of category-relative encodings, which nothing writes, is
+  removed.
+- Downloading the web app for a viewer accepts a JavaScript file served as
+  `text/javascript` (RFC 9239) where the asset list says
+  `application/javascript`; a file of another kind is still refused.
+- Releasing: publishing a GitHub Release `vX.Y.Z` is the one way to release
+  the package. `.github/workflows/release.yaml`, now "Publish to CRAN", runs
+  on a published release only (its manual run is gone) and refuses, before
+  building, a draft, a release marked pre-release, a `DESCRIPTION` version
+  other than `X.Y.Z`, a tag other than `v` and that version, and a commit not
+  on `main`; then it checks, attaches and submits the tarball as before. A
+  failed run is re-run with "Re-run jobs" (`publishing.md`).
+
+## In the web app
+
+The viewer of this release adds History v2 (a branch graph with branches,
+trackers, recording on and off, groups and squash, notes and bookmarks,
+Recently deleted, replay on another dataset), Share... and Load... of
+format-4 session files in State > Session, "Save AnnData with this
+state..." in the History menu (a new `.zarr.zip` of the dataset with the
+state shown applied by the same rules as `cellucid_apply_session()`), My
+datasets with export and import, and agents: a chat bar with your own key, a connector for Claude and
+ChatGPT, and the per-dataset switch "Agents see names and summaries only".
+A replay's report offers other names for fields, categories and genes not
+found ("Use instead", "Replay again with these names"), results left out of
+a shared file are computed again when it opens, and the history warns when
+it holds more memory than the device has room for. Agents can also play the
+guided tour, make the report, export figures, cells and fields, manage what
+the browser keeps, and vote on and suggest community annotation labels.
+See the documentation and the cellucid-python changelog for the details.
+
+# cellucid 0.9.6
 
 Version 0.9.6 is the CRAN submission release.
 

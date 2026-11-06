@@ -206,19 +206,67 @@ ws_refused_close <- function(client) {
   ws_receive(client)
 }
 
-# A binary command frame read as the viewer reads it: its header, padded to a
-# multiple of 4 bytes, and its cells (little-endian uint32) under `cells`.
+# `params` with `value` placed at `path` (keys, and 0-based list indices),
+# its last key appended: where a binary action's array goes
+# (data/viewer-protocol.js placeArray).
+place_at <- function(params, path, value) {
+  key <- path[[1L]]
+  if (length(path) == 1L) {
+    params[key] <- list(value)
+    return(params)
+  }
+  at <- if (is.numeric(key)) key + 1L else key
+  params[[at]] <- place_at(params[[at]], path[-1L], value)
+  params
+}
+
+# A binary command read as the viewer reads it (decodeViewerBinaryCommand):
+# its header, padded to a multiple of 4 bytes, and each array of an action's
+# body placed in its params at its path, as numbers; a load_session's file.
 binary_command <- function(payload) {
   header_length <- readBin(payload[1:4], "integer", size = 4L, endian = "little")
   testthat::expect_identical(header_length %% 4L, 0L)
   header <- jsonlite::fromJSON(rawToChar(payload[4L + seq_len(header_length)]), simplifyVector = FALSE)
-  body <- if (length(payload) > 4L + header_length) payload[(5L + header_length):length(payload)] else raw(0)
-  header$cells <- readBin(body, "integer", n = length(body) %/% 4L, size = 4L, endian = "little")
+  at <- 4L + header_length
+  # A session file pushed in: its bytes follow the header.
+  if (identical(header$type, "load_session")) return(c(header, list(file = payload[(at + 1L):length(payload)])))
+  for (array in header$arrays) {
+    size <- cellucid:::.viewer_value_types[[array$type]]
+    bytes <- if (array$length == 0L) raw(0) else payload[at + seq_len(array$length * size)]
+    values <- cellucid:::.decode_wire_values(bytes, array$type, array$length)
+    header$params <- place_at(header$params, array$path, as.numeric(values))
+    at <- at + array$length * size
+  }
+  testthat::expect_identical(at, length(payload))
   header
 }
 
+# The command a frame R sent holds, text or binary, as the viewer reads it.
+sent_command <- function(frame) {
+  if (is.raw(frame)) binary_command(frame) else jsonlite::fromJSON(frame, simplifyVector = FALSE)
+}
+
+# Let go of the socket, saying nothing: to the server the connection is lost
+# (a browser that crashed) only once the last handle on it is closed. On
+# Windows that may be long after this close(): R's client socket is made
+# without WSA_FLAG_NO_HANDLE_INHERIT (src/modules/internet/Rsock.c; only its
+# listening sockets have it) and a child started while the socket is open
+# inherits a handle on it (processx and system2() both start children with
+# bInheritHandles), so no FIN leaves until that child ends too. So a test that
+# waits for the server to notice a socket going uses ws_send_close() when a
+# child runs (page_close()), and this alone only when none was started while
+# the socket was open.
 ws_close <- function(client) {
   try(close(client$connection), silent = TRUE)
+}
+
+# What a browser sends when a page goes (1001, going away): the server answers
+# and closes the connection itself, whoever else holds a handle on this end.
+ws_send_close <- function(client, code = 1001L) {
+  frame <- ws_frame(8, as.raw(c(code %/% 256L, code %% 256L)))
+  # The server may have closed first (a stopped viewer): nothing to tell then.
+  suppressWarnings(try(writeBin(frame, client$connection), silent = TRUE))
+  invisible(NULL)
 }
 
 # A welcomed channel for `viewer`.

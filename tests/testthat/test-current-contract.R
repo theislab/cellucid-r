@@ -9,7 +9,7 @@ test_that("every path the current contract reads is present in this layout", {
   layout <- cellucid_test_layout()
   required <- cellucid_required_paths()
   # Pinned so that deleting a row is a failure and not a quieter suite.
-  expect_identical(nrow(required), 18L)
+  expect_identical(nrow(required), 20L)
   expect_setequal(unique(required$kind), c("file", "directory"))
   expect_setequal(unique(required$layout), c("both", "checkout"))
 
@@ -182,11 +182,11 @@ test_that("main is the only workflow branch", {
   expect_false(any(grepl("^[[:space:]]*release:", pkgdown_lines)))
 })
 
-test_that("DESCRIPTION is the one in-repo source of the 0.9.6 release identity", {
+test_that("DESCRIPTION is the one in-repo source of the 0.9.7 release identity", {
   repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
   version <- cellucid_description_version()
-  expect_identical(version, "0.9.6")
+  expect_identical(version, "0.9.7")
 
   description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
   version_line <- which(startsWith(description, "Version:"))
@@ -278,6 +278,18 @@ test_that("DESCRIPTION is the one in-repo source of the 0.9.6 release identity",
       ),
       collapse = "\n"
     )
+    # One trigger: a published GitHub Release (no tag push, no dispatch).
+    expect_match(
+      release,
+      "\non:\n  release:\n    types: [published]\n\npermissions:",
+      fixed = TRUE
+    )
+    expect_false(grepl("workflow_dispatch", release, fixed = TRUE))
+    expect_false(grepl("push:", release, fixed = TRUE))
+    expect_false(grepl("github.event_name", release, fixed = TRUE))
+    expect_match(release, 'RELEASE_DRAFT}" != "false"', fixed = TRUE)
+    expect_match(release, 'RELEASE_PRERELEASE}" != "false"', fixed = TRUE)
+    expect_match(release, 'test "${RELEASE_TAG}" = "${GITHUB_REF_NAME}"', fixed = TRUE)
     expect_match(release, 'EXPECTED_TAG="v\\$\\{VERSION\\}"')
     expect_match(release, 'test "\\$\\{GITHUB_REF_TYPE\\}" = "tag"')
     expect_match(release, 'test "\\$\\{GITHUB_REF_NAME\\}" = "\\$\\{EXPECTED_TAG\\}"')
@@ -396,20 +408,29 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   # from source, where no installed help database exists yet, and under
   # R CMD check the unpacked sources carry man/ as well.
   rd_database <- tools::Rd_db(dir = repository_root)
-  # Every exported function is documented by exactly one hand-written page's
-  # \usage, and each call there matches the function's formals; a page's
-  # \arguments list every argument of its functions once, in order.
-  exported <- c(
+  # Every exported function is documented by exactly one page's \usage, and
+  # each call there matches the function's formals; a page's \arguments list
+  # every argument of its functions once, in order. The pages of the actions'
+  # functions are generated from the action catalogue (test-actions.R holds
+  # them to it); every other page is hand-written.
+  hand_written <- c(
     "cellucid_prepare", "cellucid_transition_drift", "cellucid_view", "cellucid_serve",
-    "cellucid_stop", "cellucid_stop_all", "cellucid_viewers", "cellucid_highlight",
-    "cellucid_clear_highlights", "cellucid_color_by", "cellucid_set_visibility",
-    "cellucid_reset_camera", "cellucid_freeze", "cellucid_set_data_mapping", "cellucid_on",
-    "cellucid_off", "cellucid_selection", "cellucid_wait_ready",
-    "cellucid_clear_web_cache", "cellucid_debug_connection", "cellucid_apply_session",
+    "cellucid_stop", "cellucid_stop_all", "cellucid_viewers", "cellucid_act", "cellucid_action_result",
+    "cellucid_freeze", "cellucid_on", "cellucid_off", "cellucid_selection", "cellucid_wait_ready",
+    "cellucid_clear_web_cache", "cellucid_debug_connection", "cellucid_apply_session", "cellucid_read_session",
+    "cellucid_apply_plan", "cellucid_history_applied", "cellucid_trackers", "cellucid_tracker", "cellucid_branches",
+    "cellucid_branch", "cellucid_groups", "cellucid_group", "cellucid_steps", "cellucid_step", "cellucid_step_state", "cellucid_step_diff",
+    "cellucid_stale", "cellucid_notes", "cellucid_turns", "cellucid_journal", "cellucid_methods", "cellucid_pseudocode",
+    "cellucid_conversations", "cellucid_turn", "cellucid_load_session", "cellucid_load_session_result",
+    "cellucid_last_history_change", "cellucid_mcp",
     "cellucid_subsample_cells", "cellucid_restore_original_order", "cellucid_pull", "cellucid_results", "cellucid_subset",
-    "cellucid_gene_sets", "cellucid_push", "cellucid_push_gene_set", "cellucid_write_gmt",
+    "cellucid_gene_sets", "cellucid_push", "cellucid_write_gmt",
     "cellucid_read_gmt", "cellucid_request_session", "cellucid_session_result"
   )
+  catalog <- jsonlite::read_json(file.path(repository_root, "inst", "action_catalog.json"), simplifyVector = FALSE)
+  generated <- vapply(catalog$actions, function(action) paste0("cellucid_", action$tool), "")
+  expect_length(intersect(generated, hand_written), 0L)
+  exported <- c(hand_written, generated)
   documented <- character()
   for (page in names(rd_database)) {
     rd <- rd_database[[page]]
@@ -470,16 +491,23 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   # An empty listing would satisfy the loop below without reading anything, so
   # name the page every other assertion in this test already depends on.
   expect_true(prepare_path %in% man_paths)
+  generated_pages <- file.path(man_directory, paste0(generated, ".Rd"))
+  expect_true(all(generated_pages %in% man_paths))
   for (man_path in man_paths) {
     man <- readLines(man_path, warn = FALSE, encoding = "UTF-8")
     expect_false(
       any(grepl("Generated by roxygen2", man, fixed = TRUE)),
       info = basename(man_path)
     )
-    expect_true(
-      any(grepl("Hand-written and authoritative", man, fixed = TRUE)),
-      info = basename(man_path)
-    )
+    if (man_path %in% generated_pages) {
+      expect_true(startsWith(man[[1L]], "% Generated by tools/generate-actions.R from inst/action_catalog.json"),
+                  info = basename(man_path))
+    } else {
+      expect_true(
+        any(grepl("Hand-written and authoritative", man, fixed = TRUE)),
+        info = basename(man_path)
+      )
+    }
   }
   prepare <- readLines(prepare_path, warn = FALSE, encoding = "UTF-8")
   expect_true(any(grepl("\\examples{", prepare, fixed = TRUE)))
@@ -506,4 +534,21 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   expect_false("RoxygenNote" %in% fields)
   expect_false("Roxygen" %in% fields)
   expect_false(any(startsWith(fields, "Config/roxygen2/")))
+})
+
+test_that("R code is ASCII outside comments, as R CMD check --as-cran requires", {
+  # CRAN's portability check warns on any non-ASCII character in code (a
+  # string included), and a WARNING stops the release workflow. Characters
+  # such as the middle dot and the ellipsis are written as \u escapes.
+  # Tokens are read from the parse, so a `#` inside a string is not a comment.
+  files <- list.files(file.path(cellucid_repository_root(), "R"), pattern = "[.]R$", full.names = TRUE)
+  expect_gt(length(files), 0L)
+  offenders <- character()
+  for (file in files) {
+    data <- utils::getParseData(parse(file, keep.source = TRUE, encoding = "UTF-8"), includeText = TRUE)
+    code <- data[data$terminal & data$token != "COMMENT", , drop = FALSE]
+    bad <- code[grepl("[^\x01-\x7f]", code$text, useBytes = TRUE), , drop = FALSE]
+    if (nrow(bad) > 0L) offenders <- c(offenders, sprintf("%s:%d", basename(file), bad$line1))
+  }
+  expect_identical(offenders, character())
 })

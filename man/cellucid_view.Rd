@@ -50,7 +50,12 @@ folder the viewer opens: a Cellucid-ready or any AnnData \code{.h5ad},
 \code{.zarr} folder or \code{.zarr.zip}, a MuData Zarr, \code{.h5mu},
 \code{.loom}, a 10x \code{.h5}, an \code{.rds} or \code{.rda} (every format of
 the web app's registry, \code{system.file("input_formats.json", package =
-"cellucid")}). An h5Seurat file is not opened: it is refused before anything
+"cellucid")}). Cellucid's own files are not datasets: a
+\code{.cellucid-session} file (the history of one dataset; read it with
+\code{\link{cellucid_read_session}()}) or a \code{.cellucid-library} file
+(datasets of the web app's My datasets) is refused before anything is
+served, with the sentence the web app says for it (the registry's
+\code{cellucidFiles}). An h5Seurat file is not opened: it is refused before anything
 is served, with the route that converts it (read it with
 \code{SeuratDisk::LoadH5Seurat()} and pass the object, or save it with
 \code{saveRDS()}). A gzip-compressed copy of a file read in parts
@@ -145,8 +150,9 @@ returned.}
 }
 \value{
 \code{cellucid_view()} and \code{cellucid_serve()} return the viewer,
-invisibly: pass it to \code{\link{cellucid_highlight}()},
-\code{\link{cellucid_on}()} and the other functions that talk to it.
+invisibly: pass it to \code{\link{cellucid_act}()} and the action functions
+(\code{\link{cellucid_color_by}()}, \code{\link{cellucid_highlight_cells}()},
+\ldots), \code{\link{cellucid_on}()} and the other functions that talk to it.
 \code{cellucid_stop()} returns the viewer invisibly; \code{cellucid_stop_all()}
 the number of viewers stopped; \code{cellucid_viewers()} a list of the
 running viewers.
@@ -243,8 +249,9 @@ runs (\code{pip install anywidget}), which shows the widget.
 The kernel hands the widget the viewer's messages between cells: while a cell
 runs, the viewer waits for data it has not read yet, and a call that waits
 for the viewer (\code{cellucid_wait_ready()}, or
-\code{cellucid_session_result()} before the viewer answered) stops at once
-with what to do instead; commands never wait.
+\code{cellucid_session_result()} or \code{cellucid_action_result()} before
+the viewer answered) stops at once with what to do instead; actions never
+wait.
 Hooks registered with \code{cellucid_on()} run, and \code{cellucid_selection()}
 is current, whenever the kernel is idle. \code{port}, \code{host},
 \code{allowed_hosts}, \code{serve_web_ui} and \code{web_cache_dir} do not
@@ -273,16 +280,33 @@ write the data with \code{cellucid_prepare()} and open it at
 \url{https://www.cellucid.com} or with the Python package's
 \code{show_anndata()}.
 }
+\section{Agent apps on this computer}{
+While it runs, a viewer with a server (\code{cellucid_view()} outside a
+notebook, \code{cellucid_serve()}) is published to agent apps on this
+computer: a record readable by this user only in the agents folder
+(\env{CELLUCID_AGENTS_DIR}, else the user's cache folder), naming an endpoint
+of the viewer's own server, \code{/_cellucid/agent/<viewer id>}, that takes a
+secret token and answers this computer only, never a browser. Through it
+\code{\link{cellucid_mcp}()}, or cellucid-python's \code{cellucid mcp}, lets
+an app such as Claude Code work in the viewer under the person's permission
+settings. \code{cellucid_stop()} withdraws it (so does R's exit). A notebook
+widget's viewer has no server and is not published, and
+\env{CELLUCID_AGENTS}\code{=off} publishes none. The record names where the
+viewer is served, never its page address (which carries the viewer's
+token). See \code{\link{cellucid_mcp}()} for the folder's rules.
+}
 \seealso{
-\code{\link{cellucid_highlight}()} and \code{\link{cellucid_on}()} to talk
-to the viewer, \code{\link{cellucid_prepare}()} to write the same store to
-share.
+\code{\link{cellucid_mcp}()} for agent apps on this computer;
+\code{\link{cellucid_act}()} (and one function per action, such as
+\code{\link{cellucid_highlight_cells}()}) and \code{\link{cellucid_on}()} to
+talk to the viewer, \code{\link{cellucid_prepare}()} to write the same store
+to share.
 }
 \examples{
 if (interactive() && requireNamespace("SeuratObject", quietly = TRUE)) {
   data("pbmc_small", package = "SeuratObject")
   viewer <- cellucid_view(SeuratObject::UpdateSeuratObject(pbmc_small))
-  cellucid_highlight(viewer, colnames(pbmc_small)[1:10])
+  cellucid_highlight_cells(viewer, colnames(pbmc_small)[1:10])
   cellucid_stop(viewer)
 }
 

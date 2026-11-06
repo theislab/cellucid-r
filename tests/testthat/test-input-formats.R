@@ -12,7 +12,7 @@
 # a dataset that states none is named after ("<format>_<name>_<structure>")
 # and what a server reports as the store's kind.
 
-.input_formats_sha256 <- "7c1e079c33dcd7d1abb17e4996e6e6cf35f1968327a9097701dd9a1ca860c902"
+.input_formats_sha256 <- "bd7fa1e23a3fd24794b647c5969ddb1aaad9a7b613b1457261c3b10dd705e2e5"
 
 registry_path <- function() system.file("input_formats.json", package = "cellucid", mustWork = TRUE)
 
@@ -89,6 +89,24 @@ test_that("a gzip-compressed copy is refused with how to serve it, as cellucid s
   rds <- file.path(folder, "object.rds.gz")
   saveRDS(list(1), rds)
   expect_identical(cellucid:::.classify_path(rds)$kind, "rds")
+})
+
+test_that("Cellucid's own files are said for what they are, in the registry's words", {
+  # The web app and cellucid serve (Python) say the same sentence (cellucidFiles' said).
+  registry <- jsonlite::fromJSON(registry_path(), simplifyVector = FALSE)
+  expect_identical(vapply(registry$cellucidFiles, function(entry) entry$id, ""), c("library", "session"))
+  folder <- tempfile("cellucid_own_")
+  dir.create(folder)
+  on.exit(unlink(folder, recursive = TRUE), add = TRUE)
+  for (name in c("annotation.cellucid-session", "LAB.Cellucid-Library")) {
+    entry <- cellucid:::.cellucid_file_of_name(name)
+    expect_identical(entry$id, if (endsWith(name, "session")) "session" else "library")
+    path <- file.path(folder, name)
+    writeBin(charToRaw("CELLUCID_SESSION/4\n"), path)
+    expect_error(cellucid:::.classify_path(path), paste0(name, ": ", entry$said), fixed = TRUE)
+    expect_error(cellucid_serve(path), entry$said, fixed = TRUE)
+  }
+  expect_null(cellucid:::.cellucid_file_of_name("cells.h5ad"))
 })
 
 test_that("an h5Seurat file is refused in the registry's words before it is served", {

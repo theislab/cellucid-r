@@ -43,7 +43,7 @@ page_binary <- function(comms, viewer, frame) {
 }
 
 widget_result <- function(kind, id, meta, cells, values = NULL, type = NULL, revision) {
-  header <- list(type = "result", requestId = NULL, epoch = "0123456789abcdef", revision = revision, kind = kind, id = id, nObs = 6, meta = meta,
+  header <- list(type = "result", epoch = "0123456789abcdef", revision = revision, kind = kind, id = id, nObs = 6, meta = meta,
                  cells = if (is.null(cells)) NULL else length(cells), values = type)
   text <- as.character(jsonlite::toJSON(header, auto_unbox = TRUE, null = "null", digits = NA))
   bytes <- charToRaw(text)
@@ -85,22 +85,25 @@ test_that("a lasso, then cellucid_pull() in the next cell: nothing waits", {
   expect_identical(cellucid_gene_sets(viewer), list(T = "CD3E"))
   expect_identical(rownames(cellucid_subset(cells, viewer, "Lasso")), c("cell-2", "cell-5"))
 
-  # Pushing sends at once.
-  cellucid_push(viewer, c(1.5, NA, 2, 3, 4, 5), key = "score")
+  # Pushing sends the field.push action at once.
+  pushed <- cellucid_push(viewer, c(1.5, NA, 2, 3, 4, 5), key = "score")
   sent <- comms$to("binary")
-  frame <- sent[[length(sent)]]$buffers[[1L]]
-  header_length <- readBin(frame[1:4], "integer", size = 4L, endian = "little")
-  expect_identical(jsonlite::fromJSON(rawToChar(frame[4L + seq_len(header_length)]))$key, "score")
+  command <- binary_command(sent[[length(sent)]]$buffers[[1L]])
+  expect_identical(command$action, "field.push")
+  expect_identical(command$params$key, "score")
+  expect_true(is.nan(command$params$values[[2L]]))
 
   # A session: asked in one cell, collected in a later one.
   request <- cellucid_request_session(viewer)
   expect_error(cellucid_session_result(request), "Run cellucid_session_result\\(\\) again in a later cell")
   asked <- Filter(function(m) grepl("requestSessionBundle", m$content$text %||% ""), comms$to("text"))
   id <- jsonlite::fromJSON(asked[[1L]]$content$text)$requestId
-  bundle <- c(cellucid:::.session_magic, as.raw(c(2, 0, 0, 0)), charToRaw("{}"))
+  fixture <- testthat::test_path("fixtures", "history_golden", "history_golden.cellucid-session")
+  bundle <- readBin(fixture, "raw", file.size(fixture))
   head <- charToRaw(as.character(jsonlite::toJSON(list(type = "session_bundle", requestId = id), auto_unbox = TRUE)))
   page_binary(comms, viewer, c(cellucid:::.encode_uint32(length(head)), head, bundle))
-  path <- cellucid_session_result(request)
-  expect_identical(readBin(path, "raw", 1000L), bundle)
+  session <- cellucid_session_result(request)
+  expect_s3_class(session, "cellucid_session")
+  expect_identical(readBin(session$path, "raw", length(bundle) + 1L), bundle)
   expect_error(cellucid_session_result(request), "collected or withdrawn already")
 })

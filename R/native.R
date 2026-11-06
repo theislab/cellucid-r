@@ -59,23 +59,11 @@
   .Call(C_cellucid_inflate, bytes, gzip, as.double(expected))
 }
 
-# src/session_codecs.c: the web app's order-independent 32-bit digest of a
-# set of 0-based cell indices (codecs/cell-set.js digestCellSet).
-.native_digest_cell_set <- function(indices) {
-  .Call(C_cellucid_digest_cell_set, indices)
-}
-
-# src/session_codecs.c: one highlight membership of a session as 0-based
-# cell indices, ascending; `reference` the 0-based cells of the group's
-# category when the set is stored relative to it, else NULL.
-.native_decode_cell_set <- function(payload, cell_count, reference = NULL) {
-  .Call(C_cellucid_decode_cell_set, payload, as.double(cell_count), reference)
-}
-
-# src/session_codecs.c: one user-defined categorical field's codes of a
-# session, as doubles (a Uint32Array code can exceed R's integers).
-.native_decode_user_codes <- function(payload, expected_length, codes_type) {
-  .Call(C_cellucid_decode_user_codes, payload, as.double(expected_length), codes_type)
+# src/session_codecs.c: one cell set (an array chunk of a session stored as
+# one, codecs/cell-set.js) as 0-based indices below `cell_count` (at most
+# 2^32), strictly increasing, as doubles.
+.native_decode_cell_set <- function(payload, cell_count) {
+  .Call(C_cellucid_decode_cell_set, payload, as.double(cell_count))
 }
 
 # src/chunks.c: one chunk's bytes -- values first .. first + count - 1 of
@@ -209,14 +197,6 @@
   invisible(.Call(C_cellucid_backed_release, target))
 }
 
-# src/chunks.c: one binary command frame -- the header's length, the header
-# bytes, then `cells` as little-endian uint32 -- or NULL when the cells are
-# not whole numbers from 0 to 2^32 - 1, strictly ascending, at least one
-# (none allowed with `allow_empty`).
-.native_cells_frame <- function(header, cells, allow_empty = FALSE) {
-  .Call(C_cellucid_cells_frame, header, cells, allow_empty)
-}
-
 # src/subsample.c: the subsampling specification (R/subsample.R). Positions
 # are 0-based doubles both ways (a dataset holds up to 2^32 - 1 cells).
 .native_subsample_rank <- function(seed, positions) {
@@ -244,8 +224,14 @@
 .native_subsample_decode <- function(bytes, n_obs) {
   .Call(C_cellucid_subsample_decode, bytes, as.double(n_obs))
 }
-.native_shortest_decimal <- function(share) {
-  .Call(C_cellucid_shortest_decimal, as.double(share))
+
+# src/number_text.c: each number of a double or integer vector as
+# JavaScript's Number::toString (JSON.stringify) writes it, found in exact
+# integer arithmetic: the fewest digits that read back as the number, the
+# nearest, the even one on a tie ("0.1", "1e+21", "1.5e-7", "5"). Every one
+# must be finite.
+.native_number_text <- function(numbers) {
+  .Call(C_cellucid_number_text, numbers)
 }
 
 # src/priority.c: each gene's stored values in the cells before each prefix
@@ -277,6 +263,24 @@
 # src/process.c: whether process `pid` runs on this machine (never signalled).
 .native_process_alive <- function(pid) {
   .Call(C_cellucid_process_alive, as.double(pid))
+}
+
+# src/stdio.c: the bytes standard input holds now, waiting at most `timeout`
+# seconds for some: NULL when none came, raw(0) at the end of the input
+# (cellucid_mcp(), R/mcp.R).
+.native_stdin_read <- function(timeout) {
+  .Call(C_cellucid_stdin_read, as.double(timeout))
+}
+
+# src/stdio.c: whether standard input is a Windows console.
+.native_stdin_console <- function() {
+  .Call(C_cellucid_stdin_console)
+}
+
+# src/stdio.c: write `bytes` to standard output by its descriptor, past R's
+# console and any sink(); FALSE when it is closed.
+.native_stdout_write <- function(bytes) {
+  .Call(C_cellucid_stdout_write, bytes)
 }
 
 # The physical memory of this machine in bytes, NA where the system does not

@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "server": {
+    "name": "cellucid",
+    "title": "Cellucid",
+    "connectionIdPattern": "^local-[0-9a-f]{12}$",
+    "statusTool": "cellucid_status"
+  },
+  "record": {
+    "schema": 2,
+    "fields": [
+      "dataset",
+      "endpoint",
+      "host",
+      "pid",
+      "runtime",
+      "schema",
+      "started",
+      "token",
+      "url",
+      "viewer"
+    ],
+    "file": "<agents folder>/<viewer id>.json, readable by its user only (0600, the folder 0700)",
+    "host": "the computer's host name (Python socket.gethostname(), R Sys.info()[['nodename']]); a reader skips records of another host and never deletes them",
+    "endpoint": "http on a loopback host (127.0.0.1, localhost, ::1) with a port; a record naming any other is not read",
+    "url": "where the viewer is served (scheme, host, port; no page address, which carries the viewer token), or null for a notebook widget",
+    "types": "schema int; viewer, runtime, host, started, endpoint, token non-empty text; pid int; url text or null; dataset {id, name} of non-empty text, or null"
+  },
+  "agentsDir": {
+    "override": "CELLUCID_AGENTS_DIR",
+    "windows": "%LOCALAPPDATA%/cellucid/agents",
+    "macos": "~/Library/Caches/cellucid/agents",
+    "other": "$XDG_CACHE_HOME/cellucid/agents, or ~/.cache/cellucid/agents",
+    "posix": "the folder must be owned by this user and writable by no one else (no group or other write); otherwise refused with sentences.folderUnsafe"
+  },
+  "endpoint": {
+    "route": "_cellucid/agent",
+    "describe": "GET <endpoint>",
+    "command": "POST <endpoint>/command",
+    "events": [
+      "agent_tools",
+      "agent_result",
+      "agent_asking",
+      "agent_answered",
+      "agent_tools_changed",
+      "agent_failed",
+      "viewer_stopped"
+    ],
+    "eventWaitLimitSeconds": 25.0,
+    "consumerIdleSeconds": 120.0,
+    "commandBodyLimitBytes": 4194304,
+    "statuses": {
+      "sent": 202,
+      "notOpen": 409,
+      "notACommand": 400,
+      "badToken": 401,
+      "notPublished": 404,
+      "notThisComputer": 403,
+      "badLength": 400
+    },
+    "sweep": "consumers silent for consumerIdleSeconds are dropped on a clock: their calls are cancelled in the page and their queued events let go"
+  },
+  "agentNames": [
+    {
+      "name": "claude-code",
+      "title": null,
+      "agent": "Claude Code"
+    },
+    {
+      "name": "claude-ai",
+      "title": null,
+      "agent": "Claude Desktop"
+    },
+    {
+      "name": "cursor-vscode",
+      "title": null,
+      "agent": "Cursor"
+    },
+    {
+      "name": "my-app",
+      "title": "My App",
+      "agent": "My App"
+    },
+    {
+      "name": "claude-code",
+      "title": "  Claude   Code\nbeta ",
+      "agent": "Claude Code beta"
+    },
+    {
+      "name": "some-client",
+      "title": null,
+      "agent": "some-client"
+    },
+    {
+      "name": "",
+      "title": "",
+      "agent": "Local agent"
+    },
+    {
+      "name": null,
+      "title": null,
+      "agent": "Local agent"
+    },
+    {
+      "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "title": null,
+      "agent": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+  ],
+  "sentences": {
+    "noViewer": "No Cellucid viewer is open on this computer. Ask the person to open their dataset in a viewer (cellucid mcp --open <file>, or cellucid serve <file>; cellucid.show_anndata(...) in Python; cellucid::cellucid_view(...) in R), then try again; cellucid_status says which viewers are found.",
+    "notFound": "No Cellucid viewer on this computer is {choice}. cellucid_status lists the viewers found.",
+    "notOpen": "No page shows the Cellucid viewer of PBMC (served at http://127.0.0.1:8765) now. Ask the person to open its page again (the viewer address its program printed, or reload the page), then try again.",
+    "notOpenWidget": "No page shows the Cellucid viewer of PBMC now. Ask the person to show it again (run the notebook cell that shows it), then try again.",
+    "pageGone": "The Cellucid viewer's page went (it was reloaded or closed) before this call ended, so whether it was done is not known. Read the history (history_get) before trying again.",
+    "notTaken": "The Cellucid viewer page did not take the call: {reason} Ask the person to reload the viewer's page.",
+    "stopped": "The Cellucid viewer stopped ({reason}); nothing more was done.",
+    "folderUnsafe": "The agents folder {folder} is not this user's alone ({why}), so no viewer is published there or read from it. Make it yours and not writable by others (chmod 700), or set CELLUCID_AGENTS_DIR.",
+    "sdkMissing": "cellucid mcp needs the MCP SDK, which this environment lacks. Install it with: pip install 'cellucid[mcp]'"
+  },
+  "optOut": {
+    "variable": "CELLUCID_AGENTS",
+    "values": [
+      "off",
+      "0",
+      "false",
+      "no"
+    ],
+    "effect": "no viewer is published to agents on this computer"
+  },
+  "progress": "a call's notifications/progress count 1, 2, … (they must grow)",
+  "elicitation": "a form elicitation goes only to an app whose elicitation capability is empty or names form; a question the page answers first is withdrawn in the app with notifications/cancelled for the elicitation request"
+}

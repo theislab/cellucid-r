@@ -5,7 +5,8 @@ name: R-CMD-check
 # Linux, and on macOS and Windows at the oldest supported R and the current
 # release, through r-lib/actions. Two more jobs check the package with every
 # suggested package installed (the Seurat and SingleCellExperiment paths,
-# with SeuratObject 4 and 5) and with none of them.
+# with SeuratObject 4 and 5) and with none of them. On Windows at the current
+# release it also runs cellucid_mcp()'s stdio tests with NOT_CRAN set.
 # If this workflow is green, you are generally in good shape for:
 # - GitHub releases
 # - CRAN submission (see publishing.md for the final `--as-cran` steps)
@@ -57,7 +58,7 @@ jobs:
       # to what both packages write or serve, to a cellucid-python commit
       # already on GitHub (cellucid-python's docs: R package > developer docs
       # > Testing and CI).
-      CELLUCID_PYTHON_COMMIT: dffae1d00449ddf22dfda92a2e32085349f6e94a
+      CELLUCID_PYTHON_COMMIT: 7d85085b95528f6283e86f1f6b45b07cbeb360be
       # Without the suggested packages the checks that need them skip, naming
       # what is missing.
       _R_CHECK_FORCE_SUGGESTS_: ${{ matrix.config.suggests == 'none' && 'false' || 'true' }}
@@ -138,3 +139,17 @@ jobs:
         with:
           args: 'c("--no-manual", "--as-cran")'
           upload-snapshots: true
+
+      # The local agent server (cellucid_mcp()) over stdio as an app runs it,
+      # with the package installed: on Windows its standard input is the
+      # app's pipe, read with PeekNamedPipe() (src/stdio.c), which only this
+      # step exercises (R CMD check --as-cran skips the stdio tests, as CRAN
+      # does).
+      - name: Run cellucid_mcp()'s stdio tests on Windows
+        if: matrix.config.os == 'windows-latest' && matrix.config.r == 'release'
+        env:
+          NOT_CRAN: 'true'
+        run: |
+          R CMD INSTALL .
+          Rscript -e "testthat::test_file('tests/testthat/test-mcp.R', package = 'cellucid', load_package = 'installed', stop_on_failure = TRUE)"
+        shell: bash

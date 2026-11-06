@@ -27,7 +27,15 @@ size_limit_allowlist <- list(
   ),
   "R/viewer-protocol.R:.viewer_reason_limit" = c(
     "HOST",
-    "The longest command_error reason accepted from the browser (the protocol's own 240, with margin), as cellucid-python accepts."
+    "The longest command_error reason accepted from the browser (the protocol's own 1000, with margin), as cellucid-python accepts."
+  ),
+  "R/agent-link.R:.agent_command_body_limit_bytes" = c(
+    "HOST",
+    "The largest command body a viewer's agent endpoint reads from a local process: one tool call written by a model, as cellucid-python's endpoint reads it (local_agents.json)."
+  ),
+  "R/agent-link.R:.agent_event_wait_limit_seconds" = c(
+    "HOST",
+    "The longest a request for agent events is held open (a time, not a size), as cellucid-python's endpoint holds one (local_agents.json)."
   ),
   "R/web-cache.R:.web_build_id_max" = c(
     "FORMAT",
@@ -41,21 +49,17 @@ size_limit_allowlist <- list(
     "PLAT",
     "The longest vector R can allocate; a byte count beyond it has no raw vector to fill."
   ),
-  "R/session-bundle.R:.session_max_frame_bytes" = c(
+  "R/session-file.R:.session_max_frame_bytes" = c(
     "FORMAT",
     "A session frame's length is a u32: the largest manifest or stored chunk the format can frame."
   ),
-  "R/session-bundle.R:.session_max_safe_integer" = c(
+  "R/session-file.R:.session_max_value_text" = c(
+    "PLAT",
+    "The longest text one session value may expand to: V8's longest string (2^29 - 24), the web app's MAX_VALUE_TEXT; a file whose parts would expand a value past it is refused before it is expanded."
+  ),
+  "R/session-file.R:.session_max_safe_integer" = c(
     "FORMAT",
     "The largest integer the web app reads exactly from JSON (2^53 - 1), as cellucid-python checks it."
-  ),
-  "R/session-fields.R:.codes_maximum" = c(
-    "FORMAT",
-    "The largest code of each typed array a session declares (Uint8/16/32); the largest marks an uncovered cell."
-  ),
-  "src/session_codecs.c:INT_MAX" = c(
-    "PLAT",
-    "R's integer vectors hold the 0-based cell indices: a cell count beyond INT_MAX has no R object to index."
   ),
   "src/session_codecs.c:UINT_MAX" = c(
     "PLAT",
@@ -76,10 +80,6 @@ size_limit_allowlist <- list(
   "src/extent.c:R_XLEN_T_MAX" = c(
     "PLAT",
     "The longest vector R allocates: a row count whose pointers (one more) it cannot hold is refused before the cast."
-  ),
-  "src/chunks.c:UINT32_MAX" = c(
-    "FORMAT",
-    "A binary command frame states its header's length as a uint32."
   )
 )
 

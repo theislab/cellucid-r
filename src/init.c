@@ -17,9 +17,7 @@ SEXP cellucid_kept_extent(SEXP x, SEXP i, SEXP map, SEXP check_whole);
 SEXP cellucid_latent_outlier_quantiles(SEXP latent, SEXP codes,
                                        SEXP n_categories, SEXP min_points);
 SEXP cellucid_inflate(SEXP bytes, SEXP gzip, SEXP expected);
-SEXP cellucid_digest_cell_set(SEXP indices);
-SEXP cellucid_decode_cell_set(SEXP payload, SEXP cell_count, SEXP reference);
-SEXP cellucid_decode_user_codes(SEXP payload, SEXP expected_length, SEXP codes_type);
+SEXP cellucid_decode_cell_set(SEXP payload, SEXP cell_count);
 SEXP cellucid_encode_values(SEXP values, SEXP first, SEXP count, SEXP chunk_length, SEXP dtype);
 SEXP cellucid_gene_major_block(SEXP i, SEXP p, SEXP x, SEXP map, SEXP origin, SEXP pointers, SEXP cells,
                                SEXP first, SEXP last, SEXP index_size, SEXP data_dtype, SEXP threads);
@@ -32,7 +30,6 @@ SEXP cellucid_layouts_stop(SEXP pointer);
 SEXP cellucid_layout_state(SEXP pointer, SEXP index);
 SEXP cellucid_layout_slice(SEXP pointer, SEXP index, SEXP part, SEXP offset, SEXP count, SEXP total);
 SEXP cellucid_layout_block(SEXP pointer, SEXP index, SEXP first, SEXP last);
-SEXP cellucid_cells_frame(SEXP header, SEXP cells, SEXP allow_empty);
 SEXP cellucid_backed_tally(SEXP n_rows);
 SEXP cellucid_backed_count(SEXP tally, SEXP index, SEXP pointers, SEXP values, SEXP by_rows, SEXP rows, SEXP col0);
 SEXP cellucid_backed_counted(SEXP tally);
@@ -57,12 +54,15 @@ SEXP cellucid_subsample_boxes(SEXP coordinates, SEXP dimensions, SEXP grid_size)
 SEXP cellucid_subsample_digest(SEXP n_obs, SEXP kept);
 SEXP cellucid_subsample_encode(SEXP kept);
 SEXP cellucid_subsample_decode(SEXP payload, SEXP n_obs);
-SEXP cellucid_shortest_decimal(SEXP x);
+SEXP cellucid_number_text(SEXP x);
 SEXP cellucid_file_version(SEXP path);
 SEXP cellucid_file_range(SEXP path, SEXP offset, SEXP length);
 SEXP cellucid_deflate_chunks(SEXP chunks, SEXP level, SEXP threads);
 SEXP cellucid_process_alive(SEXP pid);
 SEXP cellucid_physical_memory(void);
+SEXP cellucid_stdin_read(SEXP timeout);
+SEXP cellucid_stdout_write(SEXP bytes);
+SEXP cellucid_stdin_console(void);
 
 static const R_CallMethodDef cellucid_call_methods[] = {
     {"cellucid_crc32", (DL_FUNC)&cellucid_crc32, 2},
@@ -73,9 +73,7 @@ static const R_CallMethodDef cellucid_call_methods[] = {
     {"cellucid_kept_extent", (DL_FUNC)&cellucid_kept_extent, 4},
     {"cellucid_latent_outlier_quantiles", (DL_FUNC)&cellucid_latent_outlier_quantiles, 4},
     {"cellucid_inflate", (DL_FUNC)&cellucid_inflate, 3},
-    {"cellucid_digest_cell_set", (DL_FUNC)&cellucid_digest_cell_set, 1},
-    {"cellucid_decode_cell_set", (DL_FUNC)&cellucid_decode_cell_set, 3},
-    {"cellucid_decode_user_codes", (DL_FUNC)&cellucid_decode_user_codes, 3},
+    {"cellucid_decode_cell_set", (DL_FUNC)&cellucid_decode_cell_set, 2},
     {"cellucid_encode_values", (DL_FUNC)&cellucid_encode_values, 5},
     {"cellucid_gene_major_block", (DL_FUNC)&cellucid_gene_major_block, 12},
     {"cellucid_renumbered_block", (DL_FUNC)&cellucid_renumbered_block, 12},
@@ -86,7 +84,6 @@ static const R_CallMethodDef cellucid_call_methods[] = {
     {"cellucid_layout_state", (DL_FUNC)&cellucid_layout_state, 2},
     {"cellucid_layout_slice", (DL_FUNC)&cellucid_layout_slice, 6},
     {"cellucid_layout_block", (DL_FUNC)&cellucid_layout_block, 4},
-    {"cellucid_cells_frame", (DL_FUNC)&cellucid_cells_frame, 3},
     {"cellucid_backed_tally", (DL_FUNC)&cellucid_backed_tally, 1},
     {"cellucid_backed_count", (DL_FUNC)&cellucid_backed_count, 7},
     {"cellucid_backed_counted", (DL_FUNC)&cellucid_backed_counted, 1},
@@ -107,13 +104,16 @@ static const R_CallMethodDef cellucid_call_methods[] = {
     {"cellucid_subsample_digest", (DL_FUNC)&cellucid_subsample_digest, 2},
     {"cellucid_subsample_encode", (DL_FUNC)&cellucid_subsample_encode, 1},
     {"cellucid_subsample_decode", (DL_FUNC)&cellucid_subsample_decode, 2},
-    {"cellucid_shortest_decimal", (DL_FUNC)&cellucid_shortest_decimal, 1},
+    {"cellucid_number_text", (DL_FUNC)&cellucid_number_text, 1},
     {"cellucid_prefix_counts", (DL_FUNC)&cellucid_prefix_counts, 8},
     {"cellucid_file_version", (DL_FUNC)&cellucid_file_version, 1},
     {"cellucid_file_range", (DL_FUNC)&cellucid_file_range, 3},
     {"cellucid_deflate_chunks", (DL_FUNC)&cellucid_deflate_chunks, 3},
     {"cellucid_process_alive", (DL_FUNC)&cellucid_process_alive, 1},
     {"cellucid_physical_memory", (DL_FUNC)&cellucid_physical_memory, 0},
+    {"cellucid_stdin_read", (DL_FUNC)&cellucid_stdin_read, 1},
+    {"cellucid_stdout_write", (DL_FUNC)&cellucid_stdout_write, 1},
+    {"cellucid_stdin_console", (DL_FUNC)&cellucid_stdin_console, 0},
     {NULL, NULL, 0}};
 
 void R_init_cellucid(DllInfo *dll) {

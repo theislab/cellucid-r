@@ -35,11 +35,22 @@ reads it over loopback): only what the viewer asks for is made, when it asks,
 and an object's genes x cells matrix is never transposed whole. Several assays (RNA and ADT, say) open as modalities,
 with a Modality choice in the viewer's Data mapping.
 
-The viewer is yours to talk to:
+The viewer is yours to talk to. Everything a person can do in it is an
+action, and R sends any of them: `cellucid_act(viewer, "<type>", ...)`, or
+the action's own function (`?cellucid_color_by`, `?cellucid_highlight_cells`,
+and one for every other action). Each is one step of the viewer's history,
+labelled as R's, undone like any other; the request comes back at once, and
+`cellucid_action_result()` collects the viewer's answer -- a read's result,
+or what a change did. Undo, redo and a jump to any step are actions too
+(`cellucid_history_undo()`, `cellucid_history_redo()`,
+`cellucid_history_jump()`): they move the history, as the viewer's own
+buttons do, and record no step:
 
 ```{r, eval=FALSE}
-cellucid_color_by(viewer, "groups")
-cellucid_highlight(viewer, colnames(pbmc_small)[1:20], color = "#377eb8")
+cellucid_color_by(viewer, field = list(source = "obs", key = "groups"))
+cellucid_highlight_cells(viewer, colnames(pbmc_small)[1:20], color = "#377eb8")
+history <- cellucid_action_result(cellucid_history_get(viewer))
+cellucid_history_undo(viewer)  # the highlight is taken back; redo brings it again
 
 cellucid_on(viewer, "selection", function(event) {
   message(length(event$cells), " cells selected")
@@ -60,6 +71,36 @@ The R console stays usable while the viewer is open: the server answers the
 viewer whenever R is idle. Without a viewer, `cellucid_pull()` reads what the
 web app exports (obs-column CSV files, GMT gene sets, `.cellucid-session`
 files): `cellucid_pull(pbmc_small, "~/Downloads/cellucid-exports")`.
+
+A session file holds the viewer's whole history -- every step, by whom, in
+every tracker and branch, with its notes, bookmarks and turns.
+`cellucid_read_session()` reads it, `cellucid_tracker()`, `cellucid_steps()`,
+`cellucid_branches()` and `cellucid_turns()` read the history (as data
+frames), and `cellucid_apply_session()` plans, then writes, the state at any
+step onto the object:
+
+```{r, eval=FALSE}
+session <- cellucid_session_result(cellucid_request_session(viewer))
+tracker <- cellucid_tracker(session)
+cellucid_steps(tracker)[, c("id", "branch", "label", "origin")]
+plan <- cellucid_apply_session(pbmc_small, session, step = "s4")
+plan  # what would change, one row each
+pbmc_small <- cellucid_apply_plan(plan)
+cellucid_history_applied(pbmc_small)
+```
+
+Code run inside `cellucid_turn()` is one turn of the viewer's history: the
+State panel groups its steps, and `cellucid_history_turn_undo()` takes them
+back together. `cellucid_on(viewer, "history_changed", ...)` hears every
+change of the history, and `cellucid_load_session()` pushes a session file
+into the viewer:
+
+```{r, eval=FALSE}
+turn <- cellucid_turn(viewer, "Mark the clusters", {
+  cellucid_color_by(viewer, field = list(source = "obs", key = "RNA_snn_res.1"))
+})
+cellucid_load_session_result(cellucid_load_session(viewer, "pbmc.cellucid-session"))
+```
 
 ## In a Jupyter notebook
 

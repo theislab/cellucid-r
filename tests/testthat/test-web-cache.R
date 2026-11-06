@@ -76,6 +76,14 @@ test_that("a cache is served only when every file checks out", {
   expect_error(cellucid:::.verify_web_cache(cache), "byte length is|sha256 is")
 })
 
+test_that("JavaScript is one media type by any of its names; another kind of file is not", {
+  media <- cellucid:::.media_type
+  expect_identical(media("application/javascript; charset=utf-8"), media("text/javascript; charset=utf-8"))
+  expect_identical(media("application/x-javascript"), "text/javascript")
+  expect_identical(media("application/xml; charset=utf-8"), media("application/xml"))
+  expect_false(identical(media("text/html; charset=utf-8"), media("application/javascript")))
+})
+
 test_that("the source must be https, or http on this machine only", {
   expect_error(cellucid:::.require_source_url("http://example.org"), "must use https")
   expect_error(cellucid:::.require_source_url("https://example.org/"), "must not end")
