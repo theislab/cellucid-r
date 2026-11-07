@@ -108,8 +108,10 @@ static int open_file(SEXP path, opened_file *file) {
   if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide, wide_length) != wide_length) {
     return 0;
   }
-  /* Opened as Python's open() opens it: shared with writers, renames and
-   * deletes, so serving never locks the file. A folder cannot be opened
+  /* Opened as cellucid-python's open_shared() opens it: shared with
+   * writers, renames and deletes, so serving never locks the file (a file
+   * saved over the served one while a response streams it is moved into
+   * place; Python's own open() refuses that). A folder cannot be opened
    * without FILE_FLAG_BACKUP_SEMANTICS, so it is not a file here either. */
   HANDLE handle = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
