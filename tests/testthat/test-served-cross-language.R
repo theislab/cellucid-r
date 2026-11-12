@@ -2,7 +2,7 @@
 # Python (show_anndata(), serve_anndata(): cellucid-python's
 # _served_store.py) holds the same bytes in every array both serve: the
 # expression matrix in priority order (pointers, cells, values), the
-# neighbour graph with both axes in priority order (obsp; each made chunk by
+# neighbor graph with both axes in priority order (obsp; each made chunk by
 # chunk from the object as it is, on both sides), the original positions,
 # the UMAP, the prefix counts and the priority record --
 # each array's metadata and every chunk, byte for byte (both are

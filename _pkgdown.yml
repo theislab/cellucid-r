@@ -54,6 +54,7 @@ reference:
       - cellucid_analysis_differential_set
       - cellucid_analysis_dotplot_get
       - cellucid_analysis_dotplot_set
+      - cellucid_analysis_export
       - cellucid_analysis_list
       - cellucid_analysis_markers_get
       - cellucid_analysis_markers_set
@@ -70,18 +71,22 @@ reference:
       - cellucid_analysis_window_collapse
       - cellucid_analysis_window_copy
       - cellucid_analysis_window_place
-      - cellucid_annotation_suggest
+      - cellucid_annotation_publish
       - cellucid_annotation_suggestions
-      - cellucid_annotation_vote
+      - cellucid_camera_framing
       - cellucid_camera_navigation_set
       - cellucid_camera_path_clear
       - cellucid_camera_path_duration_set
+      - cellucid_camera_path_get
+      - cellucid_camera_path_hold_set
       - cellucid_camera_path_keyframe_add
       - cellucid_camera_path_keyframe_move
       - cellucid_camera_path_keyframe_remove
       - cellucid_camera_path_keyframe_rename
       - cellucid_camera_path_loop_back_set
+      - cellucid_camera_path_play
       - cellucid_camera_path_playback_set
+      - cellucid_camera_path_stop
       - cellucid_camera_reset
       - cellucid_camera_set
       - cellucid_category_delete
@@ -104,12 +109,14 @@ reference:
       - cellucid_dataset_summary
       - cellucid_datasets_list
       - cellucid_display_reset
+      - cellucid_expression_transform_set
       - cellucid_field_categories
       - cellucid_field_consensus
       - cellucid_field_create_from_pages
       - cellucid_field_delete
       - cellucid_field_duplicate
       - cellucid_field_export
+      - cellucid_field_group
       - cellucid_field_purge
       - cellucid_field_push
       - cellucid_field_rename
@@ -118,6 +125,7 @@ reference:
       - cellucid_field_summary
       - cellucid_fields_list
       - cellucid_figure_export
+      - cellucid_figure_export_get
       - cellucid_figure_export_set
       - cellucid_filter_category_all
       - cellucid_filter_category_cell_count
@@ -178,6 +186,7 @@ reference:
       - cellucid_history_save
       - cellucid_history_saved_delete
       - cellucid_history_saved_list
+      - cellucid_history_saved_open
       - cellucid_history_search
       - cellucid_history_share
       - cellucid_history_squash
@@ -197,6 +206,7 @@ reference:
       - cellucid_history_verify
       - cellucid_layout_get
       - cellucid_layout_panel_dock
+      - cellucid_layout_panel_dock_all
       - cellucid_layout_panel_float
       - cellucid_layout_panel_place
       - cellucid_layout_section_open
@@ -209,6 +219,7 @@ reference:
       - cellucid_settings_list
       - cellucid_stored_list
       - cellucid_stored_remove
+      - cellucid_vector_field_summary
       - cellucid_view_cameras_link
       - cellucid_view_clear
       - cellucid_view_embedding_cycle
@@ -219,6 +230,7 @@ reference:
       - cellucid_view_layout_set
       - cellucid_view_picture
       - cellucid_view_remove
+      - cellucid_view_rename
       - cellucid_views_state
   - title: Results back into R
     contents:

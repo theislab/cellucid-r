@@ -16,6 +16,17 @@ skip_without_sce <- function() {
 
 seurat_v5 <- function() utils::packageVersion("SeuratObject") >= "5.0.0"
 
+# A layer of a Seurat object's default assay set: SeuratObject 5 names it
+# `layer`, SeuratObject 4 `slot` (where `layer` falls into `...` and the
+# default slot, "data", is set instead).
+set_assay_layer <- function(object, layer, data) {
+  if (seurat_v5()) {
+    SeuratObject::SetAssayData(object, layer = layer, new.data = data)
+  } else {
+    SeuratObject::SetAssayData(object, slot = layer, new.data = data)
+  }
+}
+
 # SeuratObject's pbmc_small, brought to the installed version's layout (a v5
 # Assay5 with SeuratObject 5, a v4 Assay with SeuratObject 4).
 pbmc_seurat <- function() {

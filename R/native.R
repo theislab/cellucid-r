@@ -260,7 +260,7 @@
   .Call(C_cellucid_file_range, as.character(path), as.double(offset), as.double(length))
 }
 
-# src/process.c: whether process `pid` runs on this machine (never signalled).
+# src/process.c: whether process `pid` runs on this machine (never signaled).
 .native_process_alive <- function(pid) {
   .Call(C_cellucid_process_alive, as.double(pid))
 }

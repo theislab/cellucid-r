@@ -1,10 +1,10 @@
-# The viewer's actions from R: the catalogue the package carries (pinned in
+# The viewer's actions from R: the catalog the package carries (pinned in
 # the three repositories), the functions and help pages generated from it
 # (tools/generate-actions.R), and how R values become an action's parameters.
 # The viewer is played here by the frames R queues before its page connects
 # (R/viewer-server.R .viewer_send_frame()), read as the viewer reads them.
 
-.action_catalog_sha256 <- "a805685f10d2625d649d61f7c516f811c624cfd751566267f3cd0bed0cded688"
+.action_catalog_sha256 <- "725d32e5357cebbcff332be5a599667cf42ebb63ce55bd73e39ce4a1469556c4"
 
 catalog_path <- function() file.path(cellucid_repository_root(), "inst", "action_catalog.json")
 read_catalog <- function() jsonlite::read_json(catalog_path(), simplifyVector = FALSE)
@@ -27,7 +27,7 @@ queued_viewer <- function(n_cells = 6L, cell_names = paste0("c", seq_len(n_cells
 
 last_sent <- function(viewer) sent_command(viewer$queue[[length(viewer$queue)]]$frame)
 
-test_that("the three repositories carry the same pinned action catalogue", {
+test_that("the three repositories carry the same pinned action catalog", {
   expect_identical(cellucid_file_sha256(catalog_path()), .action_catalog_sha256)
   catalog <- read_catalog()
   expect_identical(catalog$schema, 1L)
@@ -40,7 +40,7 @@ test_that("the three repositories carry the same pinned action catalogue", {
   expect_identical(names(cellucid:::.action_catalog()), vapply(catalog$actions, function(action) action$type, ""))
 })
 
-test_that("the generated functions, help pages and exports are the catalogue's, fresh", {
+test_that("the generated functions, help pages and exports are the catalog's, fresh", {
   root <- cellucid_repository_root()
   catalog <- read_catalog()
   names <- vapply(catalog$actions, function(action) paste0("cellucid_", action$tool), "")
@@ -59,14 +59,14 @@ test_that("the generated functions, help pages and exports are the catalogue's, 
   generator <- new.env()
   sys.source(file.path(root, "tools", "generate-actions.R"), envir = generator)
   files <- generator$render_actions(root)
-  expect_setequal(names(files), c("R/actions-generated.R", "NAMESPACE", file.path("man", paste0(names, ".Rd"))))
+  expect_setequal(names(files), c("R/actions-generated.R", "NAMESPACE", "_pkgdown.yml", file.path("man", paste0(names, ".Rd"))))
   stale <- character()
   for (path in names(files)) {
     on_disk <- readLines(file.path(root, path), warn = FALSE, encoding = "UTF-8")
     if (!identical(on_disk, enc2utf8(files[[path]]))) stale <- c(stale, path)
   }
   expect_identical(stale, character(), info = "run `Rscript tools/generate-actions.R` from the package root")
-  # No page is left over from an action the catalogue no longer has.
+  # No page is left over from an action the catalog no longer has.
   expect_identical(generator$stale_pages(root, files), character())
 })
 
@@ -78,6 +78,7 @@ test_that("a generated name never takes a hand-written export's, and none takes 
   scratch <- tempfile("cellucid_generate_")
   dir.create(file.path(scratch, "inst"), recursive = TRUE)
   file.copy(catalog_path(), file.path(scratch, "inst", "action_catalog.json"))
+  file.copy(file.path(root, "_pkgdown.yml"), file.path(scratch, "_pkgdown.yml"))
   namespace <- readLines(file.path(root, "NAMESPACE"), warn = FALSE)
   writeLines(c("export(cellucid_color_by)", namespace), file.path(scratch, "NAMESPACE"))
   expect_error(generator$render_actions(scratch), "takes a hand-written export's name: cellucid_color_by")
@@ -214,7 +215,7 @@ test_that("cellucid_act() sends any action by its type, a newer viewer's too", {
   expect_identical(last_sent(viewer)$params, list(view = 2L))
   cellucid_act(viewer, "analysis.run", analysis = "markers", in_ = 1)
   expect_identical(last_sent(viewer)$params, list(analysis = "markers", `in` = 1L))
-  # An action the catalogue does not describe goes as JSON of its shape.
+  # An action the catalog does not describe goes as JSON of its shape.
   cellucid_act(viewer, "future.thing", a = c(1, 2), b = list(c = "d"), e = NULL, f = I("one"))
   expect_identical(last_sent(viewer)$params, list(a = list(1L, 2L), b = list(c = "d"), e = NULL, f = list("one")))
   expect_error(cellucid_act(viewer, "colorby"), "dotted type")
@@ -233,14 +234,17 @@ test_that("an answer reaches its request; a refusal stops its collection, and is
   request <- cellucid_history_get(viewer)
   deliver <- function(type, payload) cellucid:::.deliver_event(viewer, list(type = type, payload = payload))
   outcome <- list(head = "s4", steps = list(list(id = "s0", label = "Opened")))
-  deliver("action_result", list(requestId = request$id, step = NULL, outcome = outcome))
+  deliver("action_result", list(requestId = request$id, step = NULL, unrecorded = NULL, outcome = outcome))
   expect_true(request$done)
   expect_identical(request$state, "answered")
   expect_identical(cellucid_action_result(request, timeout = 0), outcome)
   expect_identical(viewer$last$action_result$outcome, outcome)
   change <- cellucid_camera_reset(viewer, "live")
-  deliver("action_result", list(requestId = change$id, step = list(id = "s5", label = "Reset the camera"), outcome = NULL))
-  expect_null(cellucid_action_result(change))
+  deliver("action_result", list(requestId = change$id, step = list(id = "s5", label = "Reset the camera"), unrecorded = NULL, outcome = NULL))
+  # A step, or a read, warns nothing.
+  expect_no_warning(expect_null(cellucid_action_result(change)))
+  expect_null(change$unrecorded)
+  expect_null(request$unrecorded)
   expect_identical(change$step, list(id = "s5", label = "Reset the camera"))
   expect_output(print(change), "answered, step s5: Reset the camera")
   refused <- cellucid_category_rename(viewer, list(source = "obs", key = "cell_type"), "T", "T cells")
@@ -268,4 +272,39 @@ test_that("an answer reaches its request; a refusal stops its collection, and is
   expect_error(cellucid_action_result(pending), "in a Jupyter notebook it answers between cells. Run cellucid_action_result\\(\\) again in a later cell")
   expect_error(cellucid_action_result(list()), "request must be what cellucid_act\\(\\)")
   expect_error(cellucid_action_result(pending, timeout = -1), "timeout must be")
+})
+
+test_that("a change that made no step says why: kept on its request, warned when collected", {
+  viewer <- queued_viewer()
+  deliver <- function(type, payload) cellucid:::.deliver_event(viewer, list(type = type, payload = payload))
+  sentences <- cellucid_read_fixture("viewer_protocol.json")$action$unrecorded
+  expect_identical(as.list(cellucid:::.viewer_action_unrecorded), sentences)
+  for (reason in names(sentences)) {
+    change <- cellucid_color_by(viewer, list(source = "obs", key = "cell_type"))
+    expect_null(change$unrecorded)
+    deliver("action_result", list(requestId = change$id, step = NULL, unrecorded = reason, outcome = list(field = "cell_type")))
+    expect_null(change$step)
+    expect_identical(change$unrecorded, reason)
+    expect_output(print(change), paste0("answered, no step: ", reason), fixed = TRUE)
+    caught <- NULL
+    outcome <- withCallingHandlers(
+      cellucid_action_result(change, timeout = 0),
+      cellucid_action_not_recorded = function(condition) {
+        caught <<- condition
+        invokeRestart("muffleWarning")
+      }
+    )
+    expect_identical(outcome, list(field = "cell_type"))
+    expect_s3_class(caught, c("cellucid_action_not_recorded", "warning", "condition"))
+    expect_identical(conditionMessage(caught), paste0("cellucid_color_by(): ", sentences[[reason]]))
+    expect_identical(caught$unrecorded, reason)
+    expect_null(conditionCall(caught))
+  }
+})
+
+test_that("the catalog is the one the web app's action definitions make now", {
+  # Against the definitions themselves, not only the web app's committed copy.
+  expect_identical(cellucid_rendered_by_web("scripts/generate-action-catalog.mjs", "renderActionCatalog"),
+                   readChar(catalog_path(), file.size(catalog_path()), useBytes = TRUE),
+                   info = "Run node scripts/generate-action-catalog.mjs in the web app, then Rscript tools/generate-actions.R here.")
 })

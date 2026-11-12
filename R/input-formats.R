@@ -86,11 +86,37 @@
   NULL
 }
 
-.file_endings <- function() {
-  endings <- unlist(lapply(.input_formats()$formats, function(entry) {
-    unlist(lapply(setdiff(names(entry$names), "folder"), function(layout) unlist(entry$names[[layout]])[1L]))
-  }))
-  paste(endings[!is.na(endings)], collapse = ", ")
+# The single files Cellucid opens, as a message names them: "an .h5ad file, a
+# .loom file, ... or a .zarr.zip archive" -- the web app's
+# openableNamesText({layouts: ['file', 'zip']}) (data/input-formats.js) and
+# cellucid-python's openable_files_text(): one phrase per format and layout by
+# its usual name endings (each that stands alone, shortest first, joined by
+# "/": .rda/.rdata; .rds, never the compressed copy's .rds.gz; .zip left out
+# beside .zarr.zip, which ends with it), a format recognized only to be
+# refused (h5Seurat) left out.
+.openable_files_text <- function() {
+  formats <- .input_formats()$formats
+  single <- unlist(lapply(formats, function(entry) c(unlist(entry$names$file), unlist(entry$names$zip))))
+  stands_alone <- function(ending) {
+    last <- sub("^.*(\\.[^.]*)$", "\\1", ending)
+    identical(last, ending) || last %in% single
+  }
+  nouns <- c(file = "file", zip = "archive")
+  phrases <- character()
+  for (layout in names(nouns)) {
+    for (entry in formats) {
+      names <- unlist(entry$names[[layout]])
+      if (!is.null(entry$refusal) || length(names) == 0L) next
+      alone <- unlist(Filter(stands_alone, names))
+      kept <- alone[!vapply(alone, function(name) any(alone != name & endsWith(alone, name)), logical(1L))]
+      kept <- kept[order(nchar(kept), kept, method = "radix")]
+      ending <- if (length(kept) > 0L) paste(kept, collapse = "/") else names[[1L]]
+      article <- if (grepl("^\\.(h5|r|[aeiou])", ending, ignore.case = TRUE)) "an" else "a"
+      phrases <- c(phrases, paste(article, ending, nouns[[layout]]))
+    }
+  }
+  if (length(phrases) == 1L) return(phrases)
+  paste0(paste(phrases[-length(phrases)], collapse = ", "), " or ", phrases[[length(phrases)]])
 }
 
 # One path as the server serves it: list(path, kind, layout, zarr_format,
@@ -138,10 +164,7 @@
     )
   }
   if (is.null(named) && is.null(sniffed)) {
-    .abort(
-      "A file Cellucid opens is one of ", .file_endings(), "; ", basename(resolved),
-      " is none of them."
-    )
+    .abort(resolved, " is not a file Cellucid opens (", .openable_files_text(), ").")
   }
   if (!is.null(sniffed) && (is.null(named) || !identical(.format_entry(named$id)$container, sniffed$container))) {
     candidates <- Filter(function(entry) {
@@ -149,7 +172,7 @@
     }, .input_formats()$formats)
     named <- list(id = candidates[[1L]]$id, layout = sniffed$layout, ending = NULL)
   }
-  # A format the registry recognises but Cellucid never opens (h5Seurat) is
+  # A format the registry recognizes but Cellucid never opens (h5Seurat) is
   # refused here, in the registry's words (the web app and cellucid serve use
   # the same ones), rather than served for the browser to refuse.
   refusal <- .format_entry(named$id)$refusal
@@ -252,7 +275,11 @@
 # its metadata and two small chunks: list(id, name), each NULL when the store
 # does not state it or stores it with a codec this reader does not undo (a
 # store written by cellucid_prepare() or cellucid.prepare() always can be).
-.zarr_store_identity <- function(path, layout, zarr_format = NULL) {
+# `named` lists the fields the caller names itself ("id" for dataset_id =,
+# "name" for dataset_name =): the store's own value of one of those is read
+# only as what it declares, NULL when it cannot be read, since the caller
+# said which dataset it is (cellucid-python's read_cellucid_identity(named=)).
+.zarr_store_identity <- function(path, layout, zarr_format = NULL, named = character()) {
   read_entry <- if (identical(layout, "zip")) {
     listing <- tryCatch(utils::unzip(path, list = TRUE)$Name, error = function(error) {
       .abort(basename(path), " cannot be read as a ZIP file (", conditionMessage(error), ").")
@@ -271,9 +298,11 @@
       if (file.exists(file)) .read_bytes(file) else NULL
     }
   }
-  scalar <- function(key) {
+  scalar <- function(field) {
+    key <- paste0("uns/cellucid/", field)
     # An absent key declares nothing; a present one that cannot be read is a
-    # damaged store, said so rather than passed over for the file's name.
+    # damaged store, said so rather than passed over for the file's name,
+    # unless the caller names that field itself.
     if (is.null(read_entry(paste0(key, if (zarr_format == 3L) "/zarr.json" else "/.zarray")))) return(NULL)
     tryCatch({
       if (zarr_format == 3L) {
@@ -290,23 +319,37 @@
       }
       .decode_vlen_utf8(bytes)[[1L]]
     }, error = function(error) {
+      if (field %in% named) return(NULL)
       .abort(
         "The store ", basename(path), " holds ", key, " and it cannot be read (",
-        conditionMessage(error), "). Write the store again, or name the dataset with ",
-        "dataset_id = and dataset_name =."
+        conditionMessage(error), "). Write the store again, or give dataset_",
+        field, " = yourself."
       )
     })
   }
-  list(id = scalar("uns/cellucid/id"), name = scalar("uns/cellucid/name"))
+  list(id = scalar("id"), name = scalar("name"))
 }
 
+# A vlen-utf8 chunk: a count, then each string as its length and its bytes.
+# Every count and length it states is checked against the bytes it has before
+# anything is allocated from it: a count of 2^31 - 1 in four bytes once
+# allocated a vector that size.
 .decode_vlen_utf8 <- function(bytes) {
+  total <- length(bytes)
+  if (total < 4L) .abort("the vlen-utf8 chunk is shorter than its count")
   n <- readBin(bytes[1:4], "integer", size = 4L, endian = "little")
+  if (is.na(n) || n < 0L || n > (total - 4L) %/% 4L) {
+    .abort("the vlen-utf8 chunk states more strings than its bytes hold")
+  }
   out <- character(n)
   at <- 5L
   for (index in seq_len(n)) {
+    if (at + 3L > total) .abort("the vlen-utf8 chunk ends inside a string's length")
     size <- readBin(bytes[at:(at + 3L)], "integer", size = 4L, endian = "little")
     at <- at + 4L
+    if (is.na(size) || size < 0L || size > total - at + 1L) {
+      .abort("a vlen-utf8 string runs past the end of its chunk")
+    }
     out[[index]] <- if (size == 0L) "" else rawToChar(bytes[at:(at + size - 1L)])
     at <- at + size
   }

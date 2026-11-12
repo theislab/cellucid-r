@@ -25,7 +25,7 @@ collects.}
 \code{path}, \code{sha256} (of the file), \code{manifest} (the file's
 manifest as \pkg{jsonlite} reads JSON), \code{created_at}, \code{app} (the
 web app that wrote it: \code{version}, \code{catalog} -- the digest of its
-action catalogue), \code{actions} (each action type the steps use, with the
+action catalog), \code{actions} (each action type the steps use, with the
 digest of its parameters' schema), \code{scope} (what the share or save kept:
 \code{trackers}, \code{branches}, \code{content} -- \code{"history"},
 \code{"state"} for the current state only (one tracker: the dataset as

@@ -34,7 +34,7 @@ test_that("squash phrases", {
 test_that("a paused period that changed the data is listed and said plainly", {
   tracker <- words_tracker()
   scratch <- words_path(tracker)
-  # Recording was paused while the filters and the colours changed (the person and a notebook acted).
+  # Recording was paused while the filters and the colors changed (the person and a notebook acted).
   scratch[[length(scratch)]]$touches <- list("filters", "colors")
   text <- .history_methods_paragraph(scratch, words_dataset, NULL, list(), tracker$groups)
   expect_identical(text, paste(c(
@@ -90,4 +90,19 @@ test_that("a squashed step that only presented is counted", {
   expect_false(grepl("recording paused", text, fixed = TRUE))
   expect_true(endsWith(.history_pseudocode_text(path, NULL, NULL, "T", "B", tracker$groups),
                        "# Changes made with recording paused: Colors, Settings (values only)\n"))
+})
+
+test_that("a share of the cells is written as the web app writes it", {
+  # formatShare (cellucid/assets/js/utils/format-units.js): whole from 10%, never 100% short of
+  # every cell; two significant figures below. Before round 9 this said "6%" for 5.5% and the
+  # web app "5.5%" (R9U-3).
+  tracker <- words_tracker()
+  root <- words_path(tracker)[1L]
+  cases <- list(c(2000, "10%"), c(1100, "5.5%"), c(19999, "99%"), c(3, "0.015%"), c(19900, "99%"))
+  for (case in cases) {
+    open <- as.numeric(case[[1L]])
+    dataset <- list(name = "History golden", cells = 20000L, genes = 4L, open_cells = list(open = open, of = 20000, method = "uniform", seed = 0L))
+    text <- .history_methods_paragraph(root, dataset, NULL, list())
+    expect_match(text, paste0("was opened on ", format(open, big.mark = ",", scientific = FALSE), " of its 20,000 cells (", case[[2L]], ")"), fixed = TRUE, info = case[[2L]])
+  }
 })

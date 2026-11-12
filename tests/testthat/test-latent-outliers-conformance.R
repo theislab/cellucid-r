@@ -48,7 +48,7 @@ test_that("ties share the larger rank; a small category and a missing code are N
 
 test_that("the quantiles use the latent values as float32 stores them", {
   # 1 + 2^-30 is 1 in float32: the first two cells are at the same distance
-  # (2/3) from the centre (5/3), so both have 2 of the 3 cells at it or closer.
+  # (2/3) from the center (5/3), so both have 2 of the 3 cells at it or closer.
   # In double, their distances would differ and so would their quantiles.
   latent <- matrix(c(1 + 2^-30, 1, 3), ncol = 1L)
   expect_identical(.quantiles(latent, c(0L, 0L, 0L), 1L, 1L), as_float32(c(2, 2, 3) / 3))

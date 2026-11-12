@@ -66,13 +66,23 @@ the computer, reading it whole once).}
 \item{...}{For an object, the arguments of \code{\link{cellucid_prepare}()}
 that choose what is shown: \code{dataset_id}, \code{dataset_name},
 \code{embeddings}, \code{obs}, \code{modalities}, \code{modality},
-\code{latent_key}, \code{embedding_defaults}, \code{obs_keys} and the
-others, except \code{out_path}, \code{format}, \code{zarr_format} and
-\code{force}. For a path: \code{dataset_id}, \code{dataset_name} and the launch
+\code{latent_key}, \code{embedding_defaults}, \code{obs_keys},
+\code{total_counts} (the \code{obs} column of each cell's total count over all
+its genes, which the viewer normalizes by) and the others, except
+\code{out_path}, \code{format}, \code{zarr_format}, \code{force} and
+\code{priority_seed}: a served object's cells are in the priority order of
+seed 0, the subsampling specification's default, so the viewer's default
+subsample is the first rows of every array (cellucid-python's served store
+uses the same seed). For a path: \code{dataset_id}, \code{dataset_name} and the launch
 defaults (\code{embedding_defaults}, \code{latent_key}, \code{obs_keys},
 \code{var_gene_id_column}, \code{vector_field_default},
 \code{modality}, \code{normalize_embeddings},
-\code{centroid_min_points}), which the browser checks against the file. Without
+\code{centroid_min_points}, and \code{knn_key}, the \code{obsp} graph drawn,
+and \code{expression_source}, the matrix genes are read from: \code{"X"},
+\code{"raw"} or \code{"layer:<name>"}, as cellucid-python's
+\code{serve_anndata()} takes them), which the browser checks against the
+file. (An object's graph and matrix are the ones passed or found:
+\code{connectivities}, \code{gene_expression}.) Without
 \code{dataset_id} and \code{dataset_name} (and no record of them in the object,
 \code{misc$cellucid} or \code{metadata(x)$cellucid}), the dataset is named after
 the expression passed as \code{data}, or the file. Of a file, only a Zarr
@@ -139,7 +149,7 @@ R's own thread, so it is laid out there, before the viewer opens, block by
 block into the same scratch files (8 bytes a stored value): one pass counts
 its values, then one pass places each quarter of the machine's memory of
 them; it is never held whole in R's memory, whatever its size. The
-neighbour graph is not copied either: each chunk of it (\eqn{2^{18}}
+neighbor graph is not copied either: each chunk of it (\eqn{2^{18}}
 entries) is made from the graph as it is, both axes in priority order, when
 the viewer reads it, and not kept (at one million cells and 20 million
 edges the served store holds no second graph).}
@@ -226,8 +236,8 @@ published build of \url{https://www.cellucid.com}, downloaded once into
 before any byte is served; \code{\link{cellucid_clear_web_cache}()} removes it.
 
 Several viewers run at once, each on its own port. \code{cellucid_stop()}
-tells an open page to freeze (it keeps its last view, as
-\code{\link{cellucid_freeze}()} does), closes the viewer's channel, waits for
+tells an open page to freeze (it keeps its last complete view, since R no
+longer serves it), closes the viewer's channel, waits for
 the page to answer the close (at most a second, so that the close reaches it)
 and frees its port, as cellucid-python's \code{stop()} does; \code{cellucid_stop_all()}
 stops every viewer of the session.
@@ -259,7 +269,7 @@ apply.
 
 A cell run again replaces its output: the viewer \code{cellucid_view()}
 showed in the cell's earlier run is stopped (\code{cellucid_stop()}), its
-object's matrices, memoised arrays and chunk cache let go, unless another
+object's matrices, memoized arrays and chunk cache let go, unless another
 cell shows it too. The cell is known by the id the front end sends with each
 run (JupyterLab, Notebook 7, VS Code). Where no cell id is sent, and outside
 a notebook, \code{cellucid_view()} of a dataset stops the earlier viewer of

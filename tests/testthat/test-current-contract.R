@@ -182,11 +182,11 @@ test_that("main is the only workflow branch", {
   expect_false(any(grepl("^[[:space:]]*release:", pkgdown_lines)))
 })
 
-test_that("DESCRIPTION is the one in-repo source of the 0.9.7 release identity", {
+test_that("DESCRIPTION is the one in-repo source of the 0.9.8 release identity", {
   repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
   version <- cellucid_description_version()
-  expect_identical(version, "0.9.7")
+  expect_identical(version, "0.9.8")
 
   description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
   version_line <- which(startsWith(description, "Version:"))
@@ -393,6 +393,40 @@ test_that("pkgdown has an exact current installation and navigation contract", {
   }
 })
 
+test_that("CI fetches every sibling the cross-repository tests compare with, and requires them", {
+  # Without them those tests skip (helper-repository.R); CI fetches both and
+  # sets CELLUCID_SIBLINGS_REQUIRED, so there they always run.
+  skip_if_not(cellucid_is_source_checkout(), "the workflows are in the checkout only")
+  workflow <- paste(readLines(file.path(cellucid_repository_root(), ".github", "workflows", "R-CMD-check.yaml"),
+                              warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  for (line in c(
+    'echo "CELLUCID_WEB_ROOT=$RUNNER_TEMP/cellucid"',
+    'echo "CELLUCID_PYTHON_ROOT=$RUNNER_TEMP/cellucid-python"',
+    'echo "CELLUCID_SIBLINGS_REQUIRED=1"',
+    'fetch cellucid main "$RUNNER_TEMP/cellucid"',
+    'fetch cellucid-python "$CELLUCID_PYTHON_COMMIT" "$RUNNER_TEMP/cellucid-python"',
+    "uses: actions/setup-node@"
+  )) {
+    expect_true(grepl(line, workflow, fixed = TRUE), info = line)
+  }
+  for (repository in c("cellucid", "cellucid-python")) expect_true(nzchar(cellucid_sibling_variable(repository)))
+})
+
+test_that("the pkgdown site contract holds: every vignette and help page indexed once", {
+  # .github/scripts/validate-pkgdown.R gates the site's build (pkgdown.yaml);
+  # it runs here too, so a help page added or removed fails the suite and
+  # R-CMD-check, not only the site's deploy (CI run 43106603397).
+  skip_if_not(cellucid_is_source_checkout(), "the site contract is in the checkout only")
+  root <- cellucid_repository_root()
+  old <- setwd(root)
+  on.exit(setwd(old), add = TRUE)
+  output <- suppressWarnings(system2(
+    file.path(R.home("bin"), "Rscript"), c("--vanilla", ".github/scripts/validate-pkgdown.R"),
+    stdout = TRUE, stderr = TRUE
+  ))
+  expect_null(attr(output, "status"), info = paste(output, collapse = "\n"))
+})
+
 test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   # This is the codoc check R CMD check performs, run against the installed Rd
   # database: the \usage block is turned back into a function and compared to
@@ -411,12 +445,12 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   # Every exported function is documented by exactly one page's \usage, and
   # each call there matches the function's formals; a page's \arguments list
   # every argument of its functions once, in order. The pages of the actions'
-  # functions are generated from the action catalogue (test-actions.R holds
+  # functions are generated from the action catalog (test-actions.R holds
   # them to it); every other page is hand-written.
   hand_written <- c(
     "cellucid_prepare", "cellucid_transition_drift", "cellucid_view", "cellucid_serve",
     "cellucid_stop", "cellucid_stop_all", "cellucid_viewers", "cellucid_act", "cellucid_action_result",
-    "cellucid_freeze", "cellucid_on", "cellucid_off", "cellucid_selection", "cellucid_wait_ready",
+    "cellucid_on", "cellucid_off", "cellucid_selection", "cellucid_wait_event", "cellucid_wait_ready",
     "cellucid_clear_web_cache", "cellucid_debug_connection", "cellucid_apply_session", "cellucid_read_session",
     "cellucid_apply_plan", "cellucid_history_applied", "cellucid_trackers", "cellucid_tracker", "cellucid_branches",
     "cellucid_branch", "cellucid_groups", "cellucid_group", "cellucid_steps", "cellucid_step", "cellucid_step_state", "cellucid_step_diff",

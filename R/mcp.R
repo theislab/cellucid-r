@@ -14,13 +14,12 @@
 # (cellucid/mcp.py, cellucid/_mcp_core.py); R has no official one. The
 # mcptools package on CRAN serves R functions as tools defined in R (through
 # ellmer), where these tools are the web app's own -- generated into
-# inst/mcp_tools.json, and listed by the open page itself for the person's
-# permissions -- and every call is run by the page, so the protocol is
+# inst/mcp_tools.json, and listed by the open page itself, the same whatever
+# the person's settings -- and every call is run by the page, so the protocol is
 # written here, the part this server needs: the handshake of protocol
 # versions 2024-11-05 to 2025-11-25 (initialize, notifications/initialized),
 # ping, tools/list, tools/call, notifications/cancelled, and the server's own
-# requests elicitation/create and notifications (tools/list_changed,
-# progress); and the per-request protocol 2026-07-28 (its version and the
+# requests elicitation/create and notifications/progress; and the per-request protocol 2026-07-28 (its version and the
 # client's capabilities in each request's _meta, server/discover), whose
 # results say resultType "complete" and carry the server's info, as the web
 # app's relay answers it (relay/mcp.js). A per-request client is not asked
@@ -75,9 +74,9 @@
 .mcp_cache <- new.env(parent = emptyenv())
 
 # The generated document (inst/mcp_tools.json, the web connector's tool list
-# for this package's own action catalogue, written by the web repository's
+# for this package's own action catalog, written by the web repository's
 # scripts/generate-action-catalog.mjs): the tools, the instructions, the
-# status tool and the app names, checked against the catalogue it was made
+# status tool and the app names, checked against the catalog it was made
 # from; each tool's JSON text kept.
 .mcp_tools_document <- function() {
   document <- .mcp_cache$document
@@ -92,7 +91,7 @@
     .abort("mcp_tools.json is not of the schema this cellucid reads")
   }
   if (!identical(document[["catalogDigest"]], .native_sha256(readBin(catalog, "raw", file.size(catalog))))) {
-    .abort("mcp_tools.json was made from another action catalogue than this cellucid's: reinstall cellucid")
+    .abort("mcp_tools.json was made from another action catalog than this cellucid's: reinstall cellucid")
   }
   document$tools_json <- vapply(document$tools, .js_json, "", USE.NAMES = FALSE)
   document$status_json <- .js_json(document$statusTool)
@@ -192,8 +191,6 @@
   # Why the agents folder was refused, when it was (its sentence).
   session$folder_error <- NULL
   session$number <- 0L
-  session$tools_listeners <- list()
-  session$remove_link_listener <- NULL
   session
 }
 
@@ -208,14 +205,7 @@
 # The connection as agent commands carry it ({id, client}).
 .mcp_connection <- function(session) list(id = session$connection_id, client = session$client_name)
 
-.mcp_tools_changed <- function(session) {
-  for (listener in session$tools_listeners) try(listener(), silent = TRUE)
-  invisible(NULL)
-}
-
 .mcp_drop_link <- function(session) {
-  if (!is.null(session$remove_link_listener)) session$remove_link_listener()
-  session$remove_link_listener <- NULL
   if (!is.null(session$link) && !identical(session$link, session$opened)) session$link$close()
   session$link <- NULL
   session$remote_viewer <- NULL
@@ -225,13 +215,9 @@
 # The viewer this process serves itself, once it started (open =); `opening`
 # says it is still starting (its file), or why it failed.
 .mcp_set_opened <- function(session, link, opening = NULL) {
-  if (!is.null(session$remove_link_listener)) session$remove_link_listener()
-  session$remove_link_listener <- NULL
   session$opened <- link
   session$opening <- opening
   session$link <- link
-  if (!is.null(link)) session$remove_link_listener <- link$add_tools_listener(function() .mcp_tools_changed(session))
-  .mcp_tools_changed(session)
   invisible(session)
 }
 
@@ -283,8 +269,6 @@
   link <- .agent_link_of(chosen, session$connection_id)
   session$link <- link
   session$remote_viewer <- chosen[["viewer"]]
-  session$remove_link_listener <- link$add_tools_listener(function() .mcp_tools_changed(session))
-  .mcp_tools_changed(session)
   link
 }
 
@@ -336,9 +320,12 @@
   link
 }
 
-# The tools, handed to `done` as JSON texts: the open page's list for this
-# connection, else the generated one (the person's default settings), and
-# the status tool.
+# The tools, handed to `done` as JSON texts: the open page's list, else the
+# generated one (the same tools when the page is of this package's Cellucid
+# version), and the status tool. Neither depends on the person's settings
+# (the page tells the agent those after its tool results), and the server
+# never says the list changed: an agent app lists it once, and a changed list
+# makes it rewrite its cached prompt.
 .mcp_list_tools <- function(session, done) {
   document <- .mcp_tools_document()
   generated <- function() done(c(document$tools_json, document$status_json))
@@ -393,7 +380,7 @@
   list(name = .mcp_server_name, title = .mcp_server_title, version = as.character(utils::packageVersion("cellucid")))
 }
 
-.mcp_capabilities <- function() list(tools = list(listChanged = TRUE))
+.mcp_capabilities <- function() list(tools = list(listChanged = FALSE))
 
 # A result (its JSON text) as the request's protocol answers it: a
 # per-request client's says it is complete and names the server.
@@ -672,7 +659,9 @@
     .start_viewer(
       path.expand(path), list(), label = path, port = port %||% .default_port, port_given = !is.null(port),
       host = .default_host, allowed_hosts = NULL, serve_web_ui = TRUE, web_cache_dir = web_cache_dir,
-      web_source_url = web_source_url, cache_bytes = NULL, quiet = FALSE
+      web_source_url = web_source_url, cache_bytes = NULL, quiet = FALSE,
+      # The viewer says what opened it: this server, which the agent app runs.
+      runtime = "r-mcp"
     ),
     error = function(error) error
   )
@@ -724,9 +713,6 @@ cellucid_mcp <- function(
   .mcp_tools_document()
   session <- .mcp_session(choice = viewer)
   server <- .mcp_server(session, function(text) .native_stdout_write(charToRaw(paste0(enc2utf8(text), "\n"))))
-  session$tools_listeners <- list(function() {
-    if (server$initialized) .mcp_notify(server, "notifications/tools/list_changed", structure(list(), names = character()))
-  })
   served <- NULL
   # Run before the sink is removed: what stopping the viewer prints still
   # goes to standard error.

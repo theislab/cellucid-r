@@ -19,7 +19,7 @@ INPUT_JSON::
       "arguments": {"dataset_id": ..., "dataset_name": ..., "modality": ...},
       "obs": FRAME,                       # the global cells, in global order
       "obsm": {"X_wnn_umap": MATRIX},     # shared embeddings
-      "obsp": {"connectivities": MATRIX}, # the shared neighbour graph, if any
+      "obsp": {"connectivities": MATRIX}, # the shared neighbor graph, if any
       "modalities": [                     # in mod-order
         {"name": "rna", "X": MATRIX, "obs": FRAME, "var": FRAME, "obsm": {...}}
       ]

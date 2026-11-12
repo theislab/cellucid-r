@@ -1,4 +1,435 @@
-# cellucid 0.9.7 <!-- CELLUCID_VERSION -->
+# cellucid 0.9.8 <!-- CELLUCID_VERSION -->
+
+Version 0.9.8 is the CRAN submission release.
+
+It is a patch release on 0.9.7 and stays in step with the Python package of
+the same version. Stores written by `cellucid_prepare()` and sessions saved
+(format 4) with 0.9.7 are read as before. The viewer protocol is still schema
+5: use this release with the web app of this release.
+
+## The R package
+
+- A cells x genes `DelayedArray` (`gene_expression =`, or an assay
+  transposed with `t()`) is read under its transposition, each block
+  transposed in memory, never through DelayedArray's transposed view: on
+  R 4.1 and 4.2 (Bioconductor 3.14 to 3.16) with the matrixStats 1.x CRAN
+  serves them, a sparse block read through that view stopped
+  `cellucid_prepare()` with "Argument 'useNames' must be either TRUE or
+  FALSE".
+- The viewer token stays out of what is logged or pasted. A printed viewer
+  showed its address with the token (`address:`), and a wait that timed out
+  said `No viewer is connected: open <the address with its token>`; a printed
+  viewer lands in knitted reports and logs, an error in bug reports. Both now
+  say the address without the token and name `viewer$viewer_url`, the
+  address that opens it (`.public_viewer_url()`, which
+  `cellucid_debug_connection()` uses too). The address with it is said only
+  where you are told to open it: `cellucid_serve()`'s message,
+  `cellucid_view(pane = "none")` (which printed nothing, though its help
+  said it prints the address) or a viewer opened outside an interactive
+  session, and `cellucid_mcp(open = )` on stderr.
+- A Zarr store whose declared id or name cannot be read (a damaged chunk)
+  is refused with that sentence ("… Write the store again, or give
+  dataset_id = yourself."), unless the caller names that field:
+  `cellucid_serve()` and `cellucid_view()` no longer need from the store a
+  field given as `dataset_id =` or `dataset_name =`, as cellucid-python.
+
+- A viewer names what opened it to the web app (`_cellucid/info`'s
+  `runtime`, and the agents folder's record): `cellucid_view()` and
+  `cellucid_serve()` say `r`, `cellucid_mcp(open = )` says `r-mcp` (it said
+  `r`), so the viewer's sentences name "the R session" or "the agent app's
+  cellucid_mcp() server" ("… which opened this viewer, stopped (its server
+  no longer answers). … Restart the cellucid_mcp() server in the agent
+  app."), not "the notebook or R session". The shared viewer protocol file
+  lists every runtime with its label and language.
+- `cellucid_field_summary()` takes `within`: summarize over the cells of some
+  categories of another field, or in a range of a continuous field or gene,
+  without filtering the viewer.
+- `cellucid_history_summary()` returns the notes on the tracker, each branch,
+  group and turn in full (each with its id, text, author and time), not their
+  counts; a turn's former `summary` is the first of its `notes`. A received
+  session's branch notes were otherwise unreadable to an agent or a script.
+- `cellucid_field_restore()` and `cellucid_field_purge()` take `which`: when
+  two deleted fields have one name, which of them, in the order the web app's
+  **Deleted fields** lists them (named by the name alone, the request was
+  refused with no way to name either).
+- The identity a Zarr store declares (`uns/cellucid` id and name) is read
+  checking every count and length its vlen-utf8 chunk states against the
+  bytes it holds (R9Z-3): four bytes stating 2^31 - 1 strings allocated a
+  character vector that long before anything was read. Such a chunk is
+  refused as a damaged store.
+- A viewer stopped with `cellucid_stop()` says **Viewer stopped** on its
+  frozen last view (the web app of this release), as one whose R session went
+  away does; it froze without a word.
+- Offline, the cached web app is served as before, now saying so also when
+  `quiet`, and the error when nothing can be served names what is missing
+  ("no copy of it is cached in …" or "the copy cached in … does not check
+  out (…)") and how to get the app, in the words cellucid-python now uses too.
+- A new build of the web app is staged from the files the cache already holds
+  unchanged, and the others are downloaded six at once (one at a time, the
+  1,209 files of a build took minutes); the build the cache holds is used as
+  before, as cellucid-python now does too.
+- `cellucid_prepare()` refuses a `bit64::integer64` column saying to write
+  identifiers `as.character()` (the viewer reads integers past 2^53 as text,
+  F116) or counts within 2^53 `as.numeric()`, and refuses an element name
+  longer than 255 bytes in UTF-8, the longest file name every platform takes.
+- `cellucid_apply_session()` takes a logical column's categories as `false`
+  and `true`, as the viewer shows them: a label renamed in the viewer is
+  written (the column becomes text) instead of "holds numbers, not
+  categories".
+- The embeddings a store opens with treat every width alike, as the web app
+  and cellucid-python now do (shared conformance fixture, version 9): the
+  default rule names the UMAP's width and every other width takes its
+  best-ranked array, so `X_umap` beside `X_umap_3d` names both 2D and 3D
+  (`.resolve_embedding_slots`, checked against every `embeddingSlots` case).
+- The default neighbor graph rule takes a MuData modality's own graph
+  (`'<modality>:connectivities'` of the modality a dataset opens with) after
+  the dataset's `connectivities`, as the web app and cellucid-python now do
+  (shared data-mapping conformance fixture, version 8): a MuData whose graph
+  is in a modality, as scanpy and cellucid-python's `prepare()` write it,
+  opens with that graph in the viewer.
+- `cellucid_mapping_set()` (the viewer's `mapping.set`) moves the genes groups
+  it does not name with a named expression matrix or modality, as the
+  viewer's Data mapping panel does: a gene-name or highly-variable column the
+  new matrix's var axis has is kept, else that axis's default. A session
+  saved on `X` with `highly_variable` restores onto a file that opens on
+  `raw.X`.
+- `cellucid_freeze()` is removed. `cellucid_stop()` tells an open page to
+  freeze before it stops serving it; called on its own, `cellucid_freeze()`
+  froze a page R still served, and cellucid-python has no such call.
+- `cellucid_prepare(total_counts_over =)` (new) says what the column
+  `total_counts` names covers: `"all genes"` (the default) or
+  `"source panel"`, every gene of the source's gene panel -- a targeted or
+  integration panel, more genes than are stored but not the whole
+  transcriptome -- recorded as the `over` of `uns['cellucid']['totalCounts']`
+  (the specification's third value) and kept when an object carrying the
+  record is prepared again. With several modalities, one value or
+  `c(RNA = "source panel")`. cellucid-python's `prepare(total_counts_over=)`
+  is the same.
+- `cellucid_prepare()` writes a column's colors (`obs_colors =`, or those
+  an object holds) only when each category's is hex (`#rrggbb`, `#rgb`,
+  `#rrggbbaa`), the forms the viewer reads: a palette holding a named color
+  (`"red"`) was written and the viewer opened the column in its own colors.
+  Given as `obs_colors =`, it is refused; held by the object, left out with a
+  message. cellucid-python's `prepare()` checks the same.
+- `cellucid_view()` and `cellucid_serve()` refuse a file Cellucid does not
+  open in the web app's words, as cellucid-python does: "<path> is not a file
+  Cellucid opens (an .h5ad file, …, an .rds file, … or a .zarr.zip archive)."
+  It listed one hand-picked ending per format (`.rds.gz`, `.rdata.gz`, and the
+  refused `.h5seurat`).
+- `cellucid_view()` and `cellucid_serve()` say why a viewer could not bind
+  its address in cellucid-python's sentence, with R's spelling: a `host`
+  this machine cannot serve from ("Host 'x' is not an address this machine
+  can serve from. Use host = \"127.0.0.1\" ...") and a chosen `port` already
+  in use ("Port 9000 is already in use on 127.0.0.1, ..."). A bad host was
+  said as a port taken ("Could not serve on not a host:8765 (Failed to
+  create server). Choose another port, ...").
+- `cellucid_prepare()` and `cellucid_view()` write a dataset's name,
+  description, citation text and source name with white space at either end
+  removed, as the web app now reads them (it refused a whole file whose
+  description ended in a space); identifiers keep the strict rule. The same
+  in cellucid-python.
+- `cellucid_prepare(data = seurat)` names every layer of an assay it does not
+  write: `counts` beside the `data` it writes, and `scale.data`, in a v3
+  assay as in a v5 one (`assays$RNA layers not read: c("counts",
+  "scale.data")`), as cellucid-python names the layers and `raw` of an
+  AnnData. A v3 assay's were left out unsaid, and a v5 assay's `counts`.
+- US spelling throughout the package's messages and help ("neighbor graph",
+  "normalizes", "catalog", "labeled"), as in the web app and the Python
+  package. Names are US too: `cellucid_expression_transform_set(normalize =)`,
+  `cellucid_vector_field_summary(neighbors =)` and its result's `neighbors`,
+  `center` in `cellucid_camera_framing()`'s groups, and the expression values
+  `list(normalize, log1p)` a session and `cellucid_apply_session()`'s record
+  hold (a step recorded with `normalise` replays as `normalize`).
+- A change the viewer applied without a step of its history now says why.
+  The viewer's `action_result` carries `unrecorded` (`"unchanged"`: it was so
+  already; `"retracted"`: it put back the step just before it, which was
+  taken out; `"off"`: the History settings leave this kind of change out;
+  `"paused"`; `"elsewhere"`: another tracker was shown meanwhile;
+  `"no-history"`: the dataset's history has not started), kept as
+  `request$unrecorded` and printed with the request; `cellucid_action_result()`
+  returns the outcome and warns it (class `cellucid_action_not_recorded`), as
+  in "cellucid_color_by(): it changed nothing (it was so already), so no step
+  was recorded." A read records no step by nature and warns nothing. Before,
+  `request$step` was `NULL` with no reason, whether the change happened or
+  not (cellucid-python's `ActionRequest.unrecorded`; the shared viewer
+  protocol fixture re-pinned).
+- `cellucid_dataset_summary()` lists every embedding the viewer's data
+  mapping offers, on or off, with its obsm `key`, `columns`, `width`,
+  `enabled`, `usable` and `reason`: the names `cellucid_view_embedding_set()`
+  and `cellucid_mapping_set()` take (it listed the embeddings shown by name
+  and dimension only).
+- `cellucid_apply_session()` writes every categorical user field with the
+  colors it is shown in, where the object keeps what an AnnData keeps in
+  `uns`, under Scanpy's name `<key>_colors` (Seurat `misc`, `metadata(x)` --
+  which zellkonverter carries to `uns` -- or a data frame's attribute; one
+  `#rrggbb` a level, every level): in the view in focus at the applied step,
+  the color the person or an agent gave a level (the session's `colors`
+  value), else the color it opens with -- its `palette` (read and checked: a
+  field made from highlight pages opens in its pages' colors), else
+  Cellucid's own category colors by position (the web app's
+  `getCategoryColor`, ported in `R/category-colors.R` and pinned by the
+  shared fixture `category_default_colors.json` in the three repositories).
+  The plan's colors row stays `not-applied` -- every other color is how the
+  data was shown -- and says so when a field's colors went with its column.
+  A column's colors follow it in every write of an apply and a pull: a
+  column without categories (a highlight group, a continuous field) has none
+  (stale colors under its name are removed); a renamed column carries its
+  colors; merged levels keep their first level's color (colors that did not
+  cover the levels are removed); a text column relabeled loses them; a
+  column a viewer pull removes takes them along. `cellucid_pull()` of a
+  session file writes a field's colors the same way, under the column name
+  it writes. Before, no colors were written but a highlight-page field's
+  palette (a grouped or merged field's chosen colors never reached the
+  object), and a rename or a merge left colors that described another
+  column. cellucid-python and the web app's **Save AnnData with this state…**
+  write the same.
+- A column of the object (`seurat_clusters`, `cell_type`; a factor) recolored
+  in the view in focus is written with the colors it is shown in too, in the
+  same place: one `column-colors` row of the apply plan per column, the levels
+  recolored, the rest in the colors the column opens with (its own
+  `<column>_colors` as the viewer draws them, else Cellucid's), under the
+  column's name once the apply's renames are made; `unchanged` when the
+  object holds them already; `not-applied`, saying why, for a column that is
+  not a factor or one with none of the levels recolored. Before, the colors a
+  person gave a dataset column never reached the object. And
+  `cellucid_pull()` from a live viewer writes a categorical field's colors:
+  each categorical result of the viewer protocol carries the colors the view
+  in focus shows it in (`colors`, one `#rrggbb` a category), checked when it
+  arrives. Before, a viewer pull wrote no colors. cellucid-python and the web
+  app's copy do the same.
+- A viewer given another `dataset_id =` than the one its object declares
+  (`cellucid_view(object, dataset_id = )`, or a Zarr store's own id) takes
+  its own session back: `cellucid_apply_session(object, request)` refused
+  it, since the session is saved under the id served and the object declares
+  its own. A viewer's request now names the id it served the object under
+  for an object declaring the id the viewer's data declared (the viewer
+  keeps it, `declared_id`); `cellucid_apply_session()` and `cellucid_pull()`
+  of a session file take `dataset_id =` among the arguments
+  `cellucid_view()` was given, the id the object was shown under, and the
+  refusal says to name it. A session of another dataset is refused as
+  before, and the cell count, data mapping and cell order are checked as
+  always.
+- The object's cellucid record is read by its exact name: `misc$cellucid` and
+  `metadata(x)$cellucid` were read with `$`, which matches a partial name, so
+  an object holding a `cellucid_highlight__..._colors` entry (as Scanpy writes
+  after plotting a highlight column, carried over by zellkonverter) and no
+  record was read as if that were its record: every apply and pull of it was
+  refused ("The object's cellucid record must be a list"), and
+  `cellucid_prepare()` refused it too ("misc$cellucid must be a list ...").
+- `cellucid_category_delete()` moves the cells into `"Unassigned"` by default
+  (the one spelling of cells without a label, as Create categorical's; it was
+  `"unassigned"`).
+- `cellucid_pull()` of a field's obs-column CSV keeps the field's categories
+  and their order: the web app writes a third row, `categories`, holding each
+  categorical column's categories in the field's order as a JSON array of
+  strings, and the factor's levels are that list. They came back in the order
+  the rows first showed them, so Pancreas `clusters` lost its trajectory
+  order and a category no cell held was lost. A label the row does not list,
+  a categorical column without a list and a CSV without the row (the two-row
+  layout of earlier exports) are refused; export the field again.
+- `cellucid_view_rename()` (new, generated from the viewer's `view.rename`)
+  names a view or, with `NULL`, takes its name away; it shows beside the
+  view's number in the viewer and titles its panel in an all-views figure.
+  `cellucid_view_keep(name = ...)` keeps and names a view in one step;
+  `cellucid_views_state()` and `cellucid_view_picture()` give each view's
+  name (`label`).
+- `cellucid_vector_field_summary()` (new, generated from the viewer's
+  `vector-field.summary`): where the cells of each category are heading
+  along a vector field (RNA velocity) in the embedding a view shows: their
+  speed against the average cell, how aligned their arrows are, the mean
+  direction, and the categories their arrows lead into.
+  `cellucid_view_picture()` takes `source = "screen"` (the view as drawn,
+  the vector field's flow included) or `source = "export"` (the whole figure
+  as the viewer's Export would write it now, with its Figure export
+  settings, nothing written) and `cellucid_annotation_suggestions()`
+  takes `pull` (it pulls the repository first when the browser never did).
+- `cellucid_annotation_publish(viewer, votes = list(...), suggestions = list(...))`
+  (new, generated from the viewer's `annotation.publish`) votes and suggests
+  community annotation labels together, published as one commit of the
+  person's file and asked of them once (cellucid-python's
+  `annotation_publish()`); `cellucid_annotation_vote()` and
+  `cellucid_annotation_suggest()` are removed with the viewer's actions.
+- `cellucid_history_saved_open()` (new, generated from the viewer's
+  `history.saved.open`, an agent's opening of a saved state to continue it):
+  the viewer refuses it from R, as `cellucid_dataset_open()`, since a
+  notebook's viewer shows the dataset its notebook serves.
+- `cellucid_layout_panel_dock_all()` (new, generated from the viewer's
+  `layout.panel.dock-all`, the sidebar's new **Dock all** button): docks
+  every floating sidebar section back into its place, as one step.
+- `cellucid_prepare()` records each cell's total count (its library size)
+  when `X` holds counts: `obs['total_counts']`, the sum of each row of `X` as
+  written, with `uns['cellucid']['totalCounts']` (`over = "stored genes"`),
+  so the web app normalizes a gene from one column instead of reading every
+  gene once. `total_counts` names the object's own column computed over every
+  gene (`"nCount_RNA"`; several modalities: `c(RNA = "nCount_RNA")`),
+  recorded `over = "all genes"` and refused when it is below a cell's stored
+  genes' sum or `X` holds no counts; each counts modality of a multimodal
+  object gets its own `mod/<name>/obs/total_counts`. The same as
+  cellucid-python's `prepare(total_counts=)`, byte for byte.
+- `cellucid_prepare()`, `cellucid_view()` and `cellucid_serve()` of an object
+  keep Scanpy's colors of the columns they write: each categorical `obs`
+  column's colors the object holds (`misc[["<column>_colors"]]` of a Seurat
+  object, `metadata(x)[["<column>_colors"]]`, where zellkonverter keeps
+  `uns`, and where `cellucid_apply_session()` writes them) are written as
+  `uns['<column>_colors']`, so the viewer opens the column in them instead of
+  Cellucid's colors. `obs_colors` (new) gives or replaces them
+  (`list(cell_type = c("#1f77b4", ...))`; `list()` writes none). Colors that
+  cannot color the written column (not text, fewer than its categories, a
+  column not written as a categorical) are left out with a message, or
+  refused when given. Before, every column's colors were dropped. The same
+  rule as cellucid-python's `prepare(obs_colors=)`; the Cellucid-ready
+  AnnData specification states it.
+- `cellucid_apply_session()` records the expression values the genes were
+  shown in at the step applied: each record of `cellucid$history_applied`
+  (`cellucid_history_applied()`) has `expression`, `list(normalize, log1p)`
+  as the step's **Expression values** held it (`NULL` for a session without
+  them), so a notebook knows what the person looked at. Recorded, never
+  applied: the object's expression values stay as stored. The same field as
+  cellucid-python's `apply_cellucid_session_to_anndata()` and the web app's
+  **Save AnnData with this state…** (history model, shared golden
+  provenance).
+- One spelling, as in the web app: the help and messages say color, colored,
+  coloring (they said "colour" in places), and so do the generated functions'
+  titles and the step names a saved history holds.
+- US spelling everywhere else too: DESCRIPTION, the help, the vignettes and
+  the messages said `neighbour graph`, `catalogue`, `labelled` and `centre`
+  in places; now "neighbor", "catalog", "labeled", "center". A new test,
+  `test-spelling.R`, reads every message of `R/`, the help pages, the
+  vignettes, README, DESCRIPTION and this release's section of this file against
+  the British word list the web app and cellucid-python share
+  (`tests/testthat/fixtures/spelling.json`, byte for byte, pinned by digest).
+- A refusal the viewer answers when the person stops a dataset's or a saved
+  state's loading has the code `canceled` (it was `cancelled`), as the web app
+  spells it; `history.branch.cancel` still answers `cancelled`.
+- The methods paragraph writes a share of the cells as the web app's
+  `formatShare` does: whole from 10% (never 100% short of every cell), two
+  significant figures below ("5.5%", where it said "6%"; "99%" for 19,999 of
+  20,000 cells, where it said "100%").
+- The action catalog shipped with the package (`inst/action_catalog.json`)
+  is the web app's of this release: an action may declare what it captures
+  (`captures`), so a camera path keyframe is never marked stale when the
+  camera moves on.
+- `cellucid_figure_export_get()` reads the viewer's Figure export settings,
+  by the names `cellucid_figure_export_set()` takes.
+- `cellucid_figure_export_set(frame = "cells")` frames every cell the figure
+  draws, as the viewer's **Fit the cells** does, so a plot takes the cells'
+  shape instead of a narrow pane's; `svg_strategy` is never `NULL` (an SVG is
+  full vector until another strategy is chosen), as the viewer's
+  `figure-export.set` version 2.
+- `cellucid_figure_export_set()` sizes the figure as it is printed, as the
+  viewer's `figure-export.set` version 3: `width` is the figure's width in
+  millimetres (or `size_preset = "single-column"`, `"one-and-half-column"`,
+  `"double-column"`), which the figure fills at its own height, and
+  `font_sizes` are points; `height` is gone. "180 mm wide" is `width = 180`.
+- `cellucid_highlight_category()` takes `categories`, one or more labels of
+  one field (was `category`, one): each becomes a group of the page in one
+  step of the viewer's history, one undo for all of them, as the viewer's
+  action `highlight.category` version 2 does.
+- `cellucid_highlight_cells()` without `label` makes a group named
+  "Highlight" (the viewer's list shows its cell count), not "Highlight (N
+  cells)"; its help page and the `cellucid_mcp()` tool say so.
+- `cellucid_analysis_export()` writes an analysis's result table as the
+  viewer's expanded view's CSV button does (marker genes, with `all = TRUE`,
+  every gene of every group); `cellucid_category_merge()` takes `label`, the
+  merged category's name (giving the `into` category's own name keeps it).
+- `cellucid_camera_framing()` says where cells sit in a view and gives
+  cameras framing the whole view, each category of a field and the
+  categories named together, from an azimuth and elevation;
+  `cellucid_camera_path_play()`, `cellucid_camera_path_stop()` and
+  `cellucid_camera_path_get()` play, stop and read the viewer's camera path.
+- `cellucid_field_group()` makes a new categorical field of groups of a
+  field's categories in one step (`groups`: a list of `list(label =,
+  categories =)`; `rest`, `name`); `cellucid_dataset_open()` takes `count` or
+  `fraction` (and `method`, `seed`, `field`, `allocation`, `embedding`) to
+  open a subsample at once, and `cellucid_cells_open()` takes `fraction`
+  beside `count`.
+- `cellucid_camera_path_keyframe_add()` takes `hold` and
+  `cellucid_camera_path_hold_set()` sets a keyframe's hold (or every
+  keyframe's): the seconds the camera rests there before moving on.
+- `cellucid_camera_path_stop()` stops a path `cellucid_camera_path_play()` is
+  still playing, at once (it waited for the path to end and was then
+  refused), and returns `stopped`; `FALSE` when nothing played. It and
+  `cellucid_analysis_cancel()` are documented as stopping work under way
+  (the catalog's new effect `control`).
+- A camera path that `cellucid_camera_path_play()` (or an agent) is playing
+  when the person stops the turn, or the call is canceled, stays where the
+  film stopped, as `cellucid_camera_path_stop()` leaves it, and the play's
+  step holds that camera; any other change stopped is still rolled back.
+- `cellucid_camera_path_playback_set()` takes `captions`: a playing camera
+  path shows each named keyframe's label as a caption over the plot (on by
+  default); `cellucid_camera_path_get()` reads it.
+- A looping camera path that `cellucid_camera_path_play()` started belongs
+  to the turn that started it: the person's Stop of that turn stops it where
+  the camera is. A stopped path's playback bar shows where the film stopped.
+- A parameter the viewer refuses for its form says the form ("must be a
+  name with no space at its start or end", "must be a view name such as
+  \"View 2\"", "must be like \"s3\""), in the error a call raises, instead of
+  "does not have the expected form".
+- `cellucid_view(path, ...)` and `cellucid_serve(path, ...)` take
+  `knn_key` (the `obsp` graph drawn) and `expression_source` (`"X"`,
+  `"raw"` or `"layer:<name>"`, the matrix genes are read from), the launch
+  defaults cellucid-python's `serve_anndata()` states for a file; R refused
+  both.
+- `cellucid_wait_event(viewer, event, timeout, predicate)` returns the next
+  event of a kind, as Python's `viewer.wait_for_event()`.
+- `cellucid_on()` takes `"message"`, every event before its own handlers with
+  its kind as `event` (Python's `on_message`), and refuses an event the viewer
+  never sends with the list of those it does, the names Python's hooks take
+  (pinned to the shared protocol fixture); it partially matched (`"sel"`
+  was `"selection"`) and refused with R's generic words.
+- `cellucid_debug_connection()` reports `viewer_url` without the viewer
+  token (the report is what you paste when asking for help; the page's own
+  debug snapshot left it out already); `viewer$viewer_url` is the address to
+  open. Python's `debug_connection()` does the same.
+- `cellucid_mcp()` advertises `tools.listChanged: false` and never sends
+  `notifications/tools/list_changed`: the agent's tool list is the same
+  whatever the person's settings (the viewer tells the agent those after its
+  tool results), so changing a setting or reloading the page no longer
+  makes the agent app rewrite its cached prompt and drop the agent's earlier
+  reasoning (a permission change made the next turn cost about 4× its cached
+  price on Opus 5.5). The viewer channel's `agent_tools_changed` event is
+  gone, as in cellucid-python.
+- The agents folder's owner is checked by user id, as cellucid-python checks
+  it: a user with no name (a container's or a cluster job's uid without a
+  passwd entry) had its own folder refused as "another user owns it", so no
+  viewer was published and `cellucid_mcp()` found none.
+- A session file holding a value nested more deeply than R's stacks follow is
+  refused with "This session file holds a value nested more deeply than this
+  package reads …" (R 4.4 and later; cellucid-python says the same), not R's
+  "evaluation nested too deeply" error.
+
+## In the web app
+
+- `cellucid_field_create_from_pages()` takes `rest`, a categorical column
+  whose category the cells on no page keep (splitting one label is one
+  call), and `cellucid_highlight_page_delete()` takes `pages`, several pages
+  deleted in one step. A session file given to `cellucid_serve()` is refused
+  with a sentence naming the web app's way in: a dropped session file now
+  loads there, its dataset opened with it.
+
+The viewer of this release opens a dataset with no starting view (an object
+served from R among them) colored by its best categorical field: a cell
+type, another annotation, a lineage, clusters, the tissue, a condition or the
+cell-cycle phase, never a sample, batch, id or quality flag; the analyses'
+default fields and the agent chat's starters follow the same order. The
+Filters list names the smaller side of a legend, a highlight group is named
+by what it holds ("NK + ILCP") with its count beside it, a category name cut
+short in the legend shows whole on a click, a background you never picked
+follows the theme, a drag brought back to where it began leaves no history
+step, and Load... names an autosave by its latest step. A dataset opened
+whole is shared whole, and a sample opened in volumetric smoke keeps its
+starting view. Analyses name
+every gene and group of a dot plot, rank tied volcano-plot genes by their
+test statistic and list their display options in the expanded view; PNG
+figures record their DPI and a Hybrid SVG draws its points at 300 dpi. A
+local server (`cellucid_serve()`, `cellucid_view()`) is never paced as a host
+that blocks networks. A gene colors a kept view (it did nothing), and a
+cell near the camera is drawn up to 160 pixels across (was 128), whole and
+opaque however near the camera comes. See the
+documentation and the cellucid-python changelog
+for the details.
+
+# cellucid 0.9.7
 
 Version 0.9.7 is the CRAN submission release.
 

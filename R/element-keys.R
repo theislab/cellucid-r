@@ -7,6 +7,10 @@
 # Characters Windows refuses in a file name, plus the path separators.
 .element_key_forbidden <- "[/\\\\<>:\"|?*\u0001-\u001f]"
 .zarr_metadata_names <- c(".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json")
+# The longest name, in UTF-8 bytes, every platform takes as a file name: Linux
+# file systems count 255 bytes, macOS 255 UTF-8 characters, Windows 255 UTF-16
+# units, and a name's UTF-8 bytes are never fewer than either of those.
+.max_element_name_bytes <- 255L
 
 .validate_element_key <- function(key, what) {
   if (!is.character(key) || length(key) != 1L || is.na(key) || !nzchar(key)) {
@@ -26,6 +30,12 @@
     base <- toupper(strsplit(key, ".", fixed = TRUE)[[1L]][[1L]])
     if (base %in% c("CON", "PRN", "AUX", "NUL") || grepl("^(COM|LPT)[1-9]$", base)) {
       problem <- "is a reserved device name on Windows"
+    } else if (nchar(enc2utf8(key), type = "bytes") > .max_element_name_bytes) {
+      bytes <- nchar(enc2utf8(key), type = "bytes")
+      problem <- paste0(
+        "is ", .format_count(bytes), " ", .plural(bytes, "byte", "bytes"),
+        " long in UTF-8, longer than the ", .max_element_name_bytes, " a file name may be"
+      )
     }
   }
   if (!is.null(problem)) {
@@ -40,7 +50,9 @@
 
 # Names that live side by side in one group must differ by more than letter
 # case: on macOS and Windows "Sex" and "sex" are the same folder, and one
-# would overwrite the other.
+# would overwrite the other. (The web app and cellucid-python also fold the
+# Unicode form, NFC; base R has no Unicode normalization, and a name written
+# in two forms is left to the file system here.)
 .require_distinct_element_keys <- function(keys, what) {
   folded <- tolower(keys)
   repeated <- which(duplicated(folded))

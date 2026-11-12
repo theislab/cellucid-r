@@ -1,5 +1,5 @@
 # A data mapping: what a session's viewer plotted and read (the embeddings
-# shown, the neighbour graph, the gene names, the expression matrix, the
+# shown, the neighbor graph, the gene names, the expression matrix, the
 # latent space, the vector fields, and for a dataset of several modalities
 # which one). A session file records the mapping it was saved with, and
 # cellucid_apply_session() checks it against the object before applying

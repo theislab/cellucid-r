@@ -28,7 +28,7 @@ Python compute it. Any count from 1 is a
 selection here; the web app opens a subsample of at least 2 cells, since one
 cell has no coordinate variation to draw.}
 \item{method}{\code{"uniform"} (every cell alike), \code{"blocks"} (runs of
-\code{block_size} neighbouring cells in file order, kept together),
+\code{block_size} neighboring cells in file order, kept together),
 \code{"stratified"} (split over the categories of \code{groupby}) or
 \code{"spatial"} (split over the occupied boxes of a \code{grid_size} grid on
 \code{basis}, balanced, so sparse regions keep their cells).}

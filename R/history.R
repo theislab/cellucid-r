@@ -31,7 +31,7 @@
 
 # Each state domain's name, as a person reads it (app/actions/domains.js DOMAINS).
 .history_domain_names <- c(
-  cells = "Open cells", mapping = "Data mapping", `field-overlays` = "Fields and labels", `gene-sets` = "Gene sets",
+  cells = "Open cells", mapping = "Data mapping", expression = "Expression values", `field-overlays` = "Fields and labels", `gene-sets` = "Gene sets",
   views = "Views", `active-field` = "Active field", filters = "Filters", colors = "Colors", visibility = "Hidden cells",
   highlights = "Highlights", camera = "Camera", `camera-path` = "Camera path", settings = "Settings",
   analysis = "Analysis", layout = "Layout"
@@ -485,7 +485,7 @@ cellucid_journal <- function(tracker) {
       next
     }
     if (!identical(was$name, page$name)) lines <- c(lines, paste0("Highlight page \"", was$name, "\" renamed \"", page$name, "\""))
-    if (!identical(was$color, page$color)) lines <- c(lines, paste0("Highlight page \"", page$name, "\" recoloured"))
+    if (!identical(was$color, page$color)) lines <- c(lines, paste0("Highlight page \"", page$name, "\" recolored"))
     groups_a <- stats::setNames(was$groups, vapply(was$groups, function(group) group$id, ""))
     groups_b <- stats::setNames(page$groups, vapply(page$groups, function(group) group$id, ""))
     for (group_id in names(groups_b)) {
@@ -558,7 +558,7 @@ cellucid_step_diff <- function(tracker, a, b, other = NULL) {
 
 # --- Who took a step, the methods paragraph, the pseudocode ---------------------------
 
-.history_method_domains <- c("mapping", "field-overlays", "gene-sets", "active-field", "filters", "visibility", "highlights", "analysis")
+.history_method_domains <- c("mapping", "expression", "field-overlays", "gene-sets", "active-field", "filters", "visibility", "highlights", "analysis")
 
 # Who acted (a By record: step$by, note$by): a key for its look and a short name (originOf).
 .history_origin_of <- function(by) {
@@ -662,7 +662,7 @@ cellucid_step_diff <- function(tracker, a, b, other = NULL) {
 }
 
 .history_subsample_methods <- c(
-  blocks = "in blocks of neighbouring cells", uniform = "uniformly at random", stratified = "stratified by a field",
+  blocks = "in blocks of neighboring cells", uniform = "uniformly at random", stratified = "stratified by a field",
   spatial = "spatially"
 )
 
@@ -675,7 +675,9 @@ cellucid_step_diff <- function(tracker, a, b, other = NULL) {
   open <- dataset$open_cells
   if (!is.null(open) && open$open < open$of) {
     percent <- 100 * open$open / open$of
-    share <- if (percent >= 1) paste0(floor(percent + 0.5), "%") else paste0(.js_numbers(signif(percent, 2)), "%")
+    # The web app's formatShare: whole from 10 (never 100 short of every
+    # cell), two significant figures below.
+    share <- if (percent >= 10) paste0(min(99, floor(percent + 0.5)), "%") else paste0(.js_numbers(signif(percent, 2)), "%")
     method <- .history_subsample_methods[open$method]
     seed <- if (!is.null(open$seed)) paste0(" with seed ", open$seed) else ""
     how <- paste0("was opened on ", .history_format_count(open$open), " of its ", .history_count_of(open$of, "cell"), " (", share, ")",

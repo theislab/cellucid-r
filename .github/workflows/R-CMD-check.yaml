@@ -58,7 +58,7 @@ jobs:
       # to what both packages write or serve, to a cellucid-python commit
       # already on GitHub (cellucid-python's docs: R package > developer docs
       # > Testing and CI).
-      CELLUCID_PYTHON_COMMIT: 7d85085b95528f6283e86f1f6b45b07cbeb360be
+      CELLUCID_PYTHON_COMMIT: acca13606d189249ac5500bae3b957f9b107df73
       # Without the suggested packages the checks that need them skip, naming
       # what is missing.
       _R_CHECK_FORCE_SUGGESTS_: ${{ matrix.config.suggests == 'none' && 'false' || 'true' }}
@@ -102,6 +102,52 @@ jobs:
             ${{ matrix.config.suggests == 'none' && 'any::knitr any::rmarkdown any::testthat' || '' }}
           dependencies: ${{ matrix.config.suggests == 'none' && '"hard"' || '"all"' }}
           needs: check
+
+      # The siblings the cross-repository tests compare with
+      # (tests/testthat/helper-repository.R): the web app's main, fetched
+      # after the dependencies are installed so a day's pushes of the three
+      # repositories have landed, and cellucid-python at
+      # CELLUCID_PYTHON_COMMIT, the commit this package pins. They go outside
+      # the package (R CMD build never sees them) and are named by their
+      # roots, since under R CMD check nothing is beside the sources;
+      # CELLUCID_SIBLINGS_REQUIRED makes a missing one, or a missing Node,
+      # fail those tests instead of skipping them.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Fetch the web app and cellucid-python for the cross-repository tests
+        shell: bash
+        run: |
+          fetch() {
+            local repository=$1 ref=$2 dir=$3
+            shift 3
+            git init -q "$dir"
+            git -C "$dir" remote add origin "https://github.com/theislab/$repository"
+            # The patterns go in on standard input: as arguments, Git for
+            # Windows' shell rewrites a leading "/" into a Windows path
+            # ("/assets/js/" became "C:/Program Files/Git/assets/js/"), the
+            # patterns matched nothing, and the checkout was empty.
+            printf '%s\n' "$@" | git -C "$dir" sparse-checkout set --no-cone --stdin
+            git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$ref"
+            git -C "$dir" checkout -q FETCH_HEAD
+            # A checkout without what was asked for stops here, naming it,
+            # not later as eleven failed tests.
+            local pattern
+            for pattern in "$@"; do
+              ( cd "$dir" && [ -e ".$pattern" ] ) || { echo "::error::$repository at $ref has no $pattern after the sparse checkout"; exit 1; }
+            done
+          }
+          fetch cellucid main "$RUNNER_TEMP/cellucid" \
+            /assets/external/ /assets/js/ /assets/wasm/ /assets/workers/ /scripts/ /tests/fixtures/
+          fetch cellucid-python "$CELLUCID_PYTHON_COMMIT" "$RUNNER_TEMP/cellucid-python" \
+            /pyproject.toml /src/cellucid/ /tests/fixtures/ /tests/cross_writer_mudata.py
+          {
+            echo "CELLUCID_WEB_ROOT=$RUNNER_TEMP/cellucid"
+            echo "CELLUCID_PYTHON_ROOT=$RUNNER_TEMP/cellucid-python"
+            echo "CELLUCID_SIBLINGS_REQUIRED=1"
+          } >> "$GITHUB_ENV"
 
       # Python with cellucid, anndata, zarr and mudata, for the tests against
       # Python (cross-writer, served cross-language and interoperability). The

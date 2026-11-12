@@ -1,17 +1,17 @@
 # Actions: everything R changes or reads in an open viewer. The viewer's
-# action catalogue (inst/action_catalog.json, written by the web app's
+# action catalog (inst/action_catalog.json, written by the web app's
 # scripts/generate-action-catalog.mjs, byte for byte the web app's
 # tests/fixtures/action-catalog.json and cellucid-python's copy, SHA-256 pinned
 # in all three) names every action a person can take in the viewer, with its
 # parameter schema; cellucid_act() sends any of them, and
 # R/actions-generated.R holds one function per action, generated from the
-# catalogue by tools/generate-actions.R (with its help page and its export),
+# catalog by tools/generate-actions.R (with its help page and its export),
 # so an action the viewer adds reaches R by regenerating, never by hand.
 #
 # An action is one `action` command (R/viewer-protocol.R): sent at once, or
 # kept until the viewer's channel opens, as every command is. The viewer
 # applies it as a person's control would -- one step of its history,
-# labelled as R's, undone like any other -- and answers with one
+# labeled as R's, undone like any other -- and answers with one
 # action_result (its outcome, a read's result, and the step it made) or one
 # command_error with the reason it refused. Nothing waits for the answer:
 # the request comes back at once, and cellucid_action_result() collects the
@@ -29,7 +29,7 @@
 
 .action_catalog_cache <- new.env(parent = emptyenv())
 
-# The actions of the catalogue this package carries, by dotted type.
+# The actions of the catalog this package carries, by dotted type.
 .action_catalog <- function() {
   actions <- .action_catalog_cache$actions
   if (is.null(actions)) {
@@ -97,7 +97,7 @@
 }
 
 # One parameter's R value as the JSON value (with typed arrays) its schema
-# describes; `schema` NULL: a parameter the catalogue does not describe, sent
+# describes; `schema` NULL: a parameter the catalog does not describe, sent
 # as JSON of its shape.
 .action_value <- function(viewer, value, schema, label) {
   if (is.null(value)) return(NULL)
@@ -142,7 +142,7 @@
 }
 
 # The parameters of `action`, converted to its schema (`entry` the
-# catalogue's; NULL for an action it does not describe).
+# catalog's; NULL for an action it does not describe).
 .action_params <- function(viewer, entry, params) {
   if (length(params) > 0L && (is.null(names(params)) || any(!nzchar(names(params))))) {
     .abort("Name every parameter of an action, for example field = list(source = \"obs\", key = \"cell_type\").")
@@ -333,7 +333,13 @@ cellucid_action_result <- function(request, timeout = 60) {
     .wait_for(viewer, function() .action_answered(record), timeout, paste0("the answer to ", record$caller))
   }
   switch(record$state,
-    answered = record$outcome,
+    answered = {
+      # A change the viewer applied without a step of its history says why
+      # (a read records none by nature, and says nothing); the outcome is
+      # returned all the same.
+      if (!is.null(record$unrecorded)) .warn_not_recorded(record)
+      record$outcome
+    },
     refused = .abort("The viewer did not take ", record$caller, ": ", record$reason),
     stopped = .abort("The viewer was stopped before it answered ", record$caller, ".")
   )
@@ -341,7 +347,8 @@ cellucid_action_result <- function(request, timeout = 60) {
 
 # Fields a request answers by name: its id, its action, whether it was
 # answered (done), the history step it made (step: list(id, label), or NULL
-# for a read or a change that changed nothing) and its state.
+# for a read or a change that made none), why a change made none
+# (unrecorded: a name of .viewer_action_unrecorded, or NULL) and its state.
 `$.cellucid_action_request` <- function(x, name) {
   record <- get("record", envir = x, inherits = FALSE)
   switch(name,
@@ -349,6 +356,7 @@ cellucid_action_result <- function(request, timeout = 60) {
     action = record$action,
     done = .action_answered(record),
     step = record$step,
+    unrecorded = record$unrecorded,
     state = .action_state(x),
     NULL
   )
@@ -366,6 +374,8 @@ print.cellucid_action_request <- function(x, ...) {
   state <- .action_state(x)
   detail <- if (identical(state, "answered") && !is.null(record$step)) {
     paste0(", step ", record$step$id, ": ", record$step$label)
+  } else if (identical(state, "answered") && !is.null(record$unrecorded)) {
+    paste0(", no step: ", record$unrecorded)
   } else if (identical(state, "refused")) {
     paste0(": ", record$reason)
   } else {
@@ -380,19 +390,30 @@ print.cellucid_action_request <- function(x, ...) {
 # kept on its request for cellucid_action_result(); an answer nobody holds a
 # request for any more is dropped. Returns whether the one asking is waiting
 # for it now (a refusal is then said by that wait, not by a warning).
-.settle_action <- function(viewer, id, outcome = NULL, step = NULL, reason = NULL) {
+.settle_action <- function(viewer, id, outcome = NULL, step = NULL, unrecorded = NULL, reason = NULL) {
   record <- viewer$action_requests[[id]]
   if (is.null(record)) return(FALSE)
   if (is.null(reason)) {
     record$state <- "answered"
     record$outcome <- outcome
     record$step <- step
+    record$unrecorded <- unrecorded
   } else {
     record$state <- "refused"
     record$reason <- reason
   }
   if (isTRUE(record$orphan)) viewer$action_requests[[id]] <- NULL
   isTRUE(record$waiting)
+}
+
+# A change answered without a step of the history, said when its outcome is
+# collected: a warning of class cellucid_action_not_recorded (its
+# `unrecorded` names the reason), muffled like any warning, or by its class.
+.warn_not_recorded <- function(record) {
+  warning(.classed_warning(
+    "cellucid_action_not_recorded", list(unrecorded = record$unrecorded),
+    record$caller, ": ", .viewer_action_unrecorded[[record$unrecorded]]
+  ))
 }
 
 # Every request still open when the viewer stops: none will be answered.

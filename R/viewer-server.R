@@ -510,8 +510,6 @@
         if (!is.null(entry$record)) entry$record$sent <- TRUE
       }
       .keep_alive(viewer, ws, state)
-      # A page took the channel: what its tool list says may differ.
-      .agent_port_page_back(viewer)
       return(invisible(NULL))
     }
     event <- tryCatch(
@@ -648,7 +646,8 @@
     # (cellucid_session_result()).
     request$answer <- payload
   } else if (identical(type, "action_result")) {
-    .settle_action(viewer, payload$requestId, outcome = payload$outcome, step = payload$step)
+    .settle_action(viewer, payload$requestId, outcome = payload$outcome, step = payload$step,
+                   unrecorded = payload$unrecorded)
   } else if (identical(type, "session_loaded")) {
     load <- viewer$session_loads[[payload$requestId]]
     if (!is.null(load)) load$answer <- payload
@@ -712,9 +711,27 @@
     viewer$ready <- payload
   }
   viewer$last[[type]] <- payload
-  for (hook in viewer$hooks[[type]]) {
-    tryCatch(hook(payload), error = function(error) {
-      .warn("A cellucid_on(\"", type, "\") hook failed: ", conditionMessage(error))
+  # A call waiting for this kind of event takes it when its predicate does.
+  for (waiter in viewer$event_waiters) {
+    if (!identical(waiter$event, type) || !is.null(waiter$payload) || !is.null(waiter$error)) next
+    accepted <- tryCatch(
+      is.null(waiter$predicate) || isTRUE(waiter$predicate(payload)),
+      error = function(error) {
+        waiter$error <- conditionMessage(error)
+        FALSE
+      }
+    )
+    if (accepted) waiter$payload <- payload
+  }
+  # "message" handlers first, each given the event with its type (`event`),
+  # as cellucid-python's on_message hooks are; then the event's own.
+  calls <- c(
+    lapply(viewer$hooks[["message"]], function(hook) list(hook = hook, event = c(list(event = type), payload), kind = "message")),
+    lapply(viewer$hooks[[type]], function(hook) list(hook = hook, event = payload, kind = type))
+  )
+  for (call in calls) {
+    tryCatch(call$hook(call$event), error = function(error) {
+      .warn("A cellucid_on(\"", call$kind, "\") hook failed: ", conditionMessage(error))
     })
   }
   # A command the viewer refused is said, unless a hook handles it or the
@@ -730,7 +747,7 @@
 # The R call behind each command other than an action (an action's request
 # names its own), for what a refused one says.
 .command_r_callers <- list(
-  requestSessionBundle = "cellucid_request_session()", freeze = "cellucid_freeze()", action = "an action",
+  requestSessionBundle = "cellucid_request_session()", freeze = "cellucid_stop()", action = "an action",
   ping = "a ping", debug_snapshot = "cellucid_debug_connection()", load_session = "cellucid_load_session()",
   # Their refusals reach the agent that sent them (.agent_port_command_failed()).
   agent_list = "cellucid_mcp()", agent_call = "cellucid_mcp()", agent_cancel = "cellucid_mcp()",

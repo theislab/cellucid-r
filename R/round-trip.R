@@ -96,8 +96,10 @@
 # metadata(x)$cellucid, or the "cellucid" attribute of a data frame.
 .object_record <- function(data) {
   record <- switch(.object_kind(data),
-    seurat = methods::slot(data, "misc")$cellucid,
-    se = S4Vectors::metadata(data)$cellucid,
+    # [[ ]], never $: $ matches a partial name (a column's colors,
+    # cellucid_highlight__..._colors, beside no cellucid record).
+    seurat = methods::slot(data, "misc")[["cellucid"]],
+    se = S4Vectors::metadata(data)[["cellucid"]],
     data.frame = attr(data, "cellucid", exact = TRUE)
   )
   if (is.null(record)) list() else if (is.list(record)) record else .abort("The object's cellucid record must be a list.")
@@ -122,16 +124,106 @@
   )
 }
 
+# What an AnnData keeps in uns lives where the object keeps its cellucid
+# record: Seurat misc, metadata(x) (as zellkonverter carries uns), a data
+# frame's attributes. Scanpy's colors of a column, uns['<column>_colors'],
+# are kept there under the same name.
+.colors_key <- function(column) paste0(column, "_colors")
+
+.object_uns <- function(data, key) {
+  switch(.object_kind(data),
+    seurat = methods::slot(data, "misc")[[key]],
+    se = S4Vectors::metadata(data)[[key]],
+    data.frame = attr(data, key, exact = TRUE)
+  )
+}
+
+# `values`: a named list, each entry the value to keep under its name, NULL
+# to remove it.
+.object_with_uns <- function(data, values) {
+  if (length(values) == 0L) return(data)
+  put <- function(holder) {
+    for (key in names(values)) holder[[key]] <- values[[key]]
+    holder
+  }
+  switch(.object_kind(data),
+    seurat = {
+      methods::slot(data, "misc") <- put(methods::slot(data, "misc"))
+      data
+    },
+    se = {
+      S4Vectors::metadata(data) <- put(S4Vectors::metadata(data))
+      data
+    },
+    data.frame = {
+      for (key in names(values)) attr(data, key) <- values[[key]]
+      data
+    }
+  )
+}
+
+# Colors in Scanpy's form, one-dimensional text (a character vector without
+# NA), or NULL for anything else.
+.text_colors <- function(value) {
+  if (is.character(value) && is.null(dim(value)) && !anyNA(value)) return(as.vector(value))
+  NULL
+}
+
+# Its colors go with a column (uns['<column>_colors']), one rule, the same in
+# cellucid-python (anndata_session/_columns.py write_columns) and the web
+# app's "Save AnnData with this state..." (app/history/exports/anndata-copy.js):
+# - a column written (added or replaced) has the colors it is shown in when
+#   the writer knows them (a session's categorical field: R/session-apply.R
+#   .apply_shown_colors; a live viewer's categorical result: the colors its
+#   view in focus shows it in, which the result carries), and none
+#   otherwise: colors held under its name described another column;
+# - a column removed takes its colors with it;
+# - a column renamed takes its colors along when they are Scanpy's form, text
+#   (colors of another form are removed: they cannot be carried);
+# - a categorical column relabeled in place keeps its colors when no
+#   categories merged; when some did, each category keeps the color of the
+#   first one it was made from (it takes that one's place), and colors that
+#   are not text with one a category before are removed; a text column
+#   relabeled loses its colors (Scanpy colors a text column by its sorted
+#   labels, which a rename reorders);
+# - a dataset column a session recolored takes the colors it is shown in
+#   (R/session-apply.R .apply_column_colors), after its renames.
+# A column left as it is keeps its colors. The state of the colors is a
+# named list (column -> colors, NULL: none) of the columns changed so far,
+# read through to the object for the others.
+.colors_state <- function(data) {
+  state <- new.env(parent = emptyenv())
+  state$changed <- list()
+  state$held <- function(column) {
+    if (column %in% names(state$changed)) state$changed[[column]] else .object_uns(data, .colors_key(column))
+  }
+  state$put <- function(column, colors) {
+    state$changed[column] <- list(colors)
+  }
+  state
+}
+
+.with_colors <- function(data, state) {
+  values <- state$changed
+  if (length(values) == 0L) return(data)
+  names(values) <- .colors_key(names(values))
+  .object_with_uns(data, values)
+}
+
 # The one writer: each planned column added (or replacing the column of its
-# name), the columns in `remove` dropped, in one assignment. R copies on
-# change: the object passed in is not changed.
+# name), the columns in `remove` dropped, in one assignment, with their
+# colors (above; a plan's `colors`). R copies on change: the object passed in
+# is not changed.
 .object_with_columns <- function(data, plans, remove = character()) {
+  colors <- .colors_state(data)
+  for (name in intersect(remove, .object_column_names(data))) colors$put(name, NULL)
+  for (plan in plans) colors$put(plan$name, plan$colors)
   write <- function(table) {
     for (name in remove) table[[name]] <- NULL
     for (plan in plans) table[[plan$name]] <- plan$values
     table
   }
-  switch(.object_kind(data),
+  data <- switch(.object_kind(data),
     seurat = {
       methods::slot(data, "meta.data") <- write(methods::slot(data, "meta.data"))
       data
@@ -142,6 +234,7 @@
     },
     data.frame = write(data)
   )
+  .with_colors(data, colors)
 }
 
 # --- The viewer's results -----------------------------------------------------
@@ -266,6 +359,7 @@ cellucid_results <- function(viewer) {
     column <- result$column %||% NULL
     source <- result$source %||% .viewer_source
     provenance <- list(kind = result$kind, id = result$id, pulled_from = source)
+    colors <- NULL
     if (identical(result$kind, "highlight")) {
       if (!options$highlights) next
       wanted <- column %||% paste0(options$highlight_prefix, result$id)
@@ -286,6 +380,9 @@ cellucid_results <- function(viewer) {
       } else {
         .continuous_column(result$values, cells, n)
       }
+      # The colors the viewer shows a categorical in (a live viewer's result
+      # carries them; an obs-column CSV's does not).
+      if (!is.null(meta$colors)) colors <- as.character(unlist(meta$colors))
       info <- c(provenance, list(key = meta$key, origin = origin))
     } else if (identical(result$kind, "visibility")) {
       if (!options$visibility) next
@@ -295,7 +392,8 @@ cellucid_results <- function(viewer) {
     } else {
       next
     }
-    candidates[[length(candidates) + 1L]] <- list(key = .pulled_key(info), wanted = wanted, values = values, metadata = info)
+    candidates[[length(candidates) + 1L]] <- list(key = .pulled_key(info), wanted = wanted, values = values, metadata = info,
+                                                  colors = colors)
   }
   list(candidates = candidates, skipped = skipped)
 }
@@ -320,7 +418,7 @@ cellucid_results <- function(viewer) {
   state$on_conflict <- on_conflict
   plans <- lapply(candidates, function(candidate) {
     list(name = .pull_name(state, candidate$wanted, candidate$key), values = candidate$values,
-         metadata = candidate$metadata)
+         metadata = candidate$metadata, colors = candidate$colors)
   })
   if (length(state$conflicts) > 0L) {
     .abort("These columns exist already and no pull from the same source wrote them: ",
@@ -499,8 +597,9 @@ cellucid_pull <- function(
       id <- column$metadata$group_id %||% column$metadata$field_id
       wanted <- if (identical(kind, "highlight")) paste0(highlight_prefix, id) else paste0(field_prefix, column$metadata$key)
       info <- c(column$metadata, list(id = id, pulled_from = source))
+      # A field's colors are written under the name the column is written to.
       candidates[[length(candidates) + 1L]] <- list(key = .pulled_key(info), wanted = wanted, values = column$values,
-                                                     metadata = info)
+                                                     metadata = info, colors = column$colors)
     }
     taken <- vapply(sets, `[[`, "", "name")
     for (set in shown$gene_sets) {
@@ -567,22 +666,58 @@ cellucid_pull <- function(
 
 # What a column of an obs-column CSV holds (its kind row).
 .csv_kinds <- c("highlight", "categorical", "continuous")
+# The first cell of an obs-column CSV's third row, which lists each
+# categorical column's categories in the field's order (a JSON array of
+# strings; empty for the other kinds).
+.csv_categories_row <- "categories"
+
+# A column's cell of the categories row: a categorical's categories in the
+# field's order (a JSON array of distinct strings), NULL for the other kinds.
+.csv_categories <- function(listed, column, kind, file) {
+  if (!identical(kind, "categorical")) {
+    if (nzchar(listed)) .abort(file, ": the ", kind, " column '", column, "' lists categories; only a categorical column does.")
+    return(NULL)
+  }
+  if (!nzchar(listed)) {
+    .abort(file, ": the categorical column '", column, "' lists no categories (its cell of the '", .csv_categories_row,
+           "' row holds them, as a JSON array of strings).")
+  }
+  parsed <- tryCatch(jsonlite::parse_json(listed, simplifyVector = FALSE), error = function(error) NULL)
+  strings <- is.list(parsed) && is.null(names(parsed)) &&
+    all(vapply(parsed, function(value) is.character(value) && length(value) == 1L, logical(1)))
+  if (!strings) {
+    .abort(file, ": the categories of the categorical column '", column, "' are not a JSON array of strings: ", listed)
+  }
+  categories <- as.character(unlist(parsed))
+  if (anyDuplicated(categories)) {
+    .abort(file, ": the categorical column '", column, "' lists the category '", categories[anyDuplicated(categories)], "' twice.")
+  }
+  categories
+}
 
 # An obs-column CSV the web app exports: a header row (obs_name, then each
 # column's name), a kind row (kind, then each column's kind: highlight,
-# categorical or continuous), then a row per cell. Each column is written as
-# named, as its kind says -- never guessed from its values; a cell the file
-# does not list is unknown (NA).
+# categorical or continuous), a categories row (categories, then each
+# categorical column's categories in the field's order as a JSON array of
+# strings, empty for the other kinds), then a row per cell. Each column is
+# written as named, as its kind says -- never guessed from its values; a
+# categorical's levels are the categories row's, in its order, those no cell
+# holds too, and a label it does not list is refused; a cell the file does
+# not list is unknown (NA).
 .read_obs_csv <- function(path, cells) {
   table <- utils::read.csv(path, header = FALSE, colClasses = "character", check.names = FALSE,
                            na.strings = character(), encoding = "UTF-8")
   file <- basename(path)
-  if (nrow(table) < 2L || !identical(table[1L, 1L], .obs_name_column) || !identical(table[2L, 1L], "kind")) {
+  if (nrow(table) < 3L || !identical(table[1L, 1L], .obs_name_column) || !identical(table[2L, 1L], "kind") ||
+      !identical(table[3L, 1L], .csv_categories_row)) {
     .abort(file, ": an obs-column CSV starts with a header row whose first cell is '", .obs_name_column,
-           "' and a kind row whose first cell is 'kind' (then each column's kind: ", paste(.csv_kinds, collapse = ", "), ").")
+           "', a kind row whose first cell is 'kind' (then each column's kind: ", paste(.csv_kinds, collapse = ", "),
+           ") and a categories row whose first cell is '", .csv_categories_row,
+           "' (then each categorical column's categories, as a JSON array of strings).")
   }
   header <- as.character(table[1L, ])
   kinds <- as.character(table[2L, ])
+  listed <- as.character(table[3L, ])
   if (anyDuplicated(header)) .abort(file, ": a column is named twice.")
   for (index in seq_along(header)[-1L]) {
     if (!kinds[[index]] %in% .csv_kinds) {
@@ -590,7 +725,10 @@ cellucid_pull <- function(
              paste(.csv_kinds, collapse = ", "), ".")
     }
   }
-  rows <- table[-(1:2), , drop = FALSE]
+  categories_of <- lapply(seq_along(header)[-1L], function(index) {
+    .csv_categories(listed[[index]], header[[index]], kinds[[index]], file)
+  })
+  rows <- table[-(1:3), , drop = FALSE]
   names_given <- rows[[1L]]
   if (anyDuplicated(names_given)) .abort(file, ": the cell '", names_given[anyDuplicated(names_given)], "' is listed twice.")
   if (anyDuplicated(cells)) .abort("This object's cell names are not unique.")
@@ -632,8 +770,18 @@ cellucid_pull <- function(
         meta = list(key = column, origin = "user")
       ))
     } else {
-      categories <- unique(text[present])
-      codes <- ifelse(present, match(text, categories) - 1, 4294967295)
+      # Each label exactly as written (the categories row lists it so), never
+      # trimmed; an empty cell has no category.
+      categories <- categories_of[[index - 1L]]
+      labels <- rows[[index]]
+      labeled <- nzchar(labels)
+      found <- match(labels, categories)
+      unlisted <- labeled & is.na(found)
+      if (any(unlisted)) {
+        .abort(file, ": the categorical column '", column, "' holds '", labels[unlisted][[1L]], "', which its categories (the '",
+               .csv_categories_row, "' row) do not list.")
+      }
+      codes <- ifelse(labeled, found - 1, 4294967295)
       base$value_type <- "uint32"
       results[[length(results) + 1L]] <- c(base, list(
         kind = "categorical", cells = positions[order_of], values = codes[order_of],

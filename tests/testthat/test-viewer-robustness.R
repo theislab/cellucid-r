@@ -146,10 +146,21 @@ test_that("hover and click name cells by 1-based position, and out-of-range cell
   object <- small_sce(alt = FALSE)
   viewer <- test_viewer(object, dataset_id = "s", dataset_name = "S")
   seen <- list()
-  cellucid_on(viewer, "click", function(event) seen$click <<- event)
+  order <- character()
+  cellucid_on(viewer, "click", function(event) {
+    seen$click <<- event
+    order <<- c(order, "click")
+  })
+  # "message" catches every event, first, with its type (as Python's on_message).
+  cellucid_on(viewer, "message", function(event) {
+    seen$message <<- event
+    order <<- c(order, "message")
+  })
   client <- ws_welcomed(viewer)
   ws_send_json(client, list(type = "click", cell = 0, button = 0, shift = FALSE, ctrl = FALSE))
   run_loop_until(function() !is.null(seen$click))
+  expect_identical(order, c("message", "click"))
+  expect_identical(seen$message, c(list(event = "click"), seen$click))
   expect_identical(seen$click$cell, 1L)
   expect_identical(seen$click$cell_name, colnames(object)[[1L]])
   # The selection of the same cell names the same position.
@@ -163,6 +174,30 @@ test_that("hover and click name cells by 1-based position, and out-of-range cell
   expect_identical(closed$opcode, 8L)
   expect_identical(closed$code, 1008L)
   expect_identical(viewer$selection$cells, 1L)
+  ws_close(client)
+})
+
+test_that("cellucid_wait_event() returns the next event its predicate takes, as Python's wait_for_event()", {
+  skip_without_sce()
+  viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
+  client <- ws_welcomed(viewer)
+  click <- function(cell) ws_send_json(client, list(type = "click", cell = cell, button = 0, shift = FALSE, ctrl = FALSE))
+  # Sent before the call, heard while it waits: the first click is passed over.
+  click(0)
+  click(1)
+  event <- cellucid_wait_event(viewer, "click", timeout = 10, predicate = function(event) identical(event$cell, 2L))
+  expect_identical(event$cell, 2L)
+  expect_length(viewer$event_waiters, 0L)
+  # An event received before the call is not returned: nothing more comes.
+  expect_error(cellucid_wait_event(viewer, "click", timeout = 0.3), "did not answer within 0.3 seconds \\(waiting for a \"click\" event\\)")
+  expect_length(viewer$event_waiters, 0L)
+  # A predicate that fails stops the wait with its reason.
+  click(0)
+  expect_error(cellucid_wait_event(viewer, "click", timeout = 10, predicate = function(event) stop("no cells")),
+               "^predicate failed on a \"click\" event: no cells$")
+  expect_error(cellucid_wait_event(viewer, "message"), "^event must be one of \"action_result\", .*\"selection\", \"session_bundle\", \"session_loaded\"; got c\\(\"message\"\\)\\.$")
+  expect_error(cellucid_wait_event(viewer, "click", timeout = 0), "^timeout must be one positive number")
+  expect_error(cellucid_wait_event(viewer, "click", predicate = TRUE), "^predicate must be NULL or a function")
   ws_close(client)
 })
 
@@ -218,6 +253,12 @@ test_that("cellucid_debug_connection reports the routes, the store and the chann
   expect_identical(unconnected$anndata_store_probe$range$status, 206L)
   expect_false(unconnected$channel_connected)
   expect_false(unconnected$frontend_roundtrip$ok)
+  # A report is pasted when asking for help: the page's address without the
+  # token that grants the channel (the page's own snapshot drops it too).
+  public <- paste0(viewer$url, "/?viewer=true&viewerId=", viewer$viewer_id, "&anndata=true")
+  expect_identical(unconnected$viewer_url, public)
+  expect_false(grepl(viewer$viewer_token, jsonlite::toJSON(unconnected, auto_unbox = TRUE, force = TRUE), fixed = TRUE))
+  expect_match(viewer$viewer_url, "viewerToken=", fixed = TRUE)
 
   client <- ws_welcomed(viewer)
   # The page's side, answering each command as it arrives without blocking
@@ -236,7 +277,7 @@ test_that("cellucid_debug_connection reports the routes, the store and the chann
       } else if (identical(command$type, "debug_snapshot")) {
         ws_send_json(client, list(
           type = "debug_snapshot", requestId = command$requestId, ts = "now",
-          locationHref = viewer$viewer_url, origin = viewer$url, serverUrl = viewer$url,
+          locationHref = public, origin = viewer$url, serverUrl = viewer$url,
           connected = TRUE, userAgent = "test"
         ))
       }
@@ -250,6 +291,7 @@ test_that("cellucid_debug_connection reports the routes, the store and the chann
   expect_identical(report$frontend_roundtrip$answer$t, 5L)
   expect_true(report$frontend_debug_snapshot$ok)
   expect_identical(report$frontend_debug_snapshot$answer$userAgent, "test")
+  expect_false(grepl(viewer$viewer_token, jsonlite::toJSON(report, auto_unbox = TRUE, force = TRUE), fixed = TRUE))
   answering <- FALSE
   ws_close(client)
 })
@@ -277,14 +319,34 @@ test_that("a Zarr store whose identity cannot be read is said to be damaged", {
   skip_if_not_installed("Matrix")
   args <- prepare_fixture(file.path(tempfile(), "f.zarr"))
   folder <- suppressMessages(do.call(cellucid_prepare, args))
-  writeLines("{ not json", file.path(folder, "uns/cellucid/id/.zarray"))
+  # Its value's chunk damaged: the metadata every reader walks is intact
+  # (cellucid-python refuses a store whose metadata cannot be read, before
+  # its identity is read), so only the identity read meets the damage.
+  writeLines("not a zlib stream", file.path(folder, "uns/cellucid/id/0"))
   expect_error(
     cellucid_serve(folder, port = 0L, serve_web_ui = FALSE, quiet = TRUE),
+    "holds uns/cellucid/id and it cannot be read .*Write the store again, or give dataset_id = yourself\\.$"
+  )
+  # The name is still needed from the store, and still read.
+  expect_error(
+    cellucid_serve(folder, dataset_name = "F", port = 0L, serve_web_ui = FALSE, quiet = TRUE),
     "holds uns/cellucid/id and it cannot be read"
   )
-  # Named by the caller, the store's own identity is not needed.
-  viewer <- cellucid_serve(folder, dataset_id = "f", dataset_name = "F", port = 0L, serve_web_ui = FALSE, quiet = TRUE)
+  # Named by the caller, the store's own id is not needed (as
+  # cellucid-python's serve_anndata()): the store's readable name is.
+  viewer <- cellucid_serve(folder, dataset_id = "f", port = 0L, serve_web_ui = FALSE, quiet = TRUE)
   expect_identical(viewer$dataset_id, "f")
+  expect_null(viewer$declared_id)
+  expect_identical(viewer$dataset_name, args$dataset_name)
+  cellucid_stop(viewer)
+  # A damaged name the caller replaces is not needed either; one it does not is.
+  writeLines("not a zlib stream", file.path(folder, "uns/cellucid/name/0"))
+  expect_error(
+    cellucid_serve(folder, dataset_id = "f", port = 0L, serve_web_ui = FALSE, quiet = TRUE),
+    "holds uns/cellucid/name and it cannot be read .*give dataset_name = yourself\\.$"
+  )
+  viewer <- cellucid_serve(folder, dataset_id = "f", dataset_name = "F", port = 0L, serve_web_ui = FALSE, quiet = TRUE)
+  expect_identical(viewer$dataset_name, "F")
   cellucid_stop(viewer)
 })
 

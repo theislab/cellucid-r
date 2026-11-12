@@ -8,9 +8,8 @@
 # exactly as it runs a connector agent's call: as the agent, through a
 # connection of kind "local", under the person's permissions, asked in the
 # confirm card, one turn the person can Stop and undo. The page answers with
-# agent events (agent_tools, agent_result, agent_asking, agent_answered,
-# agent_tools_changed), which reach the viewer's agent port below and never
-# its hooks (cellucid_on()), viewer$last or a printed notice.
+# agent events (agent_tools, agent_result, agent_asking, agent_answered),
+# which reach the viewer's agent port below and never its hooks (cellucid_on()), viewer$last or a printed notice.
 #
 # Two ways to a viewer, one interface (a link, R/mcp.R):
 #
@@ -40,8 +39,8 @@
 #   protocol has it; 202 once sent, 409 with the reason when no page is
 #   connected to the viewer, 400 for a command that is not one;
 # - GET <endpoint>/events?consumer=<connection id>&wait=<seconds>: the agent
-#   events for that consumer (the answers to its commands, and every
-#   agent_tools_changed), oldest first, as {"events": [...]}; it waits up to
+#   events for that consumer (the answers to its commands), oldest first, as
+#   {"events": [...]}; it waits up to
 #   `wait` seconds (at most .agent_event_wait_limit_seconds) for one, without
 #   holding R (the answer is a promise httpuv sends when it settles). A
 #   command the page refused is {"type": "agent_failed", requestId, reason},
@@ -111,9 +110,6 @@
 # computers' records, which a reader skips and never removes.
 .agent_this_host <- function() Sys.info()[["nodename"]]
 
-# The program a viewer of this package names itself by (the protocol's runtimes).
-.agent_runtime <- "r"
-
 .agent_clock <- function() proc.time()[["elapsed"]]
 
 # No page shows a viewer now, or the viewer stopped: one sentence that says
@@ -158,16 +154,14 @@
 # =============================================================================
 
 # The viewer's agent port, made with the viewer (.start_viewer()): the calls
-# waiting for their events, the tool lists asked for, who hears that the
-# tools changed, why it stopped, and its publication.
+# waiting for their events, the tool lists asked for, why it stopped, and its
+# publication.
 .agent_port <- function(viewer) {
   port <- viewer$agent
   if (is.null(port)) {
     port <- new.env(parent = emptyenv())
     port$calls <- new.env(parent = emptyenv())
     port$lists <- new.env(parent = emptyenv())
-    port$tools_listeners <- new.env(parent = emptyenv())
-    port$listener_count <- 0L
     port$stopped <- NULL
     port$published <- NULL
     viewer$agent <- port
@@ -185,17 +179,6 @@
 # One agent event from the page (`payload` without its type).
 .agent_port_deliver <- function(viewer, type, payload) {
   port <- .agent_port(viewer)
-  if (identical(type, "agent_tools_changed")) {
-    for (key in ls(port$tools_listeners)) {
-      listener <- get0(key, envir = port$tools_listeners, inherits = FALSE)
-      if (is.function(listener)) {
-        tryCatch(listener(), error = function(error) {
-          .warn("A Cellucid agent tools listener failed: ", conditionMessage(error))
-        })
-      }
-    }
-    return(invisible(NULL))
-  }
   id <- payload$requestId
   if (identical(type, "agent_tools")) {
     .agent_port_settle_list(port, id, "tools", payload$tools)
@@ -244,12 +227,6 @@
   invisible(NULL)
 }
 
-# A page holds the channel again: its tool list may say other things (its
-# settings), so whoever lists the tools is told.
-.agent_port_page_back <- function(viewer) {
-  .agent_port_deliver(viewer, "agent_tools_changed", list())
-}
-
 # The viewer stopped: everything waiting ends with `reason`.
 .agent_port_stopped <- function(viewer, reason) {
   port <- .agent_port(viewer)
@@ -277,7 +254,7 @@
 .agent_port_describe <- function(viewer) {
   list(
     viewer = viewer$viewer_id,
-    runtime = .agent_runtime,
+    runtime = viewer$runtime,
     dataset = list(id = viewer$dataset_id, name = viewer$dataset_name),
     url = if (is.null(viewer$widget)) viewer$url,
     connected = .agent_port_connected(viewer)
@@ -363,18 +340,6 @@
   invisible(NULL)
 }
 
-# Hear when the page says its tools changed; returns the function that stops it.
-.agent_port_add_tools_listener <- function(viewer, listener) {
-  port <- .agent_port(viewer)
-  port$listener_count <- port$listener_count + 1L
-  key <- sprintf("l%08d", port$listener_count)
-  assign(key, listener, envir = port$tools_listeners)
-  function() {
-    if (exists(key, envir = port$tools_listeners, inherits = FALSE)) rm(list = key, envir = port$tools_listeners)
-    invisible(NULL)
-  }
-}
-
 # =============================================================================
 # The agents folder: one record per published viewer
 # =============================================================================
@@ -423,7 +388,11 @@
 .agents_require_private <- function(folder) {
   if (.Platform$OS.type != "unix") return(invisible(folder))
   info <- file.info(folder, extra_cols = TRUE)
-  why <- if (!identical(info$uname, Sys.info()[["effective_user"]])) {
+  # Owners compared by user id, as cellucid-python compares st_uid with
+  # os.getuid(): a user with no name (a container's or a cluster job's uid
+  # with no passwd entry) owns its folder too. R has no getuid(); its own
+  # session temporary folder, which this process made, is owned by it.
+  why <- if (is.na(info$uid) || !identical(info$uid, .agent_process_uid())) {
     "another user owns it"
   } else if (bitwAnd(as.integer(info$mode), strtoi("022", 8L)) != 0L) {
     "others may write in it"
@@ -431,6 +400,10 @@
   if (!is.null(why)) .agents_folder_error(.agent_sentence(.agent_folder_unsafe, folder = folder, why = why))
   invisible(folder)
 }
+
+# The user id this process runs as: the owner of the session temporary folder
+# R made when it started.
+.agent_process_uid <- function() file.info(tempdir(), extra_cols = TRUE)$uid
 
 # The agents folder, made (0700) when missing, and checked.
 .agents_private_folder <- function() {
@@ -582,7 +555,7 @@
       endpoint = published$endpoint,
       host = .agent_this_host(),
       pid = Sys.getpid(),
-      runtime = .agent_runtime,
+      runtime = viewer$runtime,
       schema = .agent_record_schema,
       started = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS6Z", tz = "UTC"),
       token = published$token,
@@ -596,11 +569,6 @@
     .warn("This Cellucid viewer is not published to agents on this computer: ", failure)
     return(invisible(NULL))
   }
-  published$remove_tools_listener <- .agent_port_add_tools_listener(viewer, function() {
-    for (name in ls(published$consumers, all.names = TRUE)) {
-      .agent_push(published, name, list(type = "agent_tools_changed"))
-    }
-  })
   port$published <- published
   port$unpublished <- NULL
   .agent_register_exit_hook()
@@ -630,7 +598,6 @@
   port$published <- NULL
   port$withdrawn <- published
   if (is.function(published$cancel_sweep)) published$cancel_sweep()
-  published$remove_tools_listener()
   published$stopped <- reason
   for (name in ls(published$consumers, all.names = TRUE)) {
     entry <- get(name, envir = published$consumers)
@@ -1014,9 +981,8 @@
 # A link to one viewer an agent connection drives (cellucid-python's
 # ViewerLink): describe(), connected(), list_tools(connection, timeout,
 # done), start_call(request_id, tool, args, agent, connection, listener),
-# cancel(request_id), answer(request_id, allowed), add_tools_listener(fn)
-# (returns its remover), stopped() (why it stopped, or NULL), pump() (its
-# share of the server's loop) and close().
+# cancel(request_id), answer(request_id, allowed), stopped() (why it
+# stopped, or NULL), pump() (its share of the server's loop) and close().
 .agent_link_of <- function(record, consumer) {
   viewer <- .agent_own_viewer(record)
   if (!is.null(viewer)) .local_viewer_link(viewer) else .remote_viewer_link(record, consumer)
@@ -1034,7 +1000,6 @@
   }
   link$cancel <- function(request_id) .agent_port_cancel(viewer, request_id)
   link$answer <- function(request_id, allowed) .agent_port_answer(viewer, request_id, allowed)
-  link$add_tools_listener <- function(listener) .agent_port_add_tools_listener(viewer, listener)
   link$stopped <- function() .agent_port(viewer)$stopped
   link$pump <- function() invisible(NULL)
   link$close <- function() invisible(NULL)
@@ -1050,8 +1015,6 @@
   state <- new.env(parent = emptyenv())
   state$calls <- new.env(parent = emptyenv())
   state$lists <- new.env(parent = emptyenv())
-  state$tools_listeners <- list()
-  state$listener_count <- 0L
   state$stopped <- NULL
   state$closed <- FALSE
   state$pool <- curl::new_pool()
@@ -1097,10 +1060,6 @@
 
   route <- function(event) {
     kind <- .json_field(event, "type")
-    if (identical(kind, "agent_tools_changed")) {
-      for (listener in state$tools_listeners) try(listener(), silent = TRUE)
-      return(invisible(NULL))
-    }
     if (identical(kind, "viewer_stopped")) {
       reason <- .json_field(event, "reason")
       end(if (.is_single_text(reason)) reason else "the viewer was stopped")
@@ -1219,15 +1178,6 @@
   link$answer <- function(request_id, allowed) {
     tryCatch(command(list(type = "agent_answer", requestId = request_id, allowed = isTRUE(allowed))), error = function(error) NULL)
     invisible(NULL)
-  }
-  link$add_tools_listener <- function(listener) {
-    state$listener_count <- state$listener_count + 1L
-    key <- sprintf("l%08d", state$listener_count)
-    state$tools_listeners[[key]] <- listener
-    function() {
-      state$tools_listeners[[key]] <- NULL
-      invisible(NULL)
-    }
   }
   link$stopped <- function() state$stopped
   # Stop reading this viewer's events. A call still waiting can get no answer

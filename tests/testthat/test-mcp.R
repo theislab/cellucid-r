@@ -11,12 +11,12 @@
 # - The agent commands and events of the viewer channel, a viewer's agent
 #   port, its publication on this computer and its endpoint, and the MCP
 #   server itself over stdio (initialize, tools/list, tools/call, errors,
-#   cancellation, the person asked in the app, a changed tool list, a viewer
-#   it opens itself) against a fake page; and cellucid-python's server
+#   cancellation, the person asked in the app, a tool list that never
+#   changes, a viewer it opens itself) against a fake page; and cellucid-python's server
 #   driving an R viewer, where that Python is found.
 
-.mcp_tools_sha256 <- "3cf96bc8a522b98661693099ce113d484c2f182505f3b500a085cab218b7dc38"
-.local_agents_sha256 <- "bd2a7ea96353837a23e072adae53af97d4fe2a8fec528977d716bfc2f476696f"
+.mcp_tools_sha256 <- "65b1e61533966676c2fb60f5c307cc00b43b0db952f044dc72fa8839297ffaa0"
+.local_agents_sha256 <- "f5a5f265380c9566ccfa5f5bb67165fb95261d4da8f4ac792c179b4b4d75ad00"
 
 agents_fixture <- function() cellucid_read_fixture("local_agents.json")
 
@@ -101,7 +101,7 @@ fake_page <- function(viewer, tools = NULL) {
   page <- new.env()
   page$client <- ws_welcomed(viewer)
   page$tools <- tools %||% list(list(
-    name = "color_by", title = "Colour", description = "From the page.", inputSchema = list(type = "object"),
+    name = "color_by", title = "Color", description = "From the page.", inputSchema = list(type = "object"),
     annotations = empty_object()
   ))
   page$commands <- list()
@@ -116,8 +116,6 @@ fake_page <- function(viewer, tools = NULL) {
 page_result <- function(page, request_id, result) {
   ws_send_binary(page$client, agent_binary_event("agent_result", request_id, result))
 }
-
-page_tools_changed <- function(page) ws_send_json(page$client, list(type = "agent_tools_changed"))
 
 # The person answers in the viewer's card.
 page_card_answer <- function(page, request_id, allowed) {
@@ -227,14 +225,21 @@ agent_http <- function(url, method = "GET", headers = list(), body = NULL, timeo
 # The generated tools and the shared fixture
 # =============================================================================
 
-test_that("mcp_tools.json is the web connector's list for this package's catalogue", {
+test_that("mcp_tools.json is the list the web app's source makes now", {
+  path <- package_file("mcp_tools.json")
+  expect_identical(cellucid_rendered_by_web("scripts/generate-action-catalog.mjs", "renderMcpTools"),
+                   readChar(path, file.size(path), useBytes = TRUE),
+                   info = "Run node scripts/generate-action-catalog.mjs in the web app.")
+})
+
+test_that("mcp_tools.json is the web connector's list for this package's catalog", {
   path <- package_file("mcp_tools.json")
   expect_identical(cellucid_file_sha256(path), .mcp_tools_sha256,
                    info = "regenerate it: node scripts/generate-action-catalog.mjs in the web repository; pin the digest it prints")
   document <- cellucid:::.mcp_tools_document()
   expect_identical(document$catalogDigest, cellucid_file_sha256(package_file("action_catalog.json")))
   catalog <- jsonlite::read_json(package_file("action_catalog.json"), simplifyVector = FALSE)
-  # One tool per action, named, titled and annotated from it, in the catalogue's order.
+  # One tool per action, named, titled and annotated from it, in the catalog's order.
   expect_identical(vapply(document$tools, `[[`, "", "name"), vapply(catalog$actions, `[[`, "", "tool"))
   for (index in seq_along(document$tools)) {
     tool <- document$tools[[index]]
@@ -250,23 +255,37 @@ test_that("mcp_tools.json is the web connector's list for this package's catalog
   names <- c(vapply(document$tools, `[[`, "", "name"), document$statusTool$name)
   used <- regmatches(document$instructions, gregexpr("`[a-z][a-z0-9_]*`", document$instructions))[[1L]]
   for (name in gsub("`", "", used)) expect_true(name %in% names, info = name)
-  # The same bytes as cellucid-python's copy, where it is checked out beside this one.
-  sibling <- file.path(cellucid_repository_root(), "..", "cellucid-python", "src", "cellucid", "mcp_tools.json")
-  if (file.exists(sibling)) expect_identical(cellucid_file_sha256(sibling), .mcp_tools_sha256)
 })
 
-test_that("a tools document made from another catalogue is refused by name", {
+test_that("the tools document is cellucid-python's, byte for byte", {
+  expect_identical(cellucid_file_sha256(cellucid_sibling_file("cellucid-python", "src", "cellucid", "mcp_tools.json")), .mcp_tools_sha256)
+})
+
+test_that("the local instructions name the R calls that bring an agent's work back, and they exist", {
+  # A local agent told the person to run a function that does not exist (live-8 L26-6).
+  text <- cellucid:::.mcp_tools_document()$instructions
+  for (call in c("plan <- cellucid_apply_session(object, cellucid_request_session(viewer))", "cellucid_apply_plan(plan)")) {
+    expect_true(grepl(call, text, fixed = TRUE), info = call)
+  }
+  for (name in c("cellucid_apply_session", "cellucid_request_session", "cellucid_apply_plan")) {
+    expect_true(name %in% getNamespaceExports("cellucid"), info = name)
+  }
+})
+
+test_that("a tools document made from another catalog is refused by name", {
   saved <- cellucid:::.mcp_tools_document()
   on.exit(assign("document", saved, envir = cellucid:::.mcp_cache))
   rm("document", envir = cellucid:::.mcp_cache)
   local_mocked_bindings(.native_sha256 = function(bytes) "0000", .package = "cellucid")
-  expect_error(cellucid:::.mcp_tools_document(), "another action catalogue")
+  expect_error(cellucid:::.mcp_tools_document(), "another action catalog")
 })
 
-test_that("the shared local agents fixture is this package's behaviour", {
+test_that("the shared local agents fixture is cellucid-python's, byte for byte", {
+  expect_identical(cellucid_file_sha256(cellucid_sibling_file("cellucid-python", "tests", "fixtures", "local_agents.json")), .local_agents_sha256)
+})
+
+test_that("the shared local agents fixture is this package's behavior", {
   expect_pinned_fixture("local_agents.json", .local_agents_sha256)
-  sibling <- file.path(cellucid_repository_root(), "..", "cellucid-python", "tests", "fixtures", "local_agents.json")
-  if (file.exists(sibling)) expect_identical(cellucid_file_sha256(sibling), .local_agents_sha256)
   fixture <- agents_fixture()
   expect_identical(fixture$server$name, cellucid:::.mcp_server_name)
   expect_identical(fixture$server$title, cellucid:::.mcp_server_title)
@@ -543,6 +562,19 @@ test_that("an agents folder others may write in is refused, said to the agent an
   expect_error(cellucid:::.mcp_start_call(session, "r", "color_by", empty_object(), function(...) NULL), sentence, fixed = TRUE)
 })
 
+test_that("the agents folder's owner is this process's user id, not a user name", {
+  skip_on_os("windows")
+  folder <- local_agents_dir()
+  dir.create(folder, recursive = TRUE, mode = "0700")
+  # The process's own uid owns the folder it made, whatever name (if any) it has.
+  expect_identical(cellucid:::.agent_process_uid(), file.info(folder, extra_cols = TRUE)$uid)
+  expect_identical(cellucid:::.agents_require_private(folder), folder)
+  # Another uid's folder is refused, as cellucid-python refuses it (st_uid against os.getuid()).
+  local_mocked_bindings(.agent_process_uid = function() file.info(folder, extra_cols = TRUE)$uid + 1L, .package = "cellucid")
+  sentence <- sub("{why}", "another user owns it", sub("{folder}", folder, cellucid:::.agent_folder_unsafe, fixed = TRUE), fixed = TRUE)
+  expect_error(cellucid:::.agent_discover(), sentence, fixed = TRUE, class = "cellucid_agents_folder")
+})
+
 test_that("CELLUCID_AGENTS=off publishes nothing", {
   folder <- local_agents_dir()
   previous <- Sys.getenv("CELLUCID_AGENTS")
@@ -559,14 +591,12 @@ test_that("CELLUCID_AGENTS=off publishes nothing", {
   expect_false(cellucid:::.agents_disabled())
 })
 
-test_that("a page that goes fails the calls it held with the page-gone sentence, and a page back says the tools may differ", {
+test_that("a page that goes fails the calls it held with the page-gone sentence", {
   local_agents_dir()
   viewer <- agents_viewer()
   page <- fake_page(viewer)
   page$hold <- "slow"
   connection <- list(id = "local-abc", client = NULL)
-  changed <- 0L
-  cellucid:::.agent_port_add_tools_listener(viewer, function() changed <<- changed + 1L)
   heard <- listen()
   cellucid:::.agent_port_start_call(viewer, "local-abc-1", "slow", empty_object(), "A", connection, heard$listener)
   page_next(page, "agent_call")
@@ -575,7 +605,6 @@ test_that("a page that goes fails the calls it held with the page-gone sentence,
   expect_identical(heard_next(heard), list(kind = "failed", data = list(reason = cellucid:::.agent_page_gone)))
   page <- fake_page(viewer)
   on.exit(page_close(page), add = TRUE)
-  expect_identical(changed, 1L)
   # A page opened elsewhere replaces the one that held the channel: its calls fail too.
   page$hold <- "slow"
   heard <- listen()
@@ -587,7 +616,6 @@ test_that("a page that goes fails the calls it held with the page-gone sentence,
   on.exit(ws_close(other), add = TRUE)
   expect_identical(heard_next(heard), list(kind = "failed", data = list(reason = cellucid:::.agent_page_gone)))
   expect_identical(listed, list("failed", cellucid:::.agent_page_gone))
-  expect_identical(changed, 2L)
 })
 
 test_that("a page's close frame is heard with its socket still open, and a page lost without one is heard too", {
@@ -636,7 +664,7 @@ test_that("silent consumers are swept on a clock: their calls stopped in the pag
   expect_identical(sent$status, 202L)
   page_next(page, "agent_call")
   entry <- get("local-gone", envir = published$consumers)
-  entry$events <- list(list(type = "agent_tools_changed"))
+  entry$events <- list(list(type = "agent_failed", requestId = "local-gone-0", reason = "not read"))
   entry$seen <- entry$seen - cellucid:::.agent_consumer_idle_seconds - 1
   cellucid:::.agent_sweep(published)
   expect_identical(page_next(page, "agent_cancel")$requestId, "local-gone-1")
@@ -687,8 +715,7 @@ test_that("the endpoint refuses browsers, other hosts and wrong tokens, and hold
   # A request for events waits for one (a promise httpuv answers when it settles).
   page <- fake_page(viewer)
   on.exit(page_close(page), add = TRUE)
-  # A page took the channel: its tools may differ.
-  expect_identical(ask(path = "/events?consumer=local-x&wait=0")$json, list(events = list(list(type = "agent_tools_changed"))))
+  # A page taking the channel says nothing to the consumers: its tools are the same whatever its settings.
   expect_identical(ask(path = "/events?consumer=local-x&wait=0")$json, list(events = list()))
   started <- Sys.time()
   expect_identical(ask(path = "/events?consumer=local-x&wait=1")$json, list(events = list()))
@@ -703,25 +730,21 @@ test_that("the endpoint refuses browsers, other hosts and wrong tokens, and hold
     curl::multi_run(timeout = 0, poll = TRUE, pool = pool)
     length(ls(get("local-x", envir = cellucid:::.agent_port(viewer)$published$consumers)$waiters)) > 0L
   })
+  # A command sent through the endpoint reaches the page; its answer, the
+  # consumer's event, settles the request held for one.
   started <- Sys.time()
-  page_tools_changed(page)
-  pump_until(function() {
-    curl::multi_run(timeout = 0, poll = TRUE, pool = pool)
-    !is.null(held)
-  })
-  expect_lt(as.numeric(Sys.time() - started, units = "secs"), 10)
-  expect_identical(jsonlite::fromJSON(rawToChar(held$content), simplifyVector = FALSE), list(events = list(list(type = "agent_tools_changed"))))
-  # A command sent through the endpoint reaches the page, its answer the consumer's events.
   listed <- ask(c(good, list(`Content-Type` = "application/json")), "/command", "POST",
                 agent_json(list(type = "agent_list", requestId = "l1", connection = list(id = "local-x", client = NULL))))
   expect_identical(listed$status, 202L)
   page_next(page, "agent_list")
-  events <- NULL
   pump_until(function() {
     page_pump(page)
-    events <<- ask(path = "/events?consumer=local-x&wait=0")$json$events
-    length(events) > 0L
+    curl::multi_run(timeout = 0, poll = TRUE, pool = pool)
+    !is.null(held)
   })
+  expect_lt(as.numeric(Sys.time() - started, units = "secs"), 10)
+  events <- jsonlite::fromJSON(rawToChar(held$content), simplifyVector = FALSE)$events
+  expect_length(events, 1L)
   expect_identical(events[[1L]]$type, "agent_tools")
   expect_identical(events[[1L]]$requestId, "l1")
   expect_equal(events[[1L]]$tools, page$tools)
@@ -907,7 +930,8 @@ test_that("the server without a viewer lists the generated tools and says what i
   expect_identical(answer$protocolVersion, "2025-06-18")
   expect_identical(answer$serverInfo[c("name", "title")], list(name = "cellucid", title = "Cellucid"))
   expect_identical(answer$serverInfo$version, as.character(utils::packageVersion("cellucid")))
-  expect_identical(answer$capabilities$tools, list(listChanged = TRUE))
+  # The list never changes while the server runs, and it says so.
+  expect_identical(answer$capabilities$tools, list(listChanged = FALSE))
   expect_identical(answer$instructions, document$instructions)
   mcp_send(client, list(id = 2L, method = "tools/list"))
   tools <- mcp_reply(client, 2L)$result$tools
@@ -964,7 +988,40 @@ test_that("an unknown protocol version is answered with the newest, and a last l
   expect_clean_streams(client)
 })
 
-test_that("the server drives a published viewer, cancels, asks in the app and hears the list change", {
+test_that("the tool list is the same whatever the page does, and is never said to change", {
+  # The person's settings are told to the agent after its tool results, never
+  # in its tool list (L26-9): a list change makes the app rewrite its cached
+  # prompt and drop the earlier reasoning. So the list is the generated one
+  # before a page opens, the same once a page (whatever its settings) took the
+  # channel, reloaded or was replaced, and notifications/tools/list_changed is
+  # never sent.
+  testthat::skip_on_cran()
+  local_agents_dir()
+  viewer <- agents_viewer()
+  document <- cellucid:::.mcp_tools_document()
+  generated <- c(document$tools[seq_along(document$tools)], list(document$statusTool))
+  client <- mcp_client()
+  on.exit(if (client$process$is_alive()) client$process$kill(), add = TRUE)
+  expect_identical(mcp_initialize(client)$result$capabilities$tools, list(listChanged = FALSE))
+  mcp_send(client, list(id = 2L, method = "tools/list"))
+  expect_equal(mcp_reply(client, 2L)$result$tools, generated)
+  page <- fake_page(viewer, tools = document$tools)
+  page_close(page)
+  page <- fake_page(viewer, tools = document$tools)
+  page_close(page)
+  page <- fake_page(viewer, tools = document$tools)
+  on.exit(page_close(page), add = TRUE)
+  pumps <- list(function() page_pump(page))
+  mcp_send(client, list(id = 3L, method = "tools/list"))
+  expect_equal(mcp_reply(client, 3L, pumps)$result$tools, generated)
+  page_next(page, "agent_list", pumps)
+  is_list_changed <- function(message) identical(message$method, "notifications/tools/list_changed")
+  expect_error(mcp_next(client, is_list_changed, pumps, timeout = 2), "timed out")
+  expect_identical(mcp_close(client, pumps), 0L)
+  expect_clean_streams(client)
+})
+
+test_that("the server drives a published viewer, cancels, and asks in the app", {
   testthat::skip_on_cran()
   local_agents_dir()
   viewer <- agents_viewer()
@@ -1010,9 +1067,6 @@ test_that("the server drives a published viewer, cancels, asks in the app and he
   mcp_send(client, list(id = asked$id, result = list(action = "decline")))
   expect_false(page_next(page, "agent_answer", pumps)$allowed)
   expect_identical(mcp_reply(client, 6L, pumps)$result, text_result("The person declined: save a copy.", TRUE))
-  # The person's settings changed: the app is told to list the tools again.
-  page_tools_changed(page)
-  mcp_next(client, function(message) identical(message$method, "notifications/tools/list_changed"), pumps)
   # The page goes: a call says so in one sentence.
   page_close(page)
   pump_until(function() !cellucid:::.agent_port_connected(viewer))
@@ -1032,7 +1086,7 @@ test_that("the server drives a published viewer, cancels, asks in the app and he
   expect_clean_streams(client)
 })
 
-test_that("a page reloaded mid-call fails the call with the page-gone sentence, and the app lists the tools again", {
+test_that("a page reloaded mid-call fails the call with the page-gone sentence, and the next call reaches the new page", {
   testthat::skip_on_cran()
   local_agents_dir()
   viewer <- agents_viewer()
@@ -1050,7 +1104,6 @@ test_that("a page reloaded mid-call fails the call with the page-gone sentence, 
   expect_lt(as.numeric(Sys.time() - started, units = "secs"), 10)
   page <- fake_page(viewer)
   on.exit(page_close(page), add = TRUE)
-  mcp_next(client, function(message) identical(message$method, "notifications/tools/list_changed"), list(function() page_pump(page)))
   mcp_send(client, list(id = 3L, method = "tools/call", params = list(name = "color_by", arguments = empty_object())))
   expect_identical(mcp_reply(client, 3L, list(function() page_pump(page)))$result, text_result("ran color_by as Claude Code"))
   expect_identical(mcp_close(client), 0L)
@@ -1244,8 +1297,6 @@ test_that("cellucid-python's cellucid mcp drives an R viewer through its endpoin
   mcp_send(client, list(id = asked$id, result = list(action = "accept", content = empty_object())))
   expect_true(page_next(page, "agent_answer", pumps)$allowed)
   same_result(mcp_reply(client, 4L, pumps)$result, text_result("saved"))
-  page_tools_changed(page)
-  mcp_next(client, function(message) identical(message$method, "notifications/tools/list_changed"), pumps)
   page$hold <- "slow"
   page$commands <- list()
   mcp_send(client, list(id = 5L, method = "tools/call", params = list(name = "slow", arguments = empty_object())))

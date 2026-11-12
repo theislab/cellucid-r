@@ -562,7 +562,7 @@ void cellucid_sort_by_row(struct renumbered *pairs, struct renumbered *spare, R_
  * made from the matrix as it is, never from a reordered copy:
  *   - a cells x genes expression matrix (a column per gene) in priority
  *     order: its cells renumbered, its genes in their order;
- *   - a symmetric neighbour graph (obsp) in priority order: both axes
+ *   - a symmetric neighbor graph (obsp) in priority order: both axes
  *     permuted, row r of the output being column order[r] of the graph (its
  *     column-compressed arrays are its row-compressed ones), each row's
  *     columns renumbered and sorted.

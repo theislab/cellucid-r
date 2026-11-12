@@ -243,17 +243,16 @@ test_that("actions wait for the channel and go out in order, each answered or re
   object <- small_sce(alt = FALSE)
   viewer <- test_viewer(object, dataset_id = "s", dataset_name = "S")
   highlight <- cellucid_highlight_cells(viewer, c("cell3", "cell1"), color = "#123456")
-  colour <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
+  color <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
   hide <- cellucid_cells_visibility_set(viewer, c(TRUE, FALSE, rep(TRUE, 10)), visible = FALSE)
   reset <- cellucid_camera_reset(viewer, "live")
-  cellucid_freeze(viewer)
   expect_identical(highlight$state, "waiting for the viewer")
   client <- ws_welcomed(viewer)
-  frames <- lapply(1:5, function(i) ws_receive(client))
+  frames <- lapply(1:4, function(i) ws_receive(client))
   received <- lapply(frames, function(frame) frame$json)
   # An action that names cells is a binary frame; every other one is text.
-  expect_identical(vapply(frames, function(frame) frame$opcode, 0L), c(2L, 1L, 2L, 1L, 1L))
-  expect_identical(vapply(received, function(x) x$type, ""), c("action", "action", "action", "action", "freeze"))
+  expect_identical(vapply(frames, function(frame) frame$opcode, 0L), c(2L, 1L, 2L, 1L))
+  expect_identical(vapply(received, function(x) x$type, ""), c("action", "action", "action", "action"))
   expect_identical(vapply(received[1:4], function(x) x$action, ""), c("highlight.cells", "color.by", "cells.visibility.set", "camera.reset"))
   # Cells by original position, 0-based, in the order given.
   expect_identical(received[[1L]]$params, list(color = "#123456", cells = c(2, 0)))
@@ -274,12 +273,12 @@ test_that("actions wait for the channel and go out in order, each answered or re
   # The viewer answers each: an outcome and the step it made, or a refusal
   # naming its request.
   answer <- function(id, outcome, step) {
-    header <- charToRaw(as.character(jsonlite::toJSON(list(type = "action_result", requestId = id, step = step), auto_unbox = TRUE, null = "null")))
+    header <- charToRaw(as.character(jsonlite::toJSON(list(type = "action_result", requestId = id, step = step, unrecorded = NULL), auto_unbox = TRUE, null = "null")))
     body <- charToRaw(as.character(jsonlite::toJSON(outcome, auto_unbox = TRUE, null = "null")))
     ws_send_binary(client, c(cellucid:::.encode_uint32(length(header)), header, body))
   }
   answer(highlight$id, list(group = "highlight_1", page = "Page 1", cells = 2L), list(id = "s1", label = "Highlighted 2 cells"))
-  answer(colour$id, NULL, list(id = "s2", label = "Coloured by cluster"))
+  answer(color$id, NULL, list(id = "s2", label = "Colored by cluster"))
   ws_send_json(client, list(type = "command_error", command = "action", requestId = hide$id,
                             reason = "There is no field \"nope\"."))
   seen <- list()
@@ -290,8 +289,8 @@ test_that("actions wait for the channel and go out in order, each answered or re
   )
   expect_identical(cellucid_action_result(highlight, timeout = 5), list(group = "highlight_1", page = "Page 1", cells = 2L))
   expect_identical(highlight$step, list(id = "s1", label = "Highlighted 2 cells"))
-  expect_null(cellucid_action_result(colour, timeout = 5))
-  expect_identical(colour$state, "answered")
+  expect_null(cellucid_action_result(color, timeout = 5))
+  expect_identical(color$state, "answered")
   expect_error(cellucid_action_result(hide, timeout = 5), "The viewer did not take cellucid_cells_visibility_set\\(\\): There is no field")
   expect_identical(hide$state, "refused")
   expect_output(print(highlight), "highlight.cells .*answered, step s1: Highlighted 2 cells")
@@ -407,7 +406,9 @@ test_that("waiting on a viewer that never answers stops with what to do", {
   skip_without_sce()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
   request <- cellucid_request_session(viewer)
-  expect_error(cellucid_session_result(request, timeout = 0.3), "did not answer within 0.3 seconds.*No viewer is connected: open http")
+  error <- expect_error(cellucid_session_result(request, timeout = 0.3), "did not answer within 0.3 seconds.*No viewer is connected: open the viewer's address \\(viewer\\$viewer_url\\)\\.$")
+  # An error is logged and pasted: it never carries the viewer's token.
+  expect_false(grepl(viewer$viewer_token, conditionMessage(error), fixed = TRUE))
   # The request stays open: collected later, once a viewer answers it.
   expect_length(viewer$session_requests, 1L)
 })
@@ -443,17 +444,24 @@ test_that("several viewers run at once, a taken port is refused or passed over",
   expect_identical(http_json(paste0(second$url, "/_cellucid/datasets"))$datasets[[1L]]$id, "two")
   expect_error(
     cellucid_serve(object, port = first$port, web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL, quiet = TRUE),
-    "Could not serve on 127.0.0.1:[0-9]+.*cellucid_stop_all"
+    paste0(
+      "^Port ", first$port, " is already in use on 127.0.0.1, so Cellucid could not start its server there\\. ",
+      ".*Serve on a different port with port = 9000, or let the operating system pick a free one with port = 0"
+    )
   )
   # The default port, taken, is passed over for the next free one.
   blocker <- tryCatch(httpuv::startServer("127.0.0.1", 8765L, list(call = function(req) list(status = 200L, headers = list(), body = ""))),
                       error = function(error) NULL)
   if (!is.null(blocker)) on.exit(blocker$stop(), add = TRUE)
-  expect_message(
-    third <- cellucid_serve(object, dataset_id = "three", dataset_name = "Three", web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL),
-    "Port 8765 is in use; serving on [0-9]+"
+  # Every message captured: the address it says carries the viewer's token,
+  # which test output (a CI log) never shows.
+  said <- capture_messages(
+    third <- cellucid_serve(object, dataset_id = "three", dataset_name = "Three", web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL)
   )
   on.exit(cellucid_stop(third), add = TRUE)
+  expect_match(said[[1L]], "Port 8765 is in use; serving on [0-9]+")
+  # The person is told the address to open, once, token and all.
+  expect_identical(sum(grepl(third$viewer_token, said, fixed = TRUE)), 1L)
   expect_gt(third$port, 8765L)
   expect_identical(cellucid_stop_all() >= 3L, TRUE)
   expect_length(cellucid_viewers(), 0L)
@@ -574,6 +582,22 @@ test_that("a prepared store or file given by path is served from disk", {
     http_json(paste0(viewer$url, "/_cellucid/datasets"))$datasets[[1L]]$anndata$defaults,
     list(latentKey = "X_pca", obsKeys = list("cluster"))
   )
+  # The neighbor graph and the expression matrix a file opens on, in the
+  # viewer's spelling, as cellucid-python's serve_anndata(knn_key=,
+  # expression_source=) states them (R used to refuse both).
+  viewer <- test_viewer(folder, knn_key = "connectivities", expression_source = "layer:counts")
+  expect_identical(
+    http_json(paste0(viewer$url, "/_cellucid/datasets"))$datasets[[1L]]$anndata$defaults,
+    list(knn = "connectivities", expression = "layers/counts")
+  )
+  for (case in list(c("X", "X"), c("raw", "raw/X"), c("layer:counts", "layers/counts"))) {
+    expect_identical(cellucid:::.served_defaults(list(expression_source = case[[1L]]))$expression, case[[2L]])
+  }
+  for (bad in list("raw.X", "layer:", "layer:a/b", "layers/counts", NA_character_, 1)) {
+    expect_error(cellucid:::.served_defaults(list(expression_source = bad)), "^expression_source must be \"X\", \"raw\" or \"layer:<name>\" \\(a layer's name, without \"/\"\\); got ")
+  }
+  expect_error(cellucid:::.served_defaults(list(knn_key = "")), "^knn_key must name a key")
+  expect_error(cellucid:::.served_defaults(list(knn_key = c("a", "b"))), "^knn_key must be exactly one string")
   key <- http_request(served_url(viewer, "X/indptr/0"))
   expect_identical(key$body, readBin(file.path(folder, "X/indptr/0"), "raw", file.size(file.path(folder, "X/indptr/0"))))
   expect_identical(http_request(served_url(viewer, "../f.zarr.zip"))$status, 404L)
@@ -593,6 +617,19 @@ test_that("arguments that do not choose what is shown are refused by name", {
   expect_error(cellucid_serve(small_sce(), "positional", quiet = TRUE), "must be named")
   expect_error(cellucid_view(), "needs data")
   expect_error(cellucid_serve(small_sce(), port = 70000, quiet = TRUE), "port must be one whole number")
+  # The seed of a served object's priority order is fixed (0, a prefix for the default subsample).
+  expect_error(cellucid_serve(small_sce(), priority_seed = 3, quiet = TRUE), "has no argument c\\(\"priority_seed\"\\)")
+})
+
+test_that("a served object takes total_counts, the column of its cells' totals, as cellucid_prepare() does", {
+  skip_without_sce()
+  sce <- small_sce()
+  adt <- SummarizedExperiment::assay(SingleCellExperiment::altExp(sce, "ADT"))
+  SummarizedExperiment::colData(sce)$adt_total <- as.numeric(Matrix::colSums(adt)) + 1
+  viewer <- cellucid_serve(sce, total_counts = c(ADT = "adt_total"), quiet = TRUE)
+  on.exit(cellucid_stop(viewer), add = TRUE)
+  expect_true("total_counts" %in% cellucid:::.view_plan_arguments)
+  expect_error(cellucid_serve(sce, total_counts = c(ADT = "nowhere"), quiet = TRUE), "which obs does not hold")
 })
 
 test_that("a file served as it is says what a subsample of it reads, unless it is in priority order", {
@@ -630,4 +667,18 @@ test_that("a file served as it is says what a subsample of it reads, unless it i
   )
   on.exit(cellucid_stop(viewer), add = TRUE)
   expect_true(any(grepl("Its cells are in their own order", messages, fixed = TRUE)))
+})
+
+test_that("a host this machine cannot serve from is refused saying so, not as a port taken (R9Y-5)", {
+  skip_without_sce()
+  # cellucid-python's bind_refusal() sentence, with R's spelling.
+  for (host in c("no-such-host.invalid", "192.0.2.1")) {
+    expect_error(
+      cellucid_serve(small_sce(alt = FALSE), dataset_id = "h", dataset_name = "H", host = host,
+                     port = 0L, web_cache_dir = viewer_fixture_web_cache(), web_source_url = NULL, quiet = TRUE),
+      paste0("Host '", host, "' is not an address this machine can serve from. Use host = \"127.0.0.1\" to serve ",
+             "only this computer, which is the default, or host = \"0.0.0.0\" to accept connections from other machines."),
+      fixed = TRUE
+    )
+  }
 })

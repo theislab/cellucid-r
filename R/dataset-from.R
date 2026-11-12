@@ -172,7 +172,7 @@
   list(embeddings = out, notes = notes)
 }
 
-# The neighbour graph: the first of `graphs` (in the order given) that is a
+# The neighbor graph: the first of `graphs` (in the order given) that is a
 # cells x cells matrix over the dataset's cells, exactly symmetric once its
 # diagonal is removed. Each graph passed over is named.
 .choose_graph <- function(graphs, cells, what) {
@@ -199,7 +199,7 @@
     if (!isTRUE(Matrix::isSymmetric(graph, tol = 0))) {
       notes <- c(notes, paste0(
         what, " '", name, "' is not symmetric and was not read: the viewer draws ",
-        "an undirected neighbour graph."
+        "an undirected neighbor graph."
       ))
       next
     }
@@ -264,12 +264,36 @@
     out$modality <- scalar(defaults$modality)
     out$normalize_embeddings <- scalar(defaults$normalizeEmbeddings)
     out$centroid_min_points <- scalar(defaults$centroidMinPoints)
+    # knn and expression are launch defaults too, which cellucid_prepare()
+    # writes for no file (it stores X and obsp['connectivities'], the ones the
+    # viewer opens with): left out, as cellucid-python's prepare() leaves them.
     unknown <- setdiff(names(defaults), c(
       paste0("embedding", c("1d", "2d", "3d")), "latentKey", "obsKeys", "geneIdColumn",
-      "vectorFieldDefault", "modality", "normalizeEmbeddings", "centroidMinPoints"
+      "vectorFieldDefault", "modality", "normalizeEmbeddings", "centroidMinPoints",
+      "knn", "expression"
     ))
     if (length(unknown) > 0L) {
       notes <- c(notes, paste0(where, "$defaults: not written, no such launch default: ", .format_value_list(unknown), "."))
+    }
+  }
+  # The caller's column of the cells' totals (over all genes, or over the
+  # source's gene panel) stays named (total_counts =, with what it covers,
+  # total_counts_over =); totals over the stored genes are summed again.
+  totals <- record$totalCounts
+  if (is.list(totals)) {
+    named_over <- function(entry) is.list(entry) && isTRUE(scalar(entry$over) %in% .total_counts_over_named)
+    if (!is.null(totals$field)) {
+      if (named_over(totals)) {
+        out$total_counts <- scalar(totals$field)
+        if (identical(scalar(totals$over), .total_counts_over_panel)) out$total_counts_over <- .total_counts_over_panel
+      }
+    } else {
+      kept <- Filter(named_over, totals)
+      if (length(kept) > 0L) {
+        out$total_counts <- vapply(kept, function(entry) scalar(entry$field), character(1L))
+        panel <- names(Filter(function(entry) identical(scalar(entry$over), .total_counts_over_panel), kept))
+        if (length(panel) > 0L) out$total_counts_over <- stats::setNames(rep(.total_counts_over_panel, length(panel)), panel)
+      }
     }
   }
   list(components = Filter(Negate(is.null), out), notes = notes)
@@ -337,12 +361,14 @@
   if (length(passed_over) > 0L) {
     notes <- c(notes, paste0(
       "Seurat graph ", paste0("'", passed_over, "'", collapse = ", "),
-      " not read: the viewer draws one undirected neighbour graph, a shared-nearest-neighbour one."
+      " not read: the viewer draws one undirected neighbor graph, a shared-nearest-neighbor one."
     ))
   }
 
   misc <- tryCatch(methods::slot(object, "misc"), error = function(error) list())
-  declared <- .declared_components(misc$cellucid, "misc$cellucid")
+  # [[ ]], never $: $ matches a partial name (misc$cellucid would read
+  # misc$cellucid_highlight__..._colors when there is no cellucid record).
+  declared <- .declared_components(misc[["cellucid"]], "misc$cellucid")
   notes <- c(notes, declared$notes)
   components <- declared$components
   project <- tryCatch(as.character(methods::slot(object, "project.name")), error = function(error) "")
@@ -352,6 +378,8 @@
   }
   components$embeddings <- placed$embeddings
   components$obs <- obs
+  # Scanpy's colors of its columns, kept in misc as uns['<column>_colors'].
+  components$obs_colors <- .held_obs_colors(function(key) misc[[key]], names(obs))
   components$connectivities <- chosen$graph
   components$modalities <- modalities
   components$notes <- if (length(notes) > 0L) paste0("From the Seurat object: ", notes)
@@ -359,8 +387,10 @@
   components
 }
 
-# One Seurat assay as a modality: its expression (data, else counts), counts
-# as a layer beside data, its var and its cells.
+# One Seurat assay as a modality: its expression (data, else counts), its var
+# and its cells. The store holds one matrix per modality: the layers not
+# written (counts beside data, scale.data, any other) are named in a note, as
+# cellucid-python names the layers and raw of an AnnData it does not write.
 .seurat_assay <- function(assay, name, cells) {
   where <- paste0("assays$", name)
   notes <- character()
@@ -390,7 +420,7 @@
     # counts is read only when there is no data: the store holds one matrix
     # per modality.
     counts <- if (is.null(data)) layer("counts")
-    other <- setdiff(layer_names, c("data", "counts"))
+    other <- setdiff(layer_names, if (is.null(data)) "counts" else "data")
     if (length(other) > 0L) {
       notes <- c(notes, paste0(where, " layers not read: ", .format_value_list(other), "."))
     }
@@ -413,6 +443,11 @@
     counts <- if (methods::.hasSlot(assay, "counts")) methods::slot(assay, "counts") else NULL
     if (!present(data)) data <- NULL
     if (!present(counts)) counts <- NULL
+    scaled <- if (methods::.hasSlot(assay, "scale.data")) methods::slot(assay, "scale.data")
+    other <- c(if (!is.null(data) && !is.null(counts)) "counts", if (present(scaled)) "scale.data")
+    if (length(other) > 0L) {
+      notes <- c(notes, paste0(where, " layers not read: ", .format_value_list(other), "."))
+    }
     features <- rownames(if (!is.null(data)) data else counts)
     meta <- methods::slot(assay, "meta.features")
     var_frame <- if (nrow(meta) == length(features)) {
@@ -531,11 +566,14 @@
     notes <- c(notes, graph$notes)
   }
 
-  declared <- .declared_components(S4Vectors::metadata(object)$cellucid, "metadata(x)$cellucid")
+  declared <- .declared_components(S4Vectors::metadata(object)[["cellucid"]], "metadata(x)$cellucid")
   notes <- c(notes, declared$notes)
   components <- declared$components
   components$embeddings <- placed$embeddings
   components$obs <- obs
+  # Scanpy's colors of its columns, kept in metadata(x) as uns['<column>_colors']
+  # (zellkonverter carries uns there).
+  components$obs_colors <- .held_obs_colors(function(key) S4Vectors::metadata(object)[[key]], names(obs))
   components$connectivities <- graph$graph
   components$modalities <- modalities
   components$notes <- if (length(notes) > 0L) paste0("From the ", kind, ": ", notes)

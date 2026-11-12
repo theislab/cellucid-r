@@ -19,12 +19,16 @@
 #   (one TRUE/FALSE column per group, cellucid_highlight__<page>__<group>
 #   from the page's name and the group's label), and one presentation row per
 #   other domain whose value at the step differs from the tracker's opening
-#   (filters, colours, views, the camera, analyses: how the data was shown,
+#   (filters, colors, views, the camera, analyses: how the data was shown,
 #   never applied).
 # - Statuses: write; unchanged (the object holds it already: applying again
 #   changes nothing and says so); replace (a column or gene set an earlier
 #   apply wrote, holding other values, with overwrite = TRUE); not-applied,
 #   with the reason (a column the person made is never replaced).
+# - The record of an apply (the history model's Provenance) holds the step's
+#   expression values (expression: list(normalize, log1p), NULL when the
+#   session holds none): what the person looked at the genes in, recorded and
+#   never applied -- the object's expression values stay as stored.
 # - Gene sets go to the cellucid record's gene_sets by name (origin
 #   "session") and, one TRUE/FALSE column each, to the feature metadata of
 #   the gene axis the data mapping reads: the modality it reads (a Seurat
@@ -41,13 +45,35 @@
 #   the sets stay in the record (a warning says so). A set the step no
 #   longer holds has no row: its record and its column stay. The var columns
 #   are planned with the rest and are not rows of the plan.
+# - Colors go with the columns (R/round-trip.R .colors_state), where the
+#   object keeps what an AnnData keeps in uns, under Scanpy's name
+#   <column>_colors: a categorical field written or replaced with the colors
+#   it is shown in (.apply_shown_colors): in the view in focus at the step,
+#   the color the person or an agent gave a category (the colors value), else
+#   the color it opens with -- its palette (a field made from highlight
+#   pages: its pages' colors), else Cellucid's own category colors by
+#   position (R/category-colors.R); any other column written with none; a
+#   renamed column's carried along; merged levels keeping their first level's
+#   color. A dataset column recolored in the view in focus (a factor; its
+#   name after the apply's renames, its levels after its relabels) takes the
+#   colors it is shown in (.apply_column_colors): the color the person or an
+#   agent gave a category, else the color it opens with -- the colors held
+#   for it (.apply_opening_palette), a merged level taking its first source
+#   level's, else Cellucid's own by position -- one column-colors row each
+#   (domain colors), in the colors value's order, before the colors row. The
+#   colors row stays not-applied (every other color is how the data was
+#   shown), its note saying so when a field's or a column's colors went with
+#   its column (.apply_colors_note).
 # - obs['cellucid_original_position'] (R/priority.R) is never written,
 #   renamed or replaced: a plan that would is refused before anything is
 #   written, dry runs included (an object in a verified stored order is
 #   refused before that).
 # - What is checked, only what the chosen step needs: the dataset (cell
-#   count, the data mapping's keys and gene count, the dataset id when the
-#   object names one, the cell order when the object has the embedding the
+#   count, the data mapping's keys and gene count, the dataset id -- the one
+#   the object was shown under (dataset_id = , as cellucid_view() was given
+#   it; a viewer's request names the id it served the object under itself)
+#   or else the one the object declares in its cellucid record, when it
+#   names one -- the cell order when the object has the embedding the
 #   session names) and the fields the chosen step's state uses.
 #
 # The state values read here are the web app's (app/state/domains/README.md
@@ -64,7 +90,7 @@
   deleted_field = c("source", "key", "purged"),
   user_field = c("id", "source", "kind", "key", "deleted", "purged", "createdAt", "sourceField", "operation"),
   user_category = c("categories", "codes", "sourcePages", "overlapStrategy", "overlapLabel", "intersectionLabels",
-                    "uncoveredLabel"),
+                    "uncoveredLabel", "palette"),
   user_values = "values",
   column = c("cells", "values"),
   source_field = c("sourceKey", "sourceIndex", "kind"),
@@ -74,7 +100,8 @@
   field_ref = c("source", "key"),
   range = c("min", "max"),
   gene_sets = "sets",
-  gene_set = c("name", "description", "genes")
+  gene_set = c("name", "description", "genes"),
+  expression = c("normalize", "log1p")
 )
 .session_overlap_strategies <- c("first", "last", "overlap-label", "intersections")
 .session_group_types <- c("annotation", "category", "combined", "knn", "lasso", "proximity", "range")
@@ -311,9 +338,11 @@
   list(renamed_fields = renamed_fields, renamed_categories = renamed_categories, deleted_fields = deleted_fields)
 }
 
-# A categorical column with categories renamed (merged where two read alike),
-# and whether each rename found its category. A factor's levels are text, so
-# only a text label names one of them ("1" is not 1).
+# A categorical column with categories renamed (merged where two read alike,
+# in the place of the first), whether each rename found its category, and
+# for each level after the place (1-based) of the first level before it was
+# made from (its colors follow it). A factor's levels are text, so only a
+# text label names one of them ("1" is not 1).
 .renamed_factor <- function(values, renames) {
   levels <- levels(values)
   labels <- levels
@@ -326,16 +355,19 @@
   }
   # A level renamed to a label another holds merges with it.
   levels(values) <- labels
-  list(values = values, found = found)
+  list(values = values, found = found, sources = match(levels(values), labels))
 }
 
 # A text column with the values each rename names replaced.
 .renamed_text <- function(values, renames) {
-  out <- values
+  # A logical column with a label renamed is text: the others as the viewer
+  # names them ("false", "true").
+  out <- if (is.logical(values)) ifelse(values, "true", "false") else values
   found <- logical(length(renames))
   for (at in seq_along(renames)) {
     category <- renames[[at]]$category
-    hits <- if (is.character(category)) !is.na(values) & values == category else rep(FALSE, length(values))
+    named <- is.character(category) || (is.logical(category) && is.logical(values))
+    hits <- if (named) !is.na(values) & values == category else rep(FALSE, length(values))
     found[[at]] <- any(hits)
     out[hits] <- .category_label(renames[[at]]$name)
   }
@@ -351,10 +383,39 @@
   )
 }
 
+# The colors (R/round-trip.R .colors_state) the object's columns hold once
+# its relabeled columns' values are replaced and its columns renamed:
+# `sources` gives, for each relabeled factor, each level's first level
+# before; a text column has none.
+.relabel_colors <- function(data, replaced, renamed, sources) {
+  colors <- .colors_state(data)
+  table <- .object_cell_table(data)
+  for (column in names(replaced)) {
+    from <- sources[[column]]
+    if (is.null(from)) {
+      colors$put(column, NULL)
+      next
+    }
+    before <- length(levels(table[[column]]))
+    if (length(from) == before) next
+    held <- .text_colors(colors$held(column))
+    colors$put(column, if (is.null(held) || length(held) < before) NULL else held[from])
+  }
+  moved <- lapply(names(renamed), function(old) .text_colors(colors$held(old)))
+  for (old in names(renamed)) colors$put(old, NULL)
+  for (at in seq_along(renamed)) colors$put(renamed[[at]], moved[[at]])
+  colors
+}
+
 # The object with its relabeled columns' values replaced and its columns
-# renamed in place (all at once: two columns may swap names).
-.object_with_relabels <- function(data, replaced, renamed) {
-  if (length(replaced) == 0L && length(renamed) == 0L) return(data)
+# renamed in place (all at once: two columns may swap names), their colors
+# following them (.relabel_colors), and each dataset column the session
+# recolored (`recolor`, by its name after the renames: .apply_column_colors)
+# given the colors it is shown in.
+.object_with_relabels <- function(data, replaced, renamed, sources, recolor) {
+  if (length(replaced) == 0L && length(renamed) == 0L && length(recolor) == 0L) return(data)
+  colors <- .relabel_colors(data, replaced, renamed, sources)
+  for (name in names(recolor)) colors$put(name, recolor[[name]])
   write <- function(table) {
     for (column in names(replaced)) table[[column]] <- replaced[[column]]
     original <- names(table)
@@ -363,7 +424,7 @@
     names(table) <- columns
     table
   }
-  switch(.object_kind(data),
+  data <- switch(.object_kind(data),
     seurat = {
       methods::slot(data, "meta.data") <- write(methods::slot(data, "meta.data"))
       data
@@ -374,6 +435,7 @@
     },
     data.frame = write(data)
   )
+  .with_colors(data, colors)
 }
 
 # --- User-defined fields --------------------------------------------------------------
@@ -484,6 +546,18 @@
 # --- The words a plan uses (the same as cellucid-python's) --------------------------
 
 .apply_presentation_note <- "Presentation: not applied to the object."
+.apply_colors_note <- paste0(
+  "The colors of the user fields written and of the dataset columns recolored go with their columns ",
+  "(uns['<column>_colors']); every other color is how the data was shown: not applied to the object."
+)
+.apply_modality_colors_note <- function(column) paste0("\"", column, "\" is a column of a MuData modality; colors apply to the global obs.")
+.apply_not_categorical_colors_note <- function(column) {
+  paste0("The obs column \"", column, "\" is not categorical; Scanpy keeps colors for a categorical column only.")
+}
+.apply_missing_categories_note <- function(column, labels) {
+  paste0("Not written: the ", .plural(length(labels), "color"), " of ", paste0("\"", labels, "\"", collapse = ", "),
+         ", which the obs column \"", column, "\" does not have.")
+}
 .apply_gene_name_note <- "A gene's display name is recorded, never applied to the object."
 .apply_gene_category_note <- "A gene has no categories."
 .apply_deletion_note <- "A deletion is recorded, never applied to the object: the column stays."
@@ -501,6 +575,19 @@
   "replay it in Cellucid on its dataset instead."
 )
 .apply_data_domains <- c("cells", "field-overlays", "gene-sets", "highlights")
+
+# The expression values a step's state holds (its "expression" value), as the
+# provenance records them (the history model's ExpressionValues):
+# list(normalize, log1p), or NULL when the session holds none. Recorded so a
+# notebook knows what the person looked at the genes in; never applied (the
+# object's values stay as stored).
+.apply_expression_values <- function(value, step) {
+  if (is.null(value)) return(NULL)
+  label <- paste0("expression value at step ", step)
+  .session_keys(value, .session_domain_keys$expression, label)
+  list(normalize = .session_bool(value$normalize, paste0(label, "'s normalize")),
+       log1p = .session_bool(value$log1p, paste0(label, "'s log1p")))
+}
 
 .apply_row <- function(kind, domain, name, status, column = NA_character_, from = character(), cells = NA_integer_, note = NA_character_) {
   list(kind = kind, domain = domain, name = name, column = column, from = from, cells = cells, status = status, note = note)
@@ -536,7 +623,7 @@
 # The cell-order digest of some cells' stored embedding values
 # (data/cell-order-digest.js): two MurmurHash3 lanes per cell over its
 # original position and its float32 values on up to three axes, summed,
-# finalised with the cell count; 16 lower-case hex digits. 32-bit unsigned
+# finalized with the cell count; 16 lower-case hex digits. 32-bit unsigned
 # words are held as doubles (exact below 2^53), their bit operations done on
 # 16-bit halves (R's integers are signed and hold no -2^31).
 .apply_cell_order_digest <- function(values, positions = NULL) {
@@ -613,7 +700,7 @@
 }
 
 # The dataset fields a step's state uses (collectRequiredFields): every obs
-# column and gene a view colours by or filters on, or a highlight group is
+# column and gene a view colors by or filters on, or a highlight group is
 # bound to; fields the session made itself are not listed.
 .apply_required_fields <- function(state) {
   obs <- character()
@@ -668,6 +755,8 @@ cellucid_history_applied <- function(data) {
 .apply_labels_of <- function(values) {
   if (is.factor(values)) return(levels(values))
   if (is.character(values)) return(unique(values[!is.na(values)]))
+  # A logical column's categories are false and true, as the viewer reads it.
+  if (is.logical(values)) return(c(FALSE, TRUE)[c(FALSE, TRUE) %in% values])
   NULL
 }
 
@@ -754,7 +843,8 @@ cellucid_history_applied <- function(data) {
     if (has_from) {
       by_column[[before]] <- c(by_column[[before]], list(entry))
       renamed[[length(renamed) + 1L]] <- list(kind = "category", column = after, from = from, to = name)
-      count <- sum(!is.na(values) & as.character(values) == from)
+      shown <- if (is.logical(values)) ifelse(values, "true", "false") else as.character(values)
+      count <- sum(!is.na(values) & shown == from)
       rows[[length(rows) + 1L]] <- .apply_row(kind, "field-overlays", name, "write", column = after, from = from, cells = as.integer(count))
     } else if (has_to && any(vapply(earlier_categories, function(item) {
       identical(item$column, after) && identical(item$from, from) && identical(item$to, name)
@@ -766,17 +856,207 @@ cellucid_history_applied <- function(data) {
     }
   }
   replaced <- list()
+  sources <- list()
   for (column in names(by_column)) {
     values <- table[[column]]
-    replaced[[column]] <- if (is.factor(values)) .renamed_factor(values, by_column[[column]])$values else .renamed_text(values, by_column[[column]])$values
+    if (is.factor(values)) {
+      renamed_factor <- .renamed_factor(values, by_column[[column]])
+      replaced[[column]] <- renamed_factor$values
+      sources[[column]] <- renamed_factor$sources
+    } else {
+      replaced[[column]] <- .renamed_text(values, by_column[[column]])$values
+    }
   }
   for (entry in entries$deleted_fields) {
     rows[[length(rows) + 1L]] <- .apply_row("field-deleted", "field-overlays", entry$key, "not-applied", note = .apply_deletion_note)
   }
-  list(rows = rows, rename = rename, replaced = replaced, renamed = renamed)
+  list(rows = rows, rename = rename, replaced = replaced, sources = sources, renamed = renamed, earlier_names = earlier_names)
 }
 
 # --- User-defined fields and highlights as candidate columns -----------------------------
+
+# The colors a step shows (cellucid-python's anndata_session/_colors.py, by
+# the same rule). The colors value (app/state/domains/colors.js) holds, per
+# view (live first, then kept views), the fields whose colors differ from
+# their opening colors; a categorical field's entry lists each category
+# recolored ({category, color} by label). The views value names the view in
+# focus (focus, its position; 0 is the live view). `colors` and `views` are
+# the step's values (NULL when the session holds none: nothing recolored, the
+# live view in focus).
+#
+# Each field the view in focus recolors categories of, in the value's order:
+# list(source, key (NULL for a user field), user (its id, NULL for a dataset
+# field), recolored: each category's identity (.session_category_identity) to
+# its "#rrggbb", labels: each identity to the category as the viewer shows
+# it).
+.apply_focused_entries <- function(colors, views) {
+  if (is.null(colors)) return(list())
+  record <- .session_record(colors, "colors value")
+  per_view <- .session_list(record[["views"]], "colors value views")
+  focus <- 0
+  if (!is.null(views)) {
+    shown <- .session_record(views, "views value")
+    focus <- shown[["focus"]]
+    if (is.logical(focus) || !is.numeric(focus) || length(focus) != 1L || is.na(focus) || focus < 0 || focus != floor(focus)) {
+      .session_refuse("views value focus", "must be a non-negative whole number.")
+    }
+  }
+  if (focus >= length(per_view)) {
+    .session_refuse("colors value", "holds ", length(per_view), " ", .plural(length(per_view), "view"), ", and the view in focus is view ", focus, ".")
+  }
+  entries <- .session_list(per_view[[focus + 1]], paste0("colors value views[", focus, "]"))
+  out <- list()
+  for (position in seq_along(entries)) {
+    label <- paste0("colors value views[", focus, "][", position - 1L, "]")
+    entry <- .session_record(entries[[position]], label)
+    field <- .session_record(entry[["field"]], paste0(label, ".field"))
+    source <- .session_source(field[["source"]], paste0(label, ".field.source"))
+    user <- field[["user"]]
+    key <- field[["key"]]
+    if (!is.null(user)) {
+      if (!.is_text(user)) .session_refuse(paste0(label, ".field.user"), "must be a non-empty text.")
+    } else if (!.is_text(key)) {
+      .session_refuse(paste0(label, ".field.key"), "must be a non-empty text.")
+    }
+    if (!"colors" %in% names(entry)) next
+    recolored <- list()
+    labels <- character()
+    pairs <- .session_list(entry[["colors"]], paste0(label, ".colors"))
+    for (index in seq_along(pairs)) {
+      at <- paste0(label, ".colors[", index - 1L, "]")
+      pair <- .session_record(pairs[[index]], at)
+      if (!setequal(names(pair), c("category", "color")) || length(pair) != 2L) .session_refuse(at, "must name category and color only.")
+      category <- .session_category_primitive(pair[["category"]], paste0(at, ".category"))
+      color <- pair[["color"]]
+      if (!.is_json_string(color) || !grepl("^#[0-9a-f]{6}$", color)) .session_refuse(paste0(at, ".color"), "must be one #rrggbb color.")
+      identity <- .session_category_identity(category)
+      recolored[[identity]] <- color
+      labels[[identity]] <- .category_label(category)
+    }
+    out[[length(out) + 1L]] <- list(source = source, key = if (is.null(user)) key else NULL, user = user,
+                                    recolored = recolored, labels = labels)
+  }
+  out
+}
+
+# The categories of user fields recolored in the view in focus, by
+# "<source>\u0001<field id>": each category's identity to its "#rrggbb".
+.apply_focused_recolors <- function(colors, views) {
+  out <- list()
+  for (entry in .apply_focused_entries(colors, views)) {
+    if (!is.null(entry$user)) out[[paste0(entry$source, "\u0001", entry$user)]] <- entry$recolored
+  }
+  out
+}
+
+# The categories of the dataset's obs columns recolored in the view in focus,
+# by the column's key as the dataset names it (a column renamed in the
+# session keeps its key), in the value's order: each an entry of
+# .apply_focused_entries. A gene's colors (a color map, a range) are never
+# categories: not here.
+.apply_focused_column_recolors <- function(colors, views) {
+  out <- list()
+  for (entry in .apply_focused_entries(colors, views)) {
+    if (is.null(entry$user) && identical(entry$source, "obs") && length(entry$recolored) > 0L) out[[entry$key]] <- entry
+  }
+  out
+}
+
+# The colors a categorical user field's categories are shown in, one
+# "#rrggbb" a category in its order: the view in focus's recolors, else its
+# palette, else Cellucid's own colors by position.
+.apply_shown_colors <- function(categories, palette, recolored) {
+  opening <- if (is.null(palette)) .default_category_colors(length(categories)) else palette
+  vapply(seq_along(categories), function(index) {
+    given <- recolored[[.session_category_identity(categories[[index]])]]
+    if (is.null(given)) opening[[index]] else given
+  }, "")
+}
+
+# A file's color as the viewer draws it: "#rrggbb" in lowercase (#rgb
+# widened, the alpha of #rrggbbaa dropped).
+.apply_drawn_color <- function(text) {
+  digits <- substring(text, 2L)
+  digits <- ifelse(nchar(digits) == 3L, gsub("(.)", "\\1\\1", digits), substring(digits, 1L, 6L))
+  tolower(paste0("#", digits))
+}
+
+# The colors the `count` categories (factor levels) of a dataset column open
+# with in the viewer from the colors held for it (`held`, its
+# <column>_colors): the first `count`, as drawn, when there are that many and
+# each is a hex color (R/dataset-plan.R .hex_file_color; palettes.js
+# scanpyCategoryPalette); NULL otherwise, and the column opens in Cellucid's
+# own colors by position.
+.apply_opening_palette <- function(held, count) {
+  colors <- .text_colors(held)
+  if (is.null(colors) || count == 0L || length(colors) < count) return(NULL)
+  first <- colors[seq_len(count)]
+  if (!all(grepl(.hex_file_color, first))) return(NULL)
+  .apply_drawn_color(first)
+}
+
+# Each dataset column the view in focus recolored categories of
+# (.apply_focused_column_recolors, by the key the dataset names it), written
+# with the colors it is shown in: each level, in the column's order once the
+# apply's labels are applied, takes the color the person or an agent gave it,
+# else the color it opens with -- the colors held for the column
+# (.apply_opening_palette; a level merged by the apply takes its first source
+# level's), else Cellucid's own colors by position. A row (column-colors,
+# domain colors, in the colors value's order) is write when those differ
+# from the colors the column holds after the apply's other changes,
+# unchanged when they are the same, not-applied (with the reason) for a
+# column the object lacks, a MuData modality's column, a column that is not a
+# factor (Scanpy keeps colors for a categorical column only), or one with
+# none of the categories recolored. `recolor`: the colors to write, by the
+# column's name after the apply's renames.
+.apply_column_colors <- function(recolored, data, labels, modality_columns) {
+  table <- .object_cell_table(data)
+  present <- names(table)
+  would_hold <- .relabel_colors(data, labels$replaced, labels$rename, labels$sources)
+  rows <- list()
+  recolor <- list()
+  row <- function(name, status, note = NA_character_) .apply_row("column-colors", "colors", name, status, note = note)
+  for (key in names(recolored)) {
+    given <- recolored[[key]]
+    before <- if (key %in% present || is.na(labels$earlier_names[key])) key else labels$earlier_names[[key]]
+    after <- if (before %in% names(labels$rename)) labels$rename[[before]] else before
+    if (!before %in% present) {
+      note <- if (key %in% modality_columns) .apply_modality_colors_note(key) else .apply_absent_note(key)
+      rows[[length(rows) + 1L]] <- row(after, "not-applied", note)
+      next
+    }
+    values <- table[[before]]
+    if (!is.factor(values)) {
+      rows[[length(rows) + 1L]] <- row(after, "not-applied", .apply_not_categorical_colors_note(after))
+      next
+    }
+    count <- nlevels(values)
+    relabeled <- labels$replaced[[before]]
+    categories <- if (is.null(relabeled)) levels(values) else levels(relabeled)
+    sources <- if (is.null(labels$sources[[before]])) seq_len(count) else labels$sources[[before]]
+    opening <- .apply_opening_palette(.object_uns(data, .colors_key(before)), count)
+    if (is.null(opening)) opening <- .default_category_colors(count)
+    identities <- vapply(categories, .session_category_identity, "", USE.NAMES = FALSE)
+    shown <- vapply(seq_along(categories), function(at) {
+      color <- given$recolored[[identities[[at]]]]
+      if (is.null(color)) opening[[sources[[at]]]] else color
+    }, "")
+    asked <- names(given$recolored)
+    missing <- unname(given$labels[asked[!asked %in% identities]])
+    note <- if (length(missing) > 0L) .apply_missing_categories_note(after, missing) else NA_character_
+    if (length(missing) == length(asked)) {
+      rows[[length(rows) + 1L]] <- row(after, "not-applied", note)
+      next
+    }
+    if (identical(.text_colors(would_hold$held(after)), shown)) {
+      rows[[length(rows) + 1L]] <- row(after, "unchanged", note)
+      next
+    }
+    recolor[[after]] <- shown
+    rows[[length(rows) + 1L]] <- row(after, "write", note)
+  }
+  list(rows = rows, recolor = recolor)
+}
 
 # One candidate column per user-defined field the state holds, every field
 # checked before any is built: its values (NULL when the session does not
@@ -816,6 +1096,7 @@ cellucid_history_applied <- function(data) {
       out[[length(out) + 1L]] <- unapplied(.apply_purged_note)
       next
     }
+    colors <- NULL
     if (identical(kind, "category")) {
       categories <- .session_category_list(field$categories, paste0(label, ".categories"))
       .session_list(field$sourcePages, paste0(label, ".sourcePages"))
@@ -825,6 +1106,16 @@ cellucid_history_applied <- function(data) {
       .session_optional_text(field$overlapLabel, paste0(label, ".overlapLabel"))
       if (!is.null(field$intersectionLabels)) .session_record(field$intersectionLabels, paste0(label, ".intersectionLabels"))
       .session_optional_text(field$uncoveredLabel, paste0(label, ".uncoveredLabel"))
+      # The colors its categories open with in the viewer (a field made from
+      # highlight pages: its pages' colors), or null; written with the view
+      # in focus's recolors (.apply_shown_colors).
+      palette <- field$palette
+      if (!is.null(palette) && (!is.list(palette) || length(palette) != length(categories) ||
+        !all(vapply(palette, function(color) .is_json_string(color) && grepl("^#[0-9a-f]{6}$", color), logical(1L))))) {
+        .session_refuse(label, ".palette must be null or one #rrggbb color a category.")
+      }
+      colors <- .apply_shown_colors(categories, if (is.null(palette)) NULL else vapply(palette, identity, ""),
+                                    context$recolors[[paste0(source, "\u0001", id)]])
       part <- .session_column_part(field$codes, names(.session_code_types), n, paste0(label, ".codes"))
       missing <- .session_code_types[[part$type]]
       if (length(categories) > missing) .session_refuse(label, "has more categories than its code type (", part$type, ") can name.")
@@ -862,7 +1153,7 @@ cellucid_history_applied <- function(data) {
     }
     values <- .without_unknown(values, context$known, n)
     out[[length(out) + 1L]] <- list(kind = "user-field", name = key, values = values, cells = as.integer(sum(!is.na(values))),
-                                    note = NA_character_, metadata = metadata)
+                                    note = NA_character_, metadata = metadata, colors = colors)
   }
   out
 }
@@ -904,7 +1195,7 @@ cellucid_history_applied <- function(data) {
     page_ids <- c(page_ids, page_id)
     page_name <- .session_text(page$name, paste0(page_label, ".name"))
     color <- .session_text(page$color, paste0(page_label, ".color"))
-    if (!grepl("^#[0-9A-Fa-f]{6}$", color)) .session_refuse(page_label, ".color must be a six-digit hex colour.")
+    if (!grepl("^#[0-9A-Fa-f]{6}$", color)) .session_refuse(page_label, ".color must be a six-digit hex color.")
     groups <- .session_list(page$groups, paste0(page_label, ".groups"))
     for (group_index in seq_along(groups)) {
       group_label <- paste0(page_label, ".groups[", group_index - 1L, "]")
@@ -1123,7 +1414,7 @@ cellucid_history_applied <- function(data) {
   )
 }
 
-.apply_plan <- function(data, session, extra, tracker, branch, step, overwrite, keep_session) {
+.apply_plan <- function(data, session, extra, tracker, branch, step, overwrite, keep_session, shown_as) {
   .require_session(session)
   if (identical(session$scope$content, "steps")) .abort(.apply_steps_only)
   chosen <- .apply_choose(session, tracker, branch, step)
@@ -1151,10 +1442,17 @@ cellucid_history_applied <- function(data) {
     open_cells <- length(kept)
   }
   fingerprint <- session$dataset_fingerprint
+  # The id the object was shown under (a viewer given dataset_id = serves it
+  # under that id, and saves its session under it), else the one it declares.
   own_id <- .object_record(data)$id
-  if (.is_text(own_id) && !is.null(fingerprint$datasetId) && !identical(own_id, fingerprint$datasetId)) {
+  if (!is.null(fingerprint$datasetId) && !is.null(shown_as) && !identical(shown_as, fingerprint$datasetId)) {
+    .abort("This session was saved on the dataset '", fingerprint$datasetId, "', and this object was shown as '", shown_as,
+           "'. Apply it to the dataset it was saved on.")
+  }
+  if (is.null(shown_as) && .is_text(own_id) && !is.null(fingerprint$datasetId) && !identical(own_id, fingerprint$datasetId)) {
     .abort("This session was saved on the dataset '", fingerprint$datasetId, "', and this object is '", own_id,
-           "' (its cellucid record's id). Apply it to the dataset it was saved on.")
+           "' (its cellucid record's id). Apply it to the dataset it was saved on; when it is that dataset, shown under ",
+           "another id (dataset_id = when it was shown), name that id: dataset_id = '", fingerprint$datasetId, "'.")
   }
   if (fingerprint$cellCount != open_cells) {
     .abort("This session was saved on ", fingerprint$cellCount, " ", .plural(fingerprint$cellCount, "cell"), ", and this object has ",
@@ -1197,7 +1495,8 @@ cellucid_history_applied <- function(data) {
     name <- candidate$name
     if (is.null(candidate$values)) return(.apply_row(candidate$kind, domain, name, "not-applied", cells = candidate$cells, note = candidate$note))
     if (!name %in% present_after) {
-      columns[[length(columns) + 1L]] <<- list(name = name, values = candidate$values, metadata = candidate$metadata)
+      columns[[length(columns) + 1L]] <<- list(name = name, values = candidate$values, metadata = candidate$metadata,
+                                               colors = candidate$colors)
       return(.apply_row(candidate$kind, domain, name, "write", cells = candidate$cells))
     }
     existing_name <- names(labels$rename)[labels$rename == name]
@@ -1205,14 +1504,22 @@ cellucid_history_applied <- function(data) {
     if (is.null(owners[[name]])) return(.apply_row(candidate$kind, domain, name, "not-applied", cells = candidate$cells, note = .apply_taken_note(name)))
     if (.apply_same_column(existing, candidate$values)) return(.apply_row(candidate$kind, domain, name, "unchanged", cells = candidate$cells))
     if (overwrite) {
-      columns[[length(columns) + 1L]] <<- list(name = name, values = candidate$values, metadata = candidate$metadata)
+      columns[[length(columns) + 1L]] <<- list(name = name, values = candidate$values, metadata = candidate$metadata,
+                                               colors = candidate$colors)
       return(.apply_row(candidate$kind, domain, name, "replace", cells = candidate$cells,
                         note = paste0("Written by an earlier apply (step ", owners[[name]], "); replaced.")))
     }
     .apply_row(candidate$kind, domain, name, "not-applied", cells = candidate$cells, note = .apply_owned_note(name, owners[[name]]))
   }
-  context <- list(view = view, mapping = mapping, n = n, known = known)
-  field_rows <- lapply(.apply_user_fields(context, overlays$userFields), settle, domain = "field-overlays")
+  recolors <- .apply_focused_recolors(state[["colors"]], state[["views"]])
+  context <- list(view = view, mapping = mapping, n = n, known = known, recolors = recolors)
+  fields <- .apply_user_fields(context, overlays$userFields)
+  field_rows <- lapply(fields, settle, domain = "field-overlays")
+  # Whether a field written or replaced took colors the step's colors value gave it.
+  recolored_written <- any(vapply(seq_along(fields), function(at) {
+    field <- fields[[at]]$metadata
+    field_rows[[at]]$status %in% c("write", "replace") && length(recolors[[paste0(field$source, "\u0001", field$field_id)]]) > 0L
+  }, logical(1L)))
   sets <- .apply_read_gene_sets(state[["gene-sets"]])
   gene_sets <- .apply_gene_sets(sets, data, session, overwrite)
   feature_frame <- if (length(gene_sets$writes) > 0L) .apply_feature_frame(data, view, mapping, extra) else list(where = "none")
@@ -1222,14 +1529,21 @@ cellucid_history_applied <- function(data) {
   # an apply plans may write, rename or replace it.
   touched <- c(vapply(columns, function(column) column$name, ""), names(labels$replaced), names(labels$rename), unname(labels$rename))
   if (.original_position_column %in% touched) .abort(.apply_original_position_message)
+  column_colors <- .apply_column_colors(.apply_focused_column_recolors(state[["colors"]], state[["views"]]), data, labels,
+                                        modality_columns)
+  # Whether any colors went with a column: a field's, or a recolored dataset column's.
+  colors_went <- recolored_written || any(vapply(column_colors$rows, function(row) row$status != "not-applied", logical(1L)))
   by_domain <- list(`field-overlays` = c(labels$rows, field_rows), `gene-sets` = gene_sets$rows, highlights = highlight_rows)
   rows <- list()
   for (domain in .history_domains) {
-    if (!is.null(by_domain[[domain]])) {
-      rows <- c(rows, by_domain[[domain]])
-    } else if (!domain %in% .apply_data_domains && !identical(hashes[[domain]], root[[domain]])) {
-      rows[[length(rows) + 1L]] <- .apply_row("presentation", domain, .history_domain_names[[domain]], "not-applied", note = .apply_presentation_note)
+    presentation <- NULL
+    if (!domain %in% .apply_data_domains && !identical(hashes[[domain]], root[[domain]])) {
+      note <- if (identical(domain, "colors") && colors_went) .apply_colors_note else .apply_presentation_note
+      presentation <- list(.apply_row("presentation", domain, .history_domain_names[[domain]], "not-applied", note = note))
     }
+    # A dataset column's colors, then the colors row.
+    if (identical(domain, "colors")) rows <- c(rows, column_colors$rows)
+    rows <- c(rows, if (!is.null(by_domain[[domain]])) by_domain[[domain]] else presentation)
   }
   structure(
     list(
@@ -1243,10 +1557,10 @@ cellucid_history_applied <- function(data) {
     class = "cellucid_apply_plan",
     cellucid_context = list(
       data = data, session = session, extra = extra, tracker = tracker, branch = branch, step = step, overwrite = overwrite,
-      keep_session = keep_session,
-      writes = list(columns = columns, replaced = labels$replaced, rename = labels$rename, gene_sets = gene_sets$writes,
+      keep_session = keep_session, shown_as = shown_as, expression = .apply_expression_values(state[["expression"]], chosen$step$id),
+      writes = list(columns = columns, replaced = labels$replaced, sources = labels$sources, rename = labels$rename, gene_sets = gene_sets$writes,
                     feature_frame = feature_frame, var_columns = var_columns$columns, var_notes = var_columns$notes,
-                    renamed = labels$renamed)
+                    renamed = labels$renamed, recolor = column_colors$recolor)
     )
   )
 }
@@ -1278,6 +1592,7 @@ cellucid_history_applied <- function(data) {
     columns = as.list(rows$name[rows$kind %in% c("user-field", "highlight") & writing]),
     renamed = writes$renamed,
     skipped = lapply(which(rows$status == "not-applied"), function(at) list(kind = rows$kind[[at]], name = rows$name[[at]], note = rows$note[[at]])),
+    expression = context$expression,
     session = if (isTRUE(context$keep_session)) {
       path <- context$session$path
       jsonlite::base64_enc(readBin(path, "raw", n = file.size(path)))
@@ -1288,6 +1603,7 @@ cellucid_history_applied <- function(data) {
     entry["column"] <- list(entry$column)
     entry
   })
+  json["expression"] <- list(provenance$expression)
   json["session"] <- list(provenance$session)
   tryCatch(.history_check_record("Provenance", json, "provenance"), cellucid_history_model_error = function(error) .abort(conditionMessage(error)))
   record <- .object_record(data)
@@ -1297,7 +1613,7 @@ cellucid_history_applied <- function(data) {
     record$gene_sets <- sets
   }
   record$history_applied <- c(cellucid_history_applied(data), list(provenance))
-  data <- .object_with_relabels(data, writes$replaced, writes$rename)
+  data <- .object_with_relabels(data, writes$replaced, writes$rename, writes$sources, writes$recolor)
   data <- .object_with_columns(data, writes$columns)
   data <- .object_with_feature_columns(data, writes$feature_frame, writes$var_columns)
   data <- .object_with_record(data, record)
@@ -1310,16 +1626,23 @@ cellucid_history_applied <- function(data) {
 # tracker's head) as columns of `data`, and its gene sets: what
 # cellucid_pull() writes from a session file, checked as an apply checks it.
 .session_columns <- function(data, session, extra) {
-  plan <- .apply_plan(data, session, extra, NULL, NULL, NULL, FALSE, FALSE)
+  plan <- .apply_plan(data, session, extra, NULL, NULL, NULL, FALSE, FALSE, .apply_shown_as(extra))
   tracker <- cellucid_tracker(session, plan$tracker)
   state <- .history_raw_state(tracker, plan$step)
   n <- length(.object_cells(data))
   view <- .session_view(data, extra)
   known <- .session_known_cells(session$cells, state$cells, view, n, plan$step)
   overlays <- .session_keys(state[["field-overlays"]], .session_domain_keys$overlays, "field-overlays value")
-  context <- list(view = view, mapping = session$dataset_fingerprint$dataMapping, n = n, known = known)
+  context <- list(view = view, mapping = session$dataset_fingerprint$dataMapping, n = n, known = known,
+                  recolors = .apply_focused_recolors(state[["colors"]], state[["views"]]))
   columns <- c(.apply_highlights(context, state$highlights), .apply_user_fields(context, overlays$userFields))
   list(columns = Filter(function(column) !is.null(column$values), columns), gene_sets = .apply_read_gene_sets(state[["gene-sets"]]))
+}
+
+# The id the object was shown under, as cellucid_view() was given it
+# (dataset_id = among the arguments after the session), or NULL.
+.apply_shown_as <- function(extra) {
+  if (is.null(extra$dataset_id)) NULL else .validate_dataset_id(extra$dataset_id)
 }
 
 .apply_session_of <- function(session, timeout) {
@@ -1354,7 +1677,15 @@ cellucid_apply_session <- function(
     if (!is.null(value) && !.is_json_string(value)) .abort(name, " must be one string (a name or an id) or NULL.")
   }
   extra <- .session_view_arguments(list(...))
-  plan <- .apply_plan(data, .apply_session_of(session, timeout), extra, tracker, branch, step, overwrite, keep_session)
+  shown_as <- .apply_shown_as(extra)
+  # A viewer's request: the viewer saved its session under the id it served
+  # its data under, which dataset_id = may have made another than the one the
+  # data declares; an object declaring that same id is the one it served.
+  if (is.null(shown_as) && inherits(session, "cellucid_session_request")) {
+    own_id <- .object_record(data)$id
+    if (.is_text(own_id) && identical(own_id, session$viewer$declared_id)) shown_as <- session$viewer$dataset_id
+  }
+  plan <- .apply_plan(data, .apply_session_of(session, timeout), extra, tracker, branch, step, overwrite, keep_session, shown_as)
   if (dry_run) return(plan)
   .apply_write(plan)
 }
@@ -1363,7 +1694,7 @@ cellucid_apply_plan <- function(plan) {
   if (!inherits(plan, "cellucid_apply_plan")) .abort("plan must be what cellucid_apply_session(..., dry_run = TRUE) returned.")
   context <- attr(plan, "cellucid_context", exact = TRUE)
   again <- .apply_plan(context$data, context$session, context$extra, context$tracker, context$branch, context$step,
-                       context$overwrite, context$keep_session)
+                       context$overwrite, context$keep_session, context$shown_as)
   if (!identical(again$rows, plan$rows)) {
     .abort("The object changed since this plan was made; make the plan again (dry_run = TRUE) and apply that.")
   }

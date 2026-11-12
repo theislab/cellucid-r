@@ -45,11 +45,13 @@ drives a viewer of either package. Nothing passes through a relay or the
 deployed site: the server talks to the viewer on this computer.
 
 The tools are the web app's own (the web connector's, generated into the
-package as \file{mcp_tools.json}): while a viewer page is open, the page's
-list for this connection, each tool saying what the person's permission
-settings make of it, and \code{cellucid_status}, which says which viewers
-are found, which one is driven and what to tell the person when none is
-open. The page runs every call as the app's agent (\dQuote{Claude Code
+package as \file{mcp_tools.json}; while a viewer page is open, the page's
+own list, the same tools), and \code{cellucid_status}, which says which
+viewers are found, which one is driven and what to tell the person when none
+is open. The list is the same whatever the person's settings and never
+changes while the server runs: the page tells the agent what the person's
+settings allow after its first tool result, and again after a result once
+they changed. The page runs every call as the app's agent (\dQuote{Claude Code
 (local)}) under the person's permission settings: a change runs, or waits
 for the person's answer in the viewer's confirm card -- asked in the app
 too, as an MCP elicitation, when the app can ask -- or is refused with one
@@ -101,7 +103,7 @@ in the viewer (Permissions in the chat settings or the Agents panel), applies
 to this agent as to every other: the page leaves values of single cells,
 extremes (a minimum, a maximum, a median) and pictures out of its results,
 and refuses summaries of groups an agent made by naming cells. It is not
-anonymisation: a summary of a very small group can still reveal its cells'
+anonymization: a summary of a very small group can still reveal its cells'
 values. Text written by others (labels, notes, dataset text) reaches the
 agent marked as data, never as instructions.
 
@@ -111,9 +113,9 @@ protocol versions 2024-11-05 to 2025-11-25 (\code{initialize}), \code{ping},
 call is stopped in the viewer), and the server's \code{elicitation/create}
 (a form, to an app whose elicitation capability is empty or names forms;
 withdrawn with \code{notifications/cancelled} when the person answers in the
-viewer first), \code{notifications/tools/list_changed} (the person's
-settings changed, or a page took the viewer) and \code{notifications/progress}
-(when a call names a progress token, counting 1, 2, ...); and the
+viewer first) and \code{notifications/progress} (when a call names a
+progress token, counting 1, 2, ...); the server's tools capability says
+\code{listChanged: false}, as its list never changes; and the
 per-request protocol 2026-07-28 (\code{server/discover}), whose clients are
 asked in the viewer's card only. Nothing but protocol messages is written to
 standard output: what R prints while the server runs goes to standard error.

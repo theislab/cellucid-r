@@ -12,13 +12,13 @@
 
 `cellucid` (repo: `cellucid-r`) opens a Seurat, SingleCellExperiment or SummarizedExperiment object in the Cellucid
 viewer from R — in the RStudio or Positron Viewer pane or a browser, with no Python — and writes it (or your
-embeddings, metadata, gene expression, neighbour graph and vector fields) as a **Cellucid-ready AnnData**: a standard
+embeddings, metadata, gene expression, neighbor graph and vector fields) as a **Cellucid-ready AnnData**: a standard
 AnnData Zarr store that the Cellucid web app opens directly and Python's `anndata` reads like any other. Several assays
 become a **Cellucid-ready MuData**.
 
-> **Active package version — 0.9.7** <!-- CELLUCID_VERSION -->
+> **Active package version — 0.9.8** <!-- CELLUCID_VERSION -->
 >
-> Version 0.9.7 is the active Cellucid for R source and documentation version, <!-- CELLUCID_VERSION -->
+> Version 0.9.8 is the active Cellucid for R source and documentation version, <!-- CELLUCID_VERSION -->
 > and it is the CRAN submission release. The CRAN package index is authoritative
 > for registry availability; the Installation guide below gives both exact
 > installation paths.
@@ -29,9 +29,9 @@ become a **Cellucid-ready MuData**.
   would write, uncompressed over loopback and making only what the viewer reads (a million-cell object's first
   gene in about a third of a second, never transposing its matrix), so a 100,000-cell object opens in under a
   second; do anything a person can do in the
-  viewer from R -- every action of its catalogue, `cellucid_act(viewer, "color.by", ...)` or its own function,
+  viewer from R -- every action of its catalog, `cellucid_act(viewer, "color.by", ...)` or its own function,
   `cellucid_color_by()`, `cellucid_highlight_cells()`, `cellucid_history_get()`, ... -- each one step of the
-  viewer's history, labelled as R's; listen with `cellucid_on("selection", ...)`; ask for its session (its whole
+  viewer's history, labeled as R's; listen with `cellucid_on("selection", ...)`; ask for its session (its whole
   history) with `cellucid_request_session()` (then `cellucid_session_result()`), read it with
   `cellucid_read_session()` -- trackers, branches, groups, steps, notes and turns as data frames (`cellucid_steps()`,
   `cellucid_groups()`, `cellucid_turns()`, ...), the methods paragraph and pseudocode of a branch -- and apply any step or branch back
@@ -67,7 +67,7 @@ become a **Cellucid-ready MuData**.
 
 Every value is stored as float32 (embeddings, expression, vector fields, the
 graph; expression as float64 only for integer counts above 2^24, which float32
-cannot hold exactly) and must be finite. A neighbour graph must be exactly symmetric, with a
+cannot hold exactly) and must be finite. A neighbor graph must be exactly symmetric, with a
 zero diagonal and non-negative weights; a stored zero in a sparse input is not
 an edge and is dropped.
 
@@ -93,7 +93,7 @@ Tools on macOS, or a C toolchain plus the R and zlib development headers on
 Linux. A
 platform CRAN binary, when available, does not require a local compiler.
 
-Optional but recommended (sparse expression matrices and neighbour graphs):
+Optional but recommended (sparse expression matrices and neighbor graphs):
 
 ```r
 install.packages("Matrix")

@@ -14,17 +14,39 @@
 #   response the declared media type; a cache holds exactly the declared
 #   files, the inventory and the source record (.cellucid-web-source.json),
 #   and no symbolic link.
-# - A new build is downloaded into a staging folder beside the cache, checked
-#   whole, and only then swapped in, so a failed or interrupted download
-#   never leaves a half-written cache.
+# - A new build is staged in a folder beside the cache (the files the cache
+#   already holds with the declared bytes copied, every other one downloaded,
+#   six at once), checked whole, and only then swapped in, so a failed or
+#   interrupted download never leaves a half-written cache.
 #
 # The cache is the published build of `source_url`: when the published build
 # id equals the cached one and the cache checks out, nothing is downloaded;
 # when the site cannot be reached, a cache that checks out is used as it is.
-# The build is about 17 MB, far over what a CRAN package may ship, so it is
+# The build is about 40 MB, far over what a CRAN package may ship, so it is
 # never bundled. Its default home is tools::R_user_dir("cellucid", "cache").
 
 .cellucid_web_url <- "https://www.cellucid.com"
+
+# What a start says when the source cannot be reached, word for word as
+# cellucid-python says it (web_cache.py WEB_APP_*; its
+# tests/test_r_python_parity_contract.py pins the two): the cached build served
+# offline, or why nothing can be served and how to get the app.
+.web_app_offline_notice <- "Could not reach {source}; serving the cached web app (build {build_id})."
+.web_app_unavailable <- paste0(
+  "The Cellucid web app could not be downloaded from {source} ({reason}), and {cache}. ",
+  "Connect to the internet once, or set web_cache_dir to a folder that holds a verified build."
+)
+.web_app_not_cached <- "no copy of it is cached in {cache_dir}"
+.web_app_cache_unverified <- "the copy cached in {cache_dir} does not check out ({problem})"
+
+# A message template with each {name} replaced by its value, as Python's str.format.
+.fill_message <- function(template, ...) {
+  values <- list(...)
+  for (name in names(values)) {
+    template <- gsub(paste0("{", name, "}"), as.character(values[[name]]), template, fixed = TRUE)
+  }
+  template
+}
 .web_inventory_file <- "cellucid-web-assets.json"
 .web_source_file <- ".cellucid-web-source.json"
 .web_build_id_max <- 200L
@@ -283,18 +305,22 @@
   inventory
 }
 
-# One file of the source, read whole: status 200, a media type, and exactly
-# the Content-Length it declares. The bytes are asked for as they are stored
-# (Accept-Encoding: identity), as Python's web cache asks: a host that
+# The handle of one request to the source. The bytes are asked for as they are
+# stored (Accept-Encoding: identity), as Python's web cache asks: a host that
 # compresses what it sends (GitHub Pages gzips text) declares the length of
 # the compressed body, which curl would otherwise decode to more bytes.
-.fetch_web <- function(source_url, path, timeout) {
-  url <- paste0(source_url, "/", utils::URLencode(path))
-  handle <- curl::new_handle(
+.web_handle <- function(timeout) {
+  curl::new_handle(
     useragent = "cellucid-r/web-cache", timeout = timeout, followlocation = FALSE,
     accept_encoding = "identity"
   )
-  response <- curl::curl_fetch_memory(url, handle = handle)
+}
+
+.web_url <- function(source_url, path) paste0(source_url, "/", utils::URLencode(path))
+
+# One response of the source, read whole: status 200, a media type, and
+# exactly the Content-Length it declares.
+.check_web_response <- function(url, response) {
   if (!identical(as.integer(response$status_code), 200L)) {
     .abort("Expected HTTP 200 for ", url, ", received ", response$status_code, ".")
   }
@@ -313,23 +339,89 @@
   list(data = response$content, content_type = content_type)
 }
 
-# Download one build into a staging folder beside the cache, check it whole,
-# and swap it in.
+.fetch_web <- function(source_url, path, timeout) {
+  url <- .web_url(source_url, path)
+  .check_web_response(url, curl::curl_fetch_memory(url, handle = .web_handle(timeout)))
+}
+
+# Downloads in flight at once, as web_cache.py: the six connections per host a
+# browser opens to a site, so the source sees no more than a browser loading
+# the app asks of it. One file at a time took over six minutes for the 1,209
+# files of a build from www.cellucid.com (2026-11-11).
+.concurrent_downloads <- 6L
+
+# Several files of the source at once, each read whole and checked as
+# .fetch_web checks one; named by path, in the order asked. The first failure
+# stops the build.
+.fetch_web_all <- function(source_url, paths, timeout) {
+  pool <- curl::new_pool(total_con = .concurrent_downloads, host_con = .concurrent_downloads)
+  responses <- list()
+  failures <- list()
+  for (path in paths) {
+    local({
+      asked <- path
+      curl::curl_fetch_multi(
+        .web_url(source_url, asked),
+        done = function(response) responses[[asked]] <<- response,
+        fail = function(message) failures[[asked]] <<- message,
+        pool = pool,
+        handle = .web_handle(timeout)
+      )
+    })
+  }
+  curl::multi_run(pool = pool)
+  if (length(failures) > 0L) {
+    .abort("Could not download ", .web_url(source_url, names(failures)[[1L]]), ": ", failures[[1L]])
+  }
+  stats::setNames(lapply(paths, function(path) .check_web_response(.web_url(source_url, path), responses[[path]])), paths)
+}
+
+# The bytes the cache from `source_url` holds for `asset` when they are
+# exactly the ones the new inventory declares, else NULL: an unchanged file is
+# not downloaded again.
+.active_copy <- function(cache_dir, source_url, asset) {
+  tryCatch(
+    {
+      if (!identical(.read_cache_source(cache_dir), source_url)) return(NULL)
+      bytes <- .read_bytes(file.path(cache_dir, asset$path))
+      .verify_asset_bytes(asset, bytes)
+      bytes
+    },
+    error = function(error) NULL,
+    warning = function(warning) NULL
+  )
+}
+
+# Stage one build beside the cache -- each file the cache holds with the
+# declared bytes copied from it, every other one downloaded (several at once)
+# and checked -- check it whole, and swap it in.
 .download_web_build <- function(cache_dir, source_url, inventory, inventory_bytes, timeout, quiet) {
   parent <- dirname(cache_dir)
   .dir_create(parent)
   stage <- tempfile(paste0(".", basename(cache_dir), ".staging-"), tmpdir = parent)
   .dir_create(stage)
   on.exit(unlink(stage, recursive = TRUE, force = TRUE), add = TRUE)
-  if (!quiet) {
-    total <- sum(vapply(inventory$assets, function(asset) asset$bytes, numeric(1L)))
+  place <- function(path, bytes) {
+    target <- file.path(stage, path)
+    .dir_create(dirname(target))
+    writeBin(bytes, target)
+  }
+  missing <- character()
+  for (asset in inventory$assets) {
+    kept <- .active_copy(cache_dir, source_url, asset)
+    if (is.null(kept)) missing <- c(missing, asset$path) else place(asset$path, kept)
+  }
+  if (!quiet && length(missing) > 0L) {
+    total <- sum(vapply(inventory$assets[missing], function(asset) asset$bytes, numeric(1L)))
     .inform(
-      "Downloading the Cellucid web app (", length(inventory$assets), " ", .plural(length(inventory$assets), "file"), ", ",
+      "Downloading the Cellucid web app (", length(missing), " ", .plural(length(missing), "file"), ", ",
       format(round(total / 1e6, 1), nsmall = 1), " MB) from ", source_url, " into ", cache_dir, "."
     )
   }
-  for (asset in inventory$assets) {
-    response <- .fetch_web(source_url, asset$path, timeout)
+  responses <- .fetch_web_all(source_url, missing, timeout)
+  for (path in missing) {
+    asset <- inventory$assets[[path]]
+    response <- responses[[path]]
     if (!identical(.media_type(response$content_type), .media_type(asset$content_type))) {
       .abort(
         "Web asset '", asset$path, "' response media type is '", .media_type(response$content_type),
@@ -337,9 +429,7 @@
       )
     }
     .verify_asset_bytes(asset, response$data)
-    target <- file.path(stage, asset$path)
-    .dir_create(dirname(target))
-    writeBin(response$data, target)
+    place(asset$path, response$data)
   }
   writeBin(inventory_bytes, file.path(stage, .web_inventory_file))
   writeBin(charToRaw(.source_record(source_url)), file.path(stage, .web_source_file))
@@ -369,17 +459,24 @@
     error = function(error) error
   )
   if (inherits(published, "error")) {
-    cached <- tryCatch(.verify_web_cache(cache_dir, expected_source_url = source_url), error = function(error) NULL)
-    if (is.null(cached)) {
-      .abort(
-        "The Cellucid web app could not be downloaded from ", source_url, " (",
-        conditionMessage(published), "), and no verified copy is cached in ", cache_dir,
-        ". Connect to the internet once, or pass web_cache_dir = a folder holding a build."
-      )
+    # The source cannot be read (offline, blocked, down): a cache whose every
+    # file matches its inventory's SHA-256 is that build exactly, so it is
+    # served; else the error says what is missing and how to get it.
+    cached <- tryCatch(.verify_web_cache(cache_dir, expected_source_url = source_url), error = function(error) error)
+    if (inherits(cached, "error")) {
+      cache <- if (dir.exists(cache_dir)) {
+        .fill_message(.web_app_cache_unverified, cache_dir = cache_dir, problem = conditionMessage(cached))
+      } else {
+        .fill_message(.web_app_not_cached, cache_dir = cache_dir)
+      }
+      .abort(.fill_message(
+        .web_app_unavailable,
+        source = source_url, reason = conditionMessage(published), cache = cache
+      ))
     }
-    if (!quiet) {
-      .inform("Could not reach ", source_url, "; serving the cached web app (build ", cached$build_id, ").")
-    }
+    # Said even when quiet, as cellucid-python says it: the app is the cached
+    # build, not what the source publishes now.
+    .inform(.fill_message(.web_app_offline_notice, source = source_url, build_id = cached$build_id))
     return(.web_build(cache_dir, cached))
   }
   if (!identical(published$content_type, "application/json; charset=utf-8")) {

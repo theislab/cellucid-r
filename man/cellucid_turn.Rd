@@ -14,7 +14,7 @@ cellucid_last_history_change(viewer)
 \arguments{
 \item{viewer}{What \code{\link{cellucid_view}()} or
 \code{\link{cellucid_serve}()} returned.}
-\item{label}{What the turn does, in a few words (\code{"Normalise and
+\item{label}{What the turn does, in a few words (\code{"Normalize and
 cluster"}): the State panel shows it as the turn's name. White space is
 collapsed.}
 \item{code}{The code to run inside the turn: every action it sends is one

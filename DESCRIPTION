@@ -1,7 +1,7 @@
 Package: cellucid
 Type: Package
 Title: Prepare and View Single-Cell Data in the Cellucid Viewer
-Version: 0.9.7
+Version: 0.9.8
 Config/cellucid/version-marker: CELLUCID_VERSION
 Authors@R: c(
     person(
@@ -11,7 +11,7 @@ Authors@R: c(
     )
   )
 Description: Writes single-cell embeddings, cell and gene metadata, gene
-    expression, neighbour graphs, and vector fields as a 'Cellucid'-ready
+    expression, neighbor graphs, and vector fields as a 'Cellucid'-ready
     'AnnData' store: a standard 'AnnData' 'Zarr' store, as a folder or as one
     ZIP file, with gene-major expression and the dataset's name, citation and
     launch defaults, which the 'Cellucid' web viewer opens directly and the

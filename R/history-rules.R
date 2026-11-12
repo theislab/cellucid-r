@@ -74,8 +74,10 @@
   paste0("There is no tracker \"", ref, "\"; the trackers are ", .history_quoted_list(names), ".")
 }
 
+# The web app's noStep with this package's call in place of the agents'
+# history_get (cellucid-python's says Tracker.steps).
 .history_no_step <- function(step, tracker) {
-  paste0("There is no step \"", step, "\" in the tracker \"", tracker, "\"; history_get lists its steps.")
+  paste0("There is no step \"", step, "\" in the tracker \"", tracker, "\"; cellucid_steps(tracker) lists its steps.")
 }
 
 .history_no_group <- function(ref, names) {

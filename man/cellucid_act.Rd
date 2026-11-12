@@ -7,20 +7,17 @@
 \name{cellucid_act}
 \alias{cellucid_act}
 \alias{cellucid_action_result}
-\alias{cellucid_freeze}
 \title{Do anything in an open Cellucid viewer: send an action, collect its answer}
 \usage{
 cellucid_act(.viewer, .action, ...)
 
 cellucid_action_result(request, timeout = 60)
-
-cellucid_freeze(viewer)
 }
 \arguments{
 \item{.viewer}{A viewer \code{\link{cellucid_view}()} or
 \code{\link{cellucid_serve}()} returned.}
 \item{.action}{The action, by its dotted type, such as \code{"color.by"} or
-\code{"highlight.cells"}: one of the viewer's action catalogue (each has its
+\code{"highlight.cells"}: one of the viewer's action catalog (each has its
 own function, below), or one a viewer newer than this package knows.}
 \item{...}{The action's parameters, by name, as its function takes them:
 \code{field = list(source = "obs", key = "cell_type")}. A parameter named as
@@ -30,8 +27,6 @@ out.}
 \item{request}{What \code{cellucid_act()}, an action's function or
 \code{\link{cellucid_push}()} returned.}
 \item{timeout}{Seconds to wait for the viewer's answer.}
-\item{viewer}{A viewer \code{\link{cellucid_view}()} or
-\code{\link{cellucid_serve}()} returned.}
 }
 \value{
 \code{cellucid_act()} returns the request at once, invisibly (a
@@ -40,8 +35,16 @@ page has connected, as soon as it does, in order with every other command.
 It prints its action and state (waiting for the viewer, sent, answered with
 the step it made, refused with why); \code{request$done} says whether the
 viewer answered, \code{request$step} the history step the action made
-(\code{list(id, label)}, or \code{NULL} for a read or a change that changed
-nothing), \code{request$state} the state.
+(\code{list(id, label)}, or \code{NULL} for a read or a change that made
+none), \code{request$unrecorded} why a change made no step (\code{NULL}
+beside a step and for a read, which records none by nature):
+\code{"unchanged"} (it changed nothing: it was so already),
+\code{"retracted"} (it put back what the step just before it changed, and
+that step was taken out), \code{"off"} (the viewer's History settings do not
+record this kind of change), \code{"paused"} (the history's recording is
+paused), \code{"elsewhere"} (another tracker of the history was shown
+meanwhile) or \code{"no-history"} (the dataset's history has not started
+yet); \code{request$state} the state.
 
 \code{cellucid_action_result()} returns the action's outcome: for a read,
 what it read; for a change, what it did (names, counts and ids), or
@@ -49,21 +52,24 @@ what it read; for a change, what it did (names, counts and ids), or
 \pkg{jsonlite} reads JSON (\code{simplifyVector = FALSE}); cells in them are
 original positions, the 0-based rows of the dataset's obs. It stops with the
 viewer's reason when the viewer refused the action, and when the viewer was
-stopped before it answered. The answer is kept while the request is: call it
-again for the same outcome.
-
-\code{cellucid_freeze()} returns the viewer invisibly.
+stopped before it answered. When the action, a change, made no history step,
+it returns the outcome all the same and warns why, a warning of class
+\code{cellucid_action_not_recorded} whose \code{unrecorded} names the reason
+(\code{"cellucid_color_by(): it changed nothing (it was so already), so no
+step was recorded."}); muffle it with \code{suppressWarnings()}, or by its
+class with \code{withCallingHandlers()}. The answer is kept while the request
+is: call it again for the same outcome.
 }
 \description{
-Everything a person can do in the viewer is an action of its catalogue --
-colouring, filtering, highlighting, renaming and merging categories, views
+Everything a person can do in the viewer is an action of its catalog --
+coloring, filtering, highlighting, renaming and merging categories, views
 and the camera, the layout, every analysis -- and so is everything an agent
 or a notebook does there: \code{cellucid_act()} sends one, by its type, with
 its parameters. Each action has its own function as well,
-\code{cellucid_<tool>()}, generated from the catalogue with its own help page
+\code{cellucid_<tool>()}, generated from the catalog with its own help page
 (\code{\link{cellucid_color_by}()}, \code{\link{cellucid_highlight_cells}()},
 \code{\link{cellucid_history_get}()}, \ldots). An action that changes the
-viewer is one step of its history, labelled as R's, undone like any other
+viewer is one step of its history, labeled as R's, undone like any other
 step; a read changes nothing.
 
 Nothing waits for the viewer: an action is sent and its request returned at
@@ -73,10 +79,6 @@ viewer answers between cells, so collect it in a later cell (it says so at
 once before then). An action the viewer refused and that nobody collects is
 said as a warning, unless a \code{\link{cellucid_on}()} handler of
 \code{"command_error"} takes it.
-
-\code{cellucid_freeze()} tells the page to keep its last complete view
-because R stops serving it (\code{\link{cellucid_stop}()} sends it first); it
-is a command, not an action.
 }
 \details{
 Parameters are converted to each action's parameter schema by its

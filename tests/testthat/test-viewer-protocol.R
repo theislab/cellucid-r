@@ -8,7 +8,7 @@
 # it must accept every example event and binary event, and produce every
 # example command -- a binary action byte for byte.
 
-.viewer_protocol_sha256 <- "3a38ca81ac9a906dbc995727a73e94f52a1a0dd3fa7a71d500817d45c5fdfb6d"
+.viewer_protocol_sha256 <- "c117822a5d87df03439fdbed9af460617764b59d9e560ba7c0e519ec5f708dae"
 
 protocol_fixture <- function() cellucid_read_fixture("viewer_protocol.json")
 
@@ -39,6 +39,7 @@ test_that("R declares exactly the fixture's channel, commands and events", {
   expect_identical(cellucid:::.viewer_action_type_pattern, fixture$action$typePattern)
   expect_identical(cellucid:::.viewer_action_array_fields, as.character(unlist(fixture$action$arrayFields)))
   expect_identical(cellucid:::.viewer_action_step_fields, as.character(unlist(fixture$action$stepFields)))
+  expect_identical(as.list(cellucid:::.viewer_action_unrecorded), fixture$action$unrecorded)
   expect_identical(cellucid:::.viewer_history_change_kinds, as.character(unlist(fixture$history$changeKinds)))
   expect_identical(cellucid:::.viewer_session_loaded_tracker_fields, as.character(unlist(fixture$history$sessionLoadedTrackerFields)))
   expect_identical(cellucid:::.viewer_data_mapping_origins, as.character(unlist(fixture$dataMappingOrigins)))
@@ -63,7 +64,24 @@ test_that("R declares exactly the fixture's channel, commands and events", {
   ))
   expect_identical(unlist(document$binaryCommands), c("action", "load_session"))
   expect_true(all(c("action_result", "history_changed", "session_loaded", "agent_tools", "agent_result", "agent_asking",
-                    "agent_answered", "agent_tools_changed") %in% unlist(document$events)))
+                    "agent_answered") %in% unlist(document$events)))
+})
+
+test_that("a handler takes every event of the fixture but an agent app's, and a misspelt one is refused", {
+  # cellucid-python's hooks take the same names (cellucid.jupyter.HOOK_EVENTS),
+  # pinned to the same fixture. A misspelt event used to be partially matched
+  # (match.arg()) or refused with R's generic words.
+  fixture <- protocol_fixture()
+  events <- c(names(fixture$events), names(fixture$binaryEvents))
+  expect_setequal(cellucid:::.hook_events(), c(grep("^agent_", events, value = TRUE, invert = TRUE), "message"))
+  viewer <- new.env()
+  class(viewer) <- "cellucid_viewer"
+  for (event in list("selections", "sel", "agent_result", 1, NA_character_, c("click", "hover"))) {
+    expect_error(cellucid_on(viewer, event, identity), "^event must be one of \"action_result\", .*\"message\"; got ")
+    expect_error(cellucid_off(viewer, event), "^event must be one of ")
+  }
+  expect_error(cellucid_on(viewer, "selections", identity), "; got c\\(\"selections\"\\)\\.$")
+  expect_error(cellucid_on(viewer, 1, identity), "; got a numeric\\.$")
 })
 
 test_that("every example event of the fixture is accepted", {
@@ -97,6 +115,7 @@ test_that("every example binary event of the fixture is decoded", {
       # The outcome is the body's UTF-8 JSON, as jsonlite reads JSON.
       expect_identical(parsed$payload$requestId, example$header$requestId)
       expect_identical(parsed$payload$step, example$header$step)
+      expect_identical(parsed$payload$unrecorded, example$header$unrecorded)
       expect_identical(parsed$payload$outcome, example$outcome)
     } else if (parsed$type %in% c("agent_tools", "agent_result")) {
       # The body is UTF-8 JSON: the tools, or the call's MCP tool result.
@@ -210,18 +229,53 @@ test_that("frames that break the protocol are refused with the reason", {
     bytes <- charToRaw(header)
     c(cellucid:::.encode_uint32(length(bytes)), bytes, body)
   }
-  ok <- answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null}", charToRaw("null"))
+  ok <- answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":null}", charToRaw("null"))
   expect_null(cellucid:::.parse_viewer_binary_event(ok)$payload$outcome)
+  # Why a change made no step: one of the closed set, never beside a step.
+  for (reason in names(cellucid:::.viewer_action_unrecorded)) {
+    said <- answer(paste0("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":\"", reason, "\"}"), charToRaw("null"))
+    expect_identical(cellucid:::.parse_viewer_binary_event(said)$payload$unrecorded, reason)
+  }
   refused_binary <- function(frame, pattern) {
     expect_error(cellucid:::.parse_viewer_binary_event(frame), pattern, class = "cellucid_protocol_error")
   }
-  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null}", raw(0)), "one JSON value")
-  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null}", charToRaw("{nope")), "one JSON value")
-  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null}", as.raw(c(0x22, 0xff, 0x22))), "UTF-8")
-  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":{\"id\":\"s1\"}}", charToRaw("null")), "exactly")
-  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"\",\"step\":null}", charToRaw("null")), "requestId")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":null}", raw(0)), "one JSON value")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":null}", charToRaw("{nope")), "one JSON value")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":null}", as.raw(c(0x22, 0xff, 0x22))), "UTF-8")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":{\"id\":\"s1\"},\"unrecorded\":null}", charToRaw("null")), "exactly")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"\",\"step\":null,\"unrecorded\":null}", charToRaw("null")), "requestId")
   refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\"}", charToRaw("null")), "exactly")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null}", charToRaw("null")), "exactly")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":\"forgotten\"}", charToRaw("null")), "unrecorded must be one of unchanged, retracted")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":null,\"unrecorded\":3}", charToRaw("null")), "unrecorded must be one of")
+  refused_binary(answer("{\"type\":\"action_result\",\"requestId\":\"a1\",\"step\":{\"id\":\"s1\",\"label\":\"Colored\"},\"unrecorded\":\"unchanged\"}", charToRaw("null")), "unrecorded must be null when the action made a step")
   refused_binary(answer("{\"type\":\"result\",\"requestId\":null,\"epoch\":\"0123456789abcdef\",\"revision\":1,\"kind\":\"visibility\",\"id\":\"visible\",\"nObs\":1,\"meta\":{},\"cells\":null,\"values\":null}", raw(0)), "exactly")
+})
+
+test_that("a categorical result carries the colors it is shown in, one a category", {
+  # The colors of the view in focus (RCC-1): one lowercase #rrggbb a
+  # category, in the categories' order; a pull writes them with the column.
+  categorical <- function(colors) {
+    header <- list(type = "result", epoch = "0123456789abcdef", revision = 1, kind = "categorical", id = "user_cat_1", nObs = 3,
+                   meta = list(key = "stage", categories = list("early", "late"), colors = colors, origin = "user"),
+                   cells = NULL, values = "uint8")
+    bytes <- charToRaw(as.character(jsonlite::toJSON(header, auto_unbox = TRUE, null = "null", digits = NA)))
+    c(cellucid:::.encode_uint32(length(bytes)), bytes, as.raw(c(0, 1, 255)))
+  }
+  decoded <- cellucid:::.parse_viewer_binary_event(categorical(list("#808080", "#008080")))$payload
+  expect_identical(unlist(decoded$meta$colors), c("#808080", "#008080"))
+  expect_identical(as.double(decoded$values), c(0, 1, 255))
+  for (colors in list(list("#808080"), list("#808080", "#008080", "#000000"), list("#808080", "#00808G"),
+                      list("#808080", "#00FF00"), list("#808080", "#0f0"), list("#808080", 7), list())) {
+    expect_error(cellucid:::.parse_viewer_binary_event(categorical(colors)), "one #rrggbb color (lowercase) a category",
+                 fixed = TRUE, class = "cellucid_protocol_error")
+  }
+  # A categorical without its colors is not the protocol's.
+  header <- list(type = "result", epoch = "0123456789abcdef", revision = 1, kind = "categorical", id = "user_cat_1", nObs = 3,
+                 meta = list(key = "stage", categories = list("early", "late"), origin = "user"), cells = NULL, values = "uint8")
+  bytes <- charToRaw(as.character(jsonlite::toJSON(header, auto_unbox = TRUE, null = "null", digits = NA)))
+  expect_error(cellucid:::.parse_viewer_binary_event(c(cellucid:::.encode_uint32(length(bytes)), bytes, as.raw(c(0, 1, 255)))),
+               class = "cellucid_protocol_error")
 })
 
 test_that("a selection of millions of cells and of indices past 2^31 decodes exactly", {
@@ -230,7 +284,7 @@ test_that("a selection of millions of cells and of indices past 2^31 decodes exa
   frame <- c(cellucid:::.encode_uint32(length(header)), header, cellucid:::.encode_uint32(cells))
   elapsed <- system.time(parsed <- cellucid:::.parse_viewer_binary_event(frame))[["elapsed"]]
   expect_identical(parsed$payload$cells, cells)
-  # Vectorised: two million indices decode in well under a second.
+  # Vectorized: two million indices decode in well under a second.
   expect_lt(elapsed, 2)
 })
 

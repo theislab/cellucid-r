@@ -20,11 +20,11 @@
  * x = m * 2^e exactly, and every text that reads back as x lies in its
  * rounding interval: from halfway down to the double below to halfway up to
  * the double above, both ends included when m is even (a text exactly
- * halfway is read as the even neighbour). In units of 2^(e - 2) x is 4m, the
+ * halfway is read as the even neighbor). In units of 2^(e - 2) x is 4m, the
  * interval [4m - 2, 4m + 2] (from 4m - 1 for a power of two, whose double
  * below is nearer). At each length of `digits` digits the decimals are
  * c * 10^p; with A / B = x / 10^p as two big integers, c = A / B rounded half
- * to even is the nearest, and it, or its neighbour on x's other side when it
+ * to even is the nearest, and it, or its neighbor on x's other side when it
  * is outside, is compared with the interval's ends exactly.
  */
 
@@ -249,7 +249,7 @@ static void shortest_digits(double value, char *digits, int *point) {
     uint64_t lowest = ten_to(count - 1);
     uint64_t candidates[2] = {c, 0};
     int n_candidates = 1;
-    /* The neighbour on value's other side, when it has `count` digits too
+    /* The neighbor on value's other side, when it has `count` digits too
      * (9.99 up one unit is 1.00 of the next power of ten, and 1.00 down one
      * 9.99 of the one below: fewer digits, tried already). */
     int side = compare_scaled(c, &b, &a);

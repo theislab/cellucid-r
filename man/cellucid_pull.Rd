@@ -47,13 +47,18 @@ lasso drawn and \code{cellucid_pull()} run in the next cell finds the lasso;
 or what the web app exports with no R session at all: obs-column
 \code{.csv} files (a header row, \code{obs_name} then each column's name; a
 kind row, \code{kind} then each column's kind, \code{highlight},
-\code{categorical} or \code{continuous}; a row per cell; each column written
-as named and as its kind says, never guessed from its values, and a cell the
-file does not list \code{NA}), \code{.gmt} gene sets and
+\code{categorical} or \code{continuous}; a categories row,
+\code{categories} then each categorical column's categories in the field's
+order as a JSON array of strings, empty for the other kinds; a row per cell;
+each column written as named and as its kind says, never guessed from its
+values, a categorical with the categories row's levels in its order (those no
+cell holds too; a label it does not list is refused), and a cell the file
+does not list \code{NA}), \code{.gmt} gene sets and
 \code{.cellucid-session} files; one file, several, or a folder of them.}
 \item{...}{For a session file: the arguments \code{\link{cellucid_view}()} was
 given that choose what is shown (as \code{\link{cellucid_apply_session}()}
-takes them).}
+takes them; \code{dataset_id}: the id the object was shown under, when the
+viewer was given another than the one it declares).}
 \item{highlights}{Write the highlight groups.}
 \item{fields}{Write the user-defined fields (labels, annotations, clusters).}
 \item{scores}{Write the scores an analysis made (a gene signature's).}
@@ -110,7 +115,9 @@ viewer sent them all once, and while the viewer shows a dataset this viewer
 did not serve, opened in it instead), each a list of
 \code{kind} (\code{"highlight"}, \code{"categorical"}, \code{"continuous"},
 \code{"geneSet"}, \code{"visibility"}, \code{"subset"}), \code{id},
-\code{revision}, \code{n_obs}, \code{meta}, \code{cells} (1-based, \code{NULL}
+\code{revision}, \code{n_obs}, \code{meta} (a categorical's: its \code{key},
+\code{categories}, the \code{colors} its view in focus shows them in and its
+\code{origin}), \code{cells} (1-based, \code{NULL}
 for every cell), \code{values} and, for an object, \code{cell_names}.
 
 \code{cellucid_subset()}: those cells of \code{data}.
@@ -135,6 +142,18 @@ the object as an apply checks it (the dataset, the cells and their order, the
 fields that state uses), keeps its gene sets, and names the columns with
 every other column of the pull (the labels a session renames are
 \code{cellucid_apply_session()}'s to write).
+
+A column's colors go with it, under Scanpy's name \code{<column>_colors}
+where the object keeps what an AnnData keeps in \code{uns} (Seurat
+\code{misc}, \code{metadata(x)}, a data frame's attributes), under the name
+the column is written to: a session file's categorical field gets the
+colors it is shown in, one a level (in the view in focus, a level's color the
+person or an agent chose, else its \code{palette} -- a field made from
+highlight pages: its pages' colors -- else Cellucid's own category colors); any other column written gets none (colors left under its
+name described another column, and are removed), and a column a viewer pull
+removes takes its colors with it. A live viewer's categorical field gets the
+colors its view in focus shows it in (the viewer's result carries them, one
+\code{"#rrggbb"} a level); the obs-column CSV carries no colors.
 }
 \examples{
 if (interactive() && requireNamespace("SeuratObject", quietly = TRUE)) {

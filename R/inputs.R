@@ -1,5 +1,5 @@
 # Checking what cellucid_prepare() was given and turning it into the elements
-# of the AnnData store: the obsm arrays, the vector fields, the neighbour
+# of the AnnData store: the obsm arrays, the vector fields, the neighbor
 # graph, and the names of the cells. Everything here runs before anything is
 # written.
 
@@ -279,58 +279,119 @@
 # The conventional names of one UMAP, in the order the default rule takes
 # them (UMAP_KEYS in the web app's data-mapping.js): Scanpy's X_umap (also a
 # Seurat object's umap reduction), a SingleCellExperiment's UMAP reducedDim
-# (scater's runUMAP()), then a Seurat object's weighted-nearest-neighbour and
+# (scater's runUMAP()), then a Seurat object's weighted-nearest-neighbor and
 # Azimuth reference UMAPs. Reductions and reducedDims are obsm['X_<name>']
 # with the name's case kept.
 .umap_keys <- c("X_umap", "X_UMAP", "X_wnn.umap", "X_ref.umap")
 
+# The embedding of each dimension slot a store opens with: the web app's
+# resolveEmbeddingSlots and cellucid-python's resolve_embedding_slots, pinned
+# by the shared conformance fixture (embeddingSlots). `widths` is a named
+# vector of column counts (NA for an entry that cannot be drawn). The slots a
+# launch names (`named_slots`, slot "1d"/"2d"/"3d" to key) and the default
+# rule's (X_umap_1d/2d/3d, else the first 1-3 column one of .umap_keys, the
+# dataset's own names first, then the modality it opens with) are kept; every
+# slot they leave empty takes the best-ranked array of exactly its width
+# (.best_guess_order), marked guessed, so every width is treated alike:
+# X_umap beside X_umap_3d names both 2d and 3d. Only when no slot is filled at
+# all is 2d taken from the best-ranked wider array at columns 0 and 1.
+# Vector-field keys and the latent key are never guessed. `load_check(key,
+# columns)` returns NULL when the array loads, else the reason; a guessed
+# candidate that fails is passed over (rejected). Returns list(slots, guessed,
+# rejected), each slot list(key, columns) or NULL, in "1d", "2d", "3d" order.
+.resolve_embedding_slots <- function(widths, latent_key = NULL, modality = NULL,
+                                     named_slots = list(), load_check = NULL) {
+  keys <- names(widths)
+  vector_keys <- keys[vapply(keys, function(key) !is.null(.parse_vector_field_key(key, keys)), logical(1L))]
+  candidates <- widths[!is.na(widths) & widths >= 1L & !(keys %in% vector_keys) &
+    keys != if (is.null(latent_key)) "" else latent_key]
+  slot_names <- c("1d", "2d", "3d")
+  slots <- stats::setNames(vector("list", 3L), slot_names)
+  for (prefix in if (is.null(modality)) "" else c("", paste0(modality, ":"))) {
+    dimensional <- intersect(paste0(prefix, c("X_umap_1d", "X_umap_2d", "X_umap_3d")), keys)
+    if (length(dimensional) > 0L) {
+      for (key in dimensional) {
+        dimension <- as.integer(substr(key, nchar(key) - 1L, nchar(key) - 1L))
+        slots[[paste0(dimension, "d")]] <- list(key = key, columns = seq_len(dimension) - 1L)
+      }
+      break
+    }
+    single <- paste0(prefix, .umap_keys)
+    single <- single[single %in% keys]
+    single <- single[!is.na(widths[single]) & widths[single] %in% 1:3]
+    if (length(single) > 0L) {
+      dimension <- as.integer(widths[[single[[1L]]]])
+      slots[[paste0(dimension, "d")]] <- list(key = single[[1L]], columns = seq_len(dimension) - 1L)
+      break
+    }
+  }
+  for (slot in names(named_slots)) {
+    slots[[slot]] <- list(key = named_slots[[slot]], columns = seq_len(as.integer(substr(slot, 1L, 1L))) - 1L)
+  }
+  given <- slot_names[!vapply(slots, is.null, logical(1L))]
+  candidates <- candidates[!names(candidates) %in% vapply(slots[given], function(ref) ref$key, character(1L))]
+  rejected <- list()
+  failed <- character()
+  loads <- function(key, columns) {
+    if (key %in% failed) return(FALSE)
+    reason <- if (is.null(load_check)) NULL else load_check(key, columns)
+    if (is.null(reason)) return(TRUE)
+    failed <<- c(failed, key)
+    rejected[[length(rejected) + 1L]] <<- list(key, reason)
+    FALSE
+  }
+  for (dimension in 3:1) {
+    slot <- paste0(dimension, "d")
+    if (!is.null(slots[[slot]])) next
+    for (key in .best_guess_order(names(candidates)[candidates == dimension], modality)) {
+      if (loads(key, seq_len(dimension) - 1L)) {
+        slots[[slot]] <- list(key = key, columns = seq_len(dimension) - 1L)
+        break
+      }
+    }
+  }
+  if (all(vapply(slots, is.null, logical(1L)))) {
+    for (key in .best_guess_order(names(candidates)[candidates > 3L], modality)) {
+      if (loads(key, c(0L, 1L))) {
+        slots[["2d"]] <- list(key = key, columns = c(0L, 1L))
+        break
+      }
+    }
+  }
+  filled <- slot_names[!vapply(slots, is.null, logical(1L))]
+  guessed <- setdiff(filled, given)
+  list(slots = slots, guessed = if (length(guessed) == 0L) character() else paste0("embeddings.", guessed), rejected = rejected)
+}
+
 # The embeddings the web app shows a store with when it opens
 # (resolveEmbeddingSlots and defaultEnabledEmbeddings, from metadata): the
-# slots the defaults name over the default rule (X_umap_1d/2d/3d, else the
-# first 1-3 column one of .umap_keys); when nothing names a slot and the rule fills none, the
-# best guess (per dimension the first key of that exact width, else the first
-# wider key in 2D); and every other 1-3 column embedding. The latent space is
-# never guessed or shown beside.
+# slots of .resolve_embedding_slots (the slots the defaults name over the
+# default rule, every other width guessed), the default rule's first, and
+# every other 1-3 column embedding. The latent space is never guessed or
+# shown beside.
 .shown_embedding_keys <- function(matrices, named_slots, latent_key, modality = NULL) {
   widths <- vapply(matrices, ncol, integer(1L))
+  named <- stats::setNames(
+    lapply(named_slots, identity),
+    tolower(sub("^embedding", "", names(named_slots)))
+  )
+  resolved <- .resolve_embedding_slots(widths, latent_key, modality, named)
+  given <- setdiff(c("3d", "2d", "1d"), sub("^embeddings\\.", "", resolved$guessed))
+  order <- c(given, sub("^embeddings\\.", "", rev(resolved$guessed)))
+  slots <- unlist(lapply(order, function(slot) resolved$slots[[slot]]$key), use.names = FALSE)
   candidates <- widths[names(widths) != if (is.null(latent_key)) "" else latent_key]
-  slots <- character()
-  # The dataset's own names, then (several modalities) the same names in the
-  # namespace of the modality it opens with.
-  for (prefix in if (is.null(modality)) "" else c("", paste0(modality, ":"))) {
-    dimensional <- intersect(paste0(prefix, c("X_umap_1d", "X_umap_2d", "X_umap_3d")), names(widths))
-    slots <- if (length(dimensional) > 0L) {
-      dimensional
-    } else {
-      single <- paste0(prefix, .umap_keys)
-      single <- single[single %in% names(widths)]
-      single <- single[widths[single] %in% 1:3]
-      single[seq_len(min(1L, length(single)))]
-    }
-    if (length(slots) > 0L) break
-  }
-  if (length(named_slots) > 0L) {
-    slots <- c(slots, unlist(named_slots, use.names = FALSE))
-  } else if (length(slots) == 0L) {
-    for (dimension in 3:1) {
-      exact <- .best_guess_order(names(candidates)[candidates == dimension], modality)
-      if (length(exact) > 0L) slots <- c(slots, exact[[1L]])
-    }
-    if (length(slots) == 0L) {
-      wide <- .best_guess_order(names(candidates)[candidates > 3L], modality)
-      if (length(wide) > 0L) slots <- wide[[1L]]
-    }
-  }
   unique(c(slots, names(candidates)[candidates <= 3L]))
 }
 
-# --- The neighbour graph ----------------------------------------------------
+# --- The neighbor graph -----------------------------------------------------
 
-# The neighbour graph a dataset opens with, of its graph names (the web app's
+# The neighbor graph a dataset opens with, of its graph names (the web app's
 # defaultGraph and cellucid-python's default_graph, pinned by the shared
-# conformance fixture): Scanpy's 'connectivities'; else Seurat's
-# shared-nearest-neighbour graph of the modality (assay) it opens with
-# ('<modality>_snn'); else the first other shared-nearest-neighbour graph
+# conformance fixture): Scanpy's 'connectivities'; else the connectivities of
+# the MuData modality it opens with ('<modality>:connectivities', the key a
+# reader presents that modality's obsp['connectivities'] under); else Seurat's
+# shared-nearest-neighbor graph of the modality (assay) it opens with
+# ('<modality>_snn'); else the first other shared-nearest-neighbor graph
 # ('<assay>_snn', or 'SNN', in any case) in code-point order; else NULL.
 # Seurat's '<assay>_nn' (directed) and Scanpy's 'distances' are never the
 # default. .graph_candidates lists them all in that order.
@@ -338,7 +399,11 @@
   keys <- as.character(keys)
   shared <- keys[tolower(keys) == "snn" | (endsWith(tolower(keys), "_snn") & nchar(keys) > 4L)]
   shared <- shared[order(enc2utf8(shared), method = "radix")]
-  own <- if (is.null(modality)) character() else intersect(paste0(modality, "_snn"), keys)
+  own <- if (is.null(modality)) {
+    character()
+  } else {
+    intersect(c(paste0(modality, ":connectivities"), paste0(modality, "_snn")), keys)
+  }
   unique(c(intersect("connectivities", keys), own, shared))
 }
 
@@ -351,7 +416,7 @@
 # square cells x cells matrix, exactly symmetric, with finite non-negative
 # weights; a stored zero is not an edge and is dropped, and so is the
 # diagonal: a self-loop is no edge anyone can draw (Seurat's FindNeighbors
-# counts each cell among its own neighbours, so its '<assay>_snn' has 1 on
+# counts each cell among its own neighbors, so its '<assay>_snn' has 1 on
 # the diagonal), as the web app and cellucid-python drop it. A directed graph
 # (Seurat's '<assay>_nn', Scanpy's 'distances') is refused.
 # For a symmetric matrix the column-compressed arrays of a dgCMatrix are the
@@ -396,7 +461,7 @@
   graph <- Matrix::drop0(graph)
   if (!isTRUE(Matrix::isSymmetric(graph, tol = 0))) {
     .abort(
-      "Connectivity matrix must be exactly symmetric: a directed neighbour graph ",
+      "Connectivity matrix must be exactly symmetric: a directed neighbor graph ",
       "(Seurat's '<assay>_nn', Scanpy's 'distances') is not one the viewer draws; ",
       "pass a symmetric one (obsp[['connectivities']], or Seurat's '<assay>_snn')."
     )

@@ -25,7 +25,10 @@ store's \code{HEAD} answer (status, \code{Content-Length},
 \code{Range}; and \code{frontend_roundtrip} and
 \code{frontend_debug_snapshot}, each \code{list(ok, answer)} or
 \code{list(ok = FALSE, error)}: a \code{ping} answered by a \code{pong}, and
-the viewer's own view of its address, origin and connection.
+the viewer's own view of its address, origin and connection. No credential
+is in it: \code{viewer_url} is the page's address without its viewer token
+(\code{viewer$viewer_url} is the address to open), so the report can be
+pasted when asking for help.
 }
 \description{
 The report cellucid-python's \code{AnnDataViewer.debug_connection()} gives,

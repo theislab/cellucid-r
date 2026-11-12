@@ -16,7 +16,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ## Overview
 
 `cellucid_prepare()` writes single-cell data -- embeddings, cell and gene
-metadata, gene expression, a neighbour graph, and vector fields -- as a
+metadata, gene expression, a neighbor graph, and vector fields -- as a
 **Cellucid-ready AnnData**: a standard AnnData store, written as AnnData Zarr,
 that Python's anndata reads like any other and the Cellucid web app opens
 directly. Gene expression is stored gene-major, so the viewer reads one gene
@@ -34,7 +34,7 @@ HDF5 library.)
 ## From an object
 
 A Seurat, SingleCellExperiment or SummarizedExperiment object is written as it
-is: `data =` reads its cells, metadata, reductions, assays and neighbour graph
+is: `data =` reads its cells, metadata, reductions, assays and neighbor graph
 the way the Cellucid web app reads the same object saved with `saveRDS()`, and
 any other argument replaces one component. To look at an object before
 writing it, `cellucid_view(object)` opens it in the viewer from memory (see
@@ -141,7 +141,7 @@ each view dimension shows first, by `obsm` key (its first columns) or as
 `latent_key` names the latent space the viewer's outlier filter measures in,
 such as PCA or scVI, never a 2D or 3D layout. `cellucid_prepare()` computes the
 outlier quantiles of every categorical `obs` column there (each cell's
-distance to its category's centre, as the share of its category at that
+distance to its category's center, as the share of its category at that
 distance or closer) and stores them, so the filter works as soon as the file
 opens. A category needs `centroid_min_points` cells (10 when not set);
 `?cellucid_prepare` states the rule.

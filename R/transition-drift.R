@@ -34,7 +34,7 @@ cellucid_transition_drift <- function(transition_matrix, embedding, normalize_ro
   }
   normalize_rows <- .validate_flag(normalize_rows, "normalize_rows")
   coordinates <- .as_cell_matrix(embedding, "embedding")
-  # The drift moves every cell by its neighbours' positions: each needs one.
+  # The drift moves every cell by its neighbors' positions: each needs one.
   .require_finite_float32(coordinates, "embedding")
   if (nrow(coordinates) < 1L) {
     .abort("embedding must contain at least one row.")

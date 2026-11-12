@@ -62,6 +62,14 @@
   " (it does not start with CELLUCID_SESSION/", .session_format_version, ")."
 )
 
+# A file holding a value nested more deeply than R's own stacks follow: no
+# Cellucid writes one (cellucid-python's TOO_DEEP_SESSION_MESSAGE, the same
+# sentence).
+.session_too_deep_message <- paste0(
+  "This session file holds a value nested more deeply than this package reads, ",
+  "so it was not opened. Cellucid does not write such files: was it made by another program?"
+)
+
 # The web app's sentence for a session file of another format version
 # (bundle/format.js otherSessionFormatMessage): saved by an earlier Cellucid
 # (one state, where this version keeps the history of every step), or by a
@@ -747,7 +755,13 @@ cellucid_read_session <- function(path) {
   if (is.null(manifest)) .abort("Invalid session file (manifest JSON parse failed).")
   newer <- .session_newer_than_package(manifest)
   withCallingHandlers(
-    .read_session_body(file, bytes, size, at + manifest_length, manifest),
+    # R's own limit on what the reader follows (its expression and C stacks,
+    # R >= 4.4 names their overflow), refused in a sentence as every other
+    # file it cannot read is (cellucid-python's TOO_DEEP_SESSION_MESSAGE).
+    tryCatch(
+      .read_session_body(file, bytes, size, at + manifest_length, manifest),
+      stackOverflowError = function(error) .abort(.session_too_deep_message)
+    ),
     error = function(error) {
       if (!is.null(newer)) .abort(.newer_session_message(newer, .session_package_version()))
     }

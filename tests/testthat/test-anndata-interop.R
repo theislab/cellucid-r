@@ -26,7 +26,8 @@ interop_outlier_fields <- function(args) {
   })
 }
 
-interop_expected <- function(args, x_dtype = "float32") {
+# `counts`: X holds counts, so the cells' totals are written (R/total-counts.R).
+interop_expected <- function(args, x_dtype = "float32", counts = FALSE) {
   obs <- lapply(args$obs, function(column) {
     if (is.factor(column)) {
       codes <- as.integer(column) - 1L
@@ -39,6 +40,7 @@ interop_expected <- function(args, x_dtype = "float32") {
       list(kind = "values", values = lapply(column, function(value) if (is.na(value)) NULL else value))
     }
   })
+  if (counts) obs$total_counts <- list(kind = "values", values = as.list(as.numeric(Matrix::rowSums(args$gene_expression))))
   rows <- function(matrix) lapply(seq_len(nrow(matrix)), function(row) as.numeric(matrix[row, ]))
   list(
     obs_names = rownames(args$gene_expression),
@@ -52,7 +54,7 @@ interop_expected <- function(args, x_dtype = "float32") {
     connectivities = rows(as.matrix(args$connectivities)),
     uns = list(
       title = args$dataset_name,
-      cellucid = list(
+      cellucid = c(list(
         schema = 1L,
         id = args$dataset_id,
         name = args$dataset_name,
@@ -68,7 +70,7 @@ interop_expected <- function(args, x_dtype = "float32") {
           minPoints = 3L,
           fields = interop_outlier_fields(args)
         )
-      )
+      ), if (counts) list(totalCounts = list(field = "total_counts", over = "stored genes")))
     )
   )
 }
@@ -127,7 +129,7 @@ test_that("Python's anndata reads integer counts above 2^24 back exactly, as flo
   args$centroid_min_points <- 3
   expected_path <- tempfile(fileext = ".json")
   jsonlite::write_json(
-    interop_expected(args, x_dtype = "float64"), expected_path,
+    interop_expected(args, x_dtype = "float64", counts = TRUE), expected_path,
     auto_unbox = TRUE, null = "null", digits = I(17)
   )
   store <- suppressMessages(do.call(cellucid_prepare, args))

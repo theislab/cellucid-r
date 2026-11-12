@@ -46,7 +46,7 @@ reads such a file.
 
 A Seurat object is reordered in every part: each assay's layers (or
 matrices), its reductions' cell embeddings, its graphs (both axes), its
-neighbour indices (rows, and the cells they point at), its cell metadata and
+neighbor indices (rows, and the cells they point at), its cell metadata and
 its identities. Images keep their cells by name.
 }
 \examples{

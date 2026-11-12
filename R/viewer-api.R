@@ -7,19 +7,23 @@
 
 # The arguments cellucid_view() passes on to the dataset plan for an object.
 .view_plan_arguments <- c(
-  "embeddings", "dataset_id", "dataset_name", "obs", "var", "gene_expression",
-  "connectivities", "vector_fields", "modalities", "gene_identifiers", "dataset_description",
+  "embeddings", "dataset_id", "dataset_name", "obs", "obs_colors", "var", "gene_expression",
+  "connectivities", "vector_fields", "modalities", "gene_identifiers", "total_counts", "total_counts_over", "dataset_description",
   "citation_text", "citation_url", "source_name", "source_url", "embedding_defaults",
   "latent_key", "obs_keys", "var_gene_id_column", "vector_field_default", "modality",
   "normalize_embeddings", "centroid_min_points"
 )
 
 # For a path, the launch defaults the server states (the browser checks them
-# against the file).
+# against the file). knn_key and expression_source choose among what a file
+# holds (its obsp graphs; X, raw.X or a layer), as cellucid-python's
+# serve_anndata() and cellucid serve --knn/--expression do; an object's
+# graph and matrix are chosen by passing them (connectivities,
+# gene_expression).
 .view_path_arguments <- c(
   "dataset_id", "dataset_name", "embedding_defaults", "latent_key", "obs_keys",
   "var_gene_id_column", "vector_field_default", "modality", "normalize_embeddings",
-  "centroid_min_points"
+  "centroid_min_points", "knn_key", "expression_source"
 )
 
 .default_port <- 8765L
@@ -188,7 +192,7 @@ cellucid_serve <- function(
 
 .start_viewer <- function(data, extra, label, port, port_given, host, allowed_hosts,
                           serve_web_ui, web_cache_dir, web_source_url, cache_bytes, quiet,
-                          bind = TRUE) {
+                          bind = TRUE, runtime = "r") {
   if (bind && .in_jupyter_kernel()) {
     # IRkernel waits for the notebook's messages without running R's event
     # loop, which runs an httpuv server's handlers: a server started here
@@ -216,6 +220,10 @@ cellucid_serve <- function(
 
   viewer <- new.env(parent = emptyenv())
   class(viewer) <- "cellucid_viewer"
+  # What opened the viewer, as _cellucid/info names it and every sentence of
+  # the viewer names it (the shared protocol's runtimes): "r" (an R session:
+  # cellucid_view(), cellucid_serve()), "r-mcp" (cellucid_mcp(open = )).
+  viewer$runtime <- runtime
   viewer$host <- host
   viewer$allowed_hosts <- allowed_hosts
   viewer$viewer_id <- .random_hex(8L)
@@ -223,6 +231,8 @@ cellucid_serve <- function(
   viewer$etag <- paste0("\"", .random_hex(16L), "\"")
   viewer$queue <- list()
   viewer$hooks <- list()
+  # The calls waiting for an event (cellucid_wait_event()).
+  viewer$event_waiters <- list()
   viewer$last <- list()
   viewer$session_requests <- list()
   viewer$action_requests <- list()
@@ -276,8 +286,8 @@ cellucid_serve <- function(
   viewer$info <- list(
     version = viewer$health$version, type = "anndata", format = viewer$served$kind,
     host = if (bind) host, port = viewer$port, n_cells = viewer$n_cells, n_genes = viewer$n_genes,
-    # The program serving the viewer, which the viewer names ("R").
-    runtime = .agent_runtime
+    # What opened the viewer, which the viewer names in what it says.
+    runtime = viewer$runtime
   )
   # A viewer with a server is published to agent apps on this computer
   # (cellucid_mcp(), cellucid-python's cellucid mcp); a notebook widget's,
@@ -342,6 +352,14 @@ cellucid_serve <- function(
 # object is a prefix of every array (cellucid-python's SERVED_PRIORITY_SEED).
 .served_priority_seed <- 0
 
+# The id an object declares in its cellucid record (Seurat misc$cellucid,
+# metadata(x)$cellucid), or NULL.
+.served_declared_id <- function(data) {
+  if (!(methods::is(data, "Seurat") || methods::is(data, "SummarizedExperiment"))) return(NULL)
+  id <- .object_record(data)[["id"]]
+  if (.is_text(id)) id else NULL
+}
+
 # An R object, planned once and held as a store in memory, uncompressed, its
 # cells in priority order (R/priority.R): a subsample the viewer opens is the
 # first rows of every array, so the bytes sent follow the cells opened. A
@@ -354,7 +372,7 @@ cellucid_serve <- function(
 .serve_object <- function(viewer, data, extra, label, quiet, cache_bytes) {
   if (!is.null(data)) data <- .in_original_order(data)
   components <- .dataset_components(data, extra)
-  components$obs <- .without_positions(components$obs)
+  components[["obs"]] <- .without_positions(components[["obs"]])
   components$priority_seed <- .served_priority_seed
   if (is.null(components$dataset_name)) components$dataset_name <- label
   if (is.null(components$dataset_id)) {
@@ -376,6 +394,10 @@ cellucid_serve <- function(
   # By original position: the object's own order, which the viewer names.
   viewer$cell_names <- plan$cell_names
   viewer$dataset_id <- plan$dataset_id
+  # The id the object declares in its cellucid record, which dataset_id =
+  # may have replaced: an object declaring it is the one served under
+  # viewer$dataset_id (cellucid_apply_session() of this viewer's request).
+  viewer$declared_id <- .served_declared_id(data)
   viewer$dataset_name <- plan$dataset_name
   viewer$n_cells <- plan$n_cells
   viewer$n_genes <- plan$n_genes
@@ -397,16 +419,24 @@ cellucid_serve <- function(
   }
   declared <- list(id = NULL, name = NULL)
   # A Zarr store's own identity (uns['cellucid']) names it unless the caller
-  # did. An .h5ad or .h5mu file's is not read here (this package has no HDF5
-  # reader): it is named after the file unless dataset_id/dataset_name are
-  # given, where cellucid-python reads it from the file.
-  if (classified$kind %in% c("zarr", "mudata-zarr") && (is.null(extra$dataset_id) || is.null(extra$dataset_name))) {
-    declared <- .zarr_store_identity(classified$path, classified$layout, classified$zarr_format)
+  # did, and is kept either way (viewer$declared_id: the object read from it
+  # declares it, and takes back a session saved under the id it was served
+  # under). A field the caller names is not needed from the store: one that
+  # cannot be read there is left out rather than refusing the view. An .h5ad
+  # or .h5mu file's is not read here (this package has no HDF5 reader): it is
+  # named after the file unless dataset_id/dataset_name are given, where
+  # cellucid-python reads it from the file.
+  if (classified$kind %in% c("zarr", "mudata-zarr")) {
+    declared <- .zarr_store_identity(
+      classified$path, classified$layout, classified$zarr_format,
+      named = c(if (!is.null(extra$dataset_id)) "id", if (!is.null(extra$dataset_name)) "name")
+    )
   }
   dataset_name <- extra$dataset_name %||% declared$name %||% basename(classified$path)
   dataset_id <- extra$dataset_id %||% declared$id %||%
     .label_id(sub("(\\.zarr\\.zip|\\.[A-Za-z0-9]+)$", "", basename(classified$path)))
   viewer$dataset_id <- .validate_dataset_id(dataset_id)
+  viewer$declared_id <- if (.is_text(declared$id)) declared$id else NULL
   viewer$dataset_name <- .validate_dataset_name(dataset_name)
   viewer$n_cells <- info$n_cells
   viewer$n_genes <- info$n_genes
@@ -476,6 +506,8 @@ cellucid_serve <- function(
     }
   }
   if (!is.null(extra$modality)) out$modality <- .validate_string(extra$modality, "modality")
+  if (!is.null(extra$knn_key)) out$knn <- .validate_key(extra$knn_key, "knn_key")
+  if (!is.null(extra$expression_source)) out$expression <- .served_expression(extra$expression_source)
   if (!is.null(extra$var_gene_id_column)) out$geneIdColumn <- .validate_string(extra$var_gene_id_column, "var_gene_id_column")
   if (!is.null(extra$latent_key)) out$latentKey <- .validate_string(extra$latent_key, "latent_key")
   if (!is.null(extra$vector_field_default)) out$vectorFieldDefault <- .validate_string(extra$vector_field_default, "vector_field_default")
@@ -486,6 +518,28 @@ cellucid_serve <- function(
   if (!is.null(extra$normalize_embeddings)) out$normalizeEmbeddings <- .validate_flag(extra$normalize_embeddings, "normalize_embeddings")
   if (!is.null(extra$centroid_min_points)) out$centroidMinPoints <- .validate_positive_integer(extra$centroid_min_points, "centroid_min_points")
   out
+}
+
+# A non-empty key (an obsp graph's name).
+.validate_key <- function(value, arg) {
+  if (!nzchar(.validate_string(value, arg))) .abort(arg, " must name a key; got \"\".")
+  value
+}
+
+# expression_source as the viewer names the matrix, by its place in the store:
+# "X", "raw" (raw.X) or "layer:<name>" (a layer, its name holding no "/"), as
+# cellucid-python's expression_source is written (_launch_defaults.py) and the
+# web app reads defaults.expression (requireAnnDataLaunchDefaults).
+.served_expression <- function(value) {
+  if (is.character(value) && length(value) == 1L && !is.na(value)) {
+    if (value %in% c("X", "raw")) return(if (identical(value, "raw")) "raw/X" else "X")
+    layer <- sub("^layer:", "", value)
+    if (startsWith(value, "layer:") && nzchar(layer) && !grepl("/", layer, fixed = TRUE)) return(paste0("layers/", layer))
+  }
+  .abort(
+    "expression_source must be \"X\", \"raw\" or \"layer:<name>\" (a layer's name, without \"/\"); got ",
+    if (is.character(value)) .format_value_list(value) else paste0("a ", class(value)[[1L]]), "."
+  )
 }
 
 # Bind the server: `port`, or when the default 8765 is taken the next free
@@ -507,10 +561,30 @@ cellucid_serve <- function(
     if (!inherits(server, "error")) break
   }
   if (inherits(server, "error")) {
-    .abort(
-      "Could not serve on ", viewer$host, ":", port, " (", conditionMessage(server), "). ",
-      if (port_given) "Choose another port, or stop the viewer using it with cellucid_stop_all()." else ""
-    )
+    # httpuv says "Failed to create server" whatever failed: a host this
+    # machine cannot serve from is told apart from a port taken by binding
+    # any port on it. Said as cellucid-python's bind_refusal() says it, with
+    # R's spelling of each setting.
+    host_serves <- tryCatch({
+      httpuv::randomPort(host = viewer$host)
+      TRUE
+    }, error = function(error) FALSE)
+    if (!host_serves) {
+      .abort(
+        "Host '", viewer$host, "' is not an address this machine can serve from. Use host = \"127.0.0.1\" to ",
+        "serve only this computer, which is the default, or host = \"0.0.0.0\" to accept connections from ",
+        "other machines."
+      )
+    }
+    if (port_given) {
+      .abort(
+        "Port ", port, " is already in use on ", viewer$host, ", so Cellucid could not start its server there. ",
+        "Another program is listening on that port, often an earlier Cellucid that was never stopped. Serve ",
+        "on a different port with port = 9000, or let the operating system pick a free one with port = 0 and ",
+        "use the Viewer URL it prints."
+      )
+    }
+    .abort("Could not serve on ", viewer$host, ":", port, " (", conditionMessage(server), ").")
   }
   viewer$server <- server
   viewer$port <- server$getPort()
@@ -535,9 +609,9 @@ cellucid_serve <- function(
 .host_is_wildcard <- function(host) host %in% c("0.0.0.0", "::", "")
 
 # Show the viewer: the IDE's Viewer pane (RStudio, Positron), else the
-# browser; none for cellucid_serve() and pane = "none".
+# browser. pane = "none", and a session with no browser to open
+# (Rscript), say the address to open instead.
 .open_pane <- function(viewer, pane, quiet) {
-  if (identical(pane, "none")) return(invisible(NULL))
   viewer_option <- getOption("viewer")
   in_ide <- is.function(viewer_option)
   if (identical(pane, "viewer") && !in_ide) {
@@ -553,7 +627,7 @@ cellucid_serve <- function(
     }
     return(invisible(NULL))
   }
-  if (!interactive()) {
+  if (identical(pane, "none") || !interactive()) {
     if (!quiet) .inform("Open ", viewer$viewer_url, " in a browser.")
     return(invisible(NULL))
   }
@@ -561,11 +635,28 @@ cellucid_serve <- function(
   invisible(NULL)
 }
 
+# A viewer page's address without what grants access to it: the viewerToken
+# query parameter is the viewer channel's secret. The address with it is said
+# once, to the person, where they are told to open it (cellucid_serve(),
+# cellucid_view(pane = "none") or outside an interactive session,
+# cellucid_mcp(open = ) on
+# stderr). Everything that may be logged or pasted (an error, a debug report,
+# a printed viewer) says this form and names viewer$viewer_url instead
+# (cellucid-python's public_viewer_url(), the same two patterns). `text` is an
+# address or a line naming addresses.
+.public_viewer_url <- function(text) {
+  text <- gsub("([?&])viewerToken=[^&#\\s]*&", "\\1", text, perl = TRUE)
+  gsub("[?&]viewerToken=[^&#\\s]*(?=[#\\s]|$)", "", text, perl = TRUE)
+}
+
 print.cellucid_viewer <- function(x, ...) {
   state <- if (isTRUE(x$running)) "running" else "stopped"
   cat(
     "<Cellucid viewer> ", x$dataset_name, " (", x$dataset_id, "), ", state, "\n",
-    "  address:  ", if (!is.null(x$widget)) "the notebook cell's output" else x$viewer_url %||% "", "\n",
+    # Without its token: a printed viewer lands in logs and knitted
+    # documents. viewer$viewer_url is the address that opens it.
+    "  address:  ", if (!is.null(x$widget)) "the notebook cell's output" else if (is.null(x$viewer_url)) "" else
+      paste0(.public_viewer_url(x$viewer_url), " (opened by viewer$viewer_url)"), "\n",
     "  data:     ", x$served$kind, ", ", format(x$n_cells %||% NA), " ", .plural(x$n_cells %||% NA, "cell"),
     if (!is.null(x$modalities)) paste0(", modalities ", paste(x$modalities, collapse = ", ")), "\n",
     "  channel:  ", if (is.null(x$socket)) "waiting for the viewer" else "connected", "\n",
@@ -646,15 +737,33 @@ cellucid_viewers <- function() {
 
 # --- Hooks and events -----------------------------------------------------------
 
-.hook_events <- c(
-  "selection", "hover", "click", "ready", "data_mapping", "command_error", "action_result", "pong",
-  "debug_snapshot", "session_bundle", "result", "result_removed", "results", "color_by", "history_changed",
-  "session_loaded"
-)
+# The events a handler takes: every event the viewer sends (the protocol's,
+# R/viewer-protocol.R) but an agent app's own, which reach its port
+# (R/agent-link.R), and "message", which catches them all. cellucid-python's
+# hooks take the same names (cellucid.jupyter.HOOK_EVENTS); both are pinned to
+# the shared protocol fixture. A function, not a constant: R/viewer-protocol.R
+# is collated after this file.
+.hook_events <- function() {
+  events <- c(names(.viewer_event_fields), names(.viewer_binary_event_fields))
+  c(sort(setdiff(events, .viewer_agent_events), method = "radix"), "message")
+}
+
+# One event a handler takes, said exactly: no partial match (match.arg()'s
+# "sel" for "selection") and a misspelt event refused, never kept unheard.
+.require_hook_event <- function(event, catch_all = TRUE) {
+  events <- .hook_events()
+  # "message" is no event the viewer sends: nothing waits for it.
+  if (!catch_all) events <- setdiff(events, "message")
+  if (!is.character(event) || length(event) != 1L || is.na(event) || !event %in% events) {
+    .abort("event must be one of ", paste0("\"", events, "\"", collapse = ", "), "; got ",
+           if (is.character(event)) .format_value_list(event) else paste0("a ", class(event)[[1L]]), ".")
+  }
+  event
+}
 
 cellucid_on <- function(viewer, event, handler) {
   .require_viewer(viewer)
-  event <- match.arg(event, .hook_events)
+  event <- .require_hook_event(event)
   if (!is.function(handler)) .abort("handler must be a function of one argument, the event.")
   viewer$hooks[[event]] <- c(viewer$hooks[[event]], handler)
   invisible(viewer)
@@ -665,7 +774,7 @@ cellucid_off <- function(viewer, event = NULL) {
   if (is.null(event)) {
     viewer$hooks <- list()
   } else {
-    viewer$hooks[[match.arg(event, .hook_events)]] <- NULL
+    viewer$hooks[[.require_hook_event(event)]] <- NULL
   }
   invisible(viewer)
 }
@@ -693,12 +802,37 @@ cellucid_selection <- function(viewer) {
     if (proc.time()[["elapsed"]] > deadline) {
       .abort(
         "The viewer did not answer within ", timeout, " seconds (waiting for ", what, "). ",
-        "Is it open? ", if (is.null(viewer$socket)) paste0("No viewer is connected: open ", viewer$viewer_url, ".") else ""
+        "Is it open? ", if (is.null(viewer$socket)) "No viewer is connected: open the viewer's address (viewer$viewer_url)." else ""
       )
     }
     later::run_now(0.05)
   }
   invisible(TRUE)
+}
+
+# The next event of a kind, as cellucid-python's viewer.wait_for_event()
+# gives it: the first to arrive after the call that `predicate` (when given)
+# accepts; one received before is not returned (cellucid_on() and the
+# viewer's last events have those).
+cellucid_wait_event <- function(viewer, event, timeout = 30, predicate = NULL) {
+  .require_viewer(viewer)
+  event <- .require_hook_event(event, catch_all = FALSE)
+  if (!is.numeric(timeout) || length(timeout) != 1L || is.na(timeout) || timeout <= 0) {
+    .abort("timeout must be one positive number of seconds.")
+  }
+  if (!is.null(predicate) && !is.function(predicate)) {
+    .abort("predicate must be NULL or a function of one argument, the event, returning TRUE or FALSE.")
+  }
+  waiter <- new.env(parent = emptyenv())
+  waiter$event <- event
+  waiter$predicate <- predicate
+  waiter$payload <- NULL
+  waiter$error <- NULL
+  viewer$event_waiters <- c(viewer$event_waiters, waiter)
+  on.exit(viewer$event_waiters <- Filter(function(other) !identical(other, waiter), viewer$event_waiters), add = TRUE)
+  .wait_for(viewer, function() !is.null(waiter$payload) || !is.null(waiter$error), timeout, paste0("a \"", event, "\" event"))
+  if (!is.null(waiter$error)) .abort("predicate failed on a \"", event, "\" event: ", waiter$error)
+  waiter$payload
 }
 
 cellucid_wait_ready <- function(viewer, timeout = 30) {
@@ -717,9 +851,13 @@ cellucid_debug_connection <- function(viewer, timeout = 5) {
   if (!is.numeric(timeout) || length(timeout) != 1L || is.na(timeout) || timeout <= 0) {
     .abort("timeout must be one positive number of seconds.")
   }
+  # The report is what a person pastes when asking for help: the page's
+  # address without what grants access to it (the viewer token), as the
+  # page's own debug snapshot gives it; viewer$viewer_url opens it.
+  public_url <- if (!is.null(viewer$viewer_url)) .public_viewer_url(viewer$viewer_url)
   report <- list(
     viewer_id = viewer$viewer_id,
-    viewer_url = viewer$viewer_url,
+    viewer_url = public_url,
     server_url = viewer$url,
     server_running = isTRUE(viewer$running),
     channel_connected = !is.null(viewer$socket),
@@ -764,8 +902,8 @@ cellucid_debug_connection <- function(viewer, timeout = 5) {
   }, error = function(error) list(probed = target, error = conditionMessage(error)))
   if (is.null(viewer$socket)) {
     reason <- paste0(
-      "The viewer's channel is not connected: open ", viewer$viewer_url,
-      ", and check that any proxy in between passes WebSockets."
+      "The viewer's channel is not connected: open the viewer's address (viewer$viewer_url), ",
+      "and check that any proxy in between passes WebSockets."
     )
     report$frontend_roundtrip <- list(ok = FALSE, error = reason)
     report$frontend_debug_snapshot <- list(ok = FALSE, error = reason)
@@ -803,15 +941,6 @@ cellucid_debug_connection <- function(viewer, timeout = 5) {
   }
   if (!is.null(failure)) .abort(failure)
   result
-}
-
-# --- Commands -------------------------------------------------------------------
-
-# Everything else R changes or reads in the viewer is an action (R/actions.R);
-# freeze is the one command that is not: the host stopped, and the page keeps
-# its last complete view.
-cellucid_freeze <- function(viewer) {
-  .viewer_send(.require_viewer(viewer), list(type = "freeze"))
 }
 
 # The one way to get the viewer's session, in a notebook and outside one
@@ -908,7 +1037,7 @@ cellucid_turn <- function(viewer, label, code) {
   if (missing(code)) .abort("cellucid_turn() runs code inside the turn: cellucid_turn(viewer, \"QC\", { ... }).")
   if (!is.character(label) || length(label) != 1L || is.na(label)) .abort("A turn's label is one string: what it does.")
   label <- gsub("[[:space:]]+", " ", trimws(enc2utf8(label)))
-  if (!nzchar(label)) .abort("A turn needs a label: what it does, such as \"Normalise and cluster\".")
+  if (!nzchar(label)) .abort("A turn needs a label: what it does, such as \"Normalize and cluster\".")
   if (!is.null(viewer$turn)) .abort("A turn (\"", viewer$turn$label, "\") is open already; turns do not nest.")
   id <- paste0("r-", .random_hex(6L))
   viewer$turn <- list(id = id, label = label)

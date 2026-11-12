@@ -12,7 +12,7 @@
 # a dataset that states none is named after ("<format>_<name>_<structure>")
 # and what a server reports as the store's kind.
 
-.input_formats_sha256 <- "bd7fa1e23a3fd24794b647c5969ddb1aaad9a7b613b1457261c3b10dd705e2e5"
+.input_formats_sha256 <- "31a4853465dd05ec412f4645f9a9efdfb6a14393f0932b4c26883648ad01f6f9"
 
 registry_path <- function() system.file("input_formats.json", package = "cellucid", mustWork = TRUE)
 
@@ -54,7 +54,12 @@ test_that("a path is classified as the registry and the web app classify it", {
   expect_identical(classify(rds)[c("kind", "layout")], list(kind = "rds", layout = "file"))
   text <- file.path(folder, "notes.txt")
   writeLines("hello", text)
-  expect_error(classify(text), "A file Cellucid opens is one of .h5ad")
+  # One sentence in the three implementations (the web app's openableNamesText,
+  # cellucid-python's openable_files_text()): the ending that stands alone,
+  # h5Seurat (refused) left out (R9Y-4).
+  expected <- "an .h5ad file, a .loom file, an .h5 file, an .h5mu file, an .rds file, an .rda/.rdata file or a .zarr.zip archive"
+  expect_identical(cellucid:::.openable_files_text(), expected)
+  expect_error(classify(text), paste0(" is not a file Cellucid opens (", expected, ")."), fixed = TRUE)
   expect_error(classify(file.path(folder, "missing.h5ad")), "Nothing exists at")
   expect_error(classify(folder), "is not a Zarr store")
   store <- suppressMessages(cellucid_prepare(
@@ -121,4 +126,18 @@ test_that("an h5Seurat file is refused in the registry's words before it is serv
   path <- file.path(folder, "pbmc.h5Seurat")
   writeBin(c(as.raw(c(0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a)), raw(100)), path)
   expect_error(cellucid:::.classify_path(path), paste0("pbmc.h5Seurat: ", h5seurat$refusal), fixed = TRUE)
+})
+
+test_that("a vlen-utf8 chunk's counts and lengths are checked against its bytes before anything is allocated", {
+  # R9Z-3: four bytes stating 2^31 - 1 strings allocated a character vector
+  # that long before a string was read.
+  le <- function(value) writeBin(as.integer(value), raw(), size = 4L, endian = "little")
+  good <- c(le(2L), le(2L), charToRaw("ab"), le(0L))
+  expect_identical(cellucid:::.decode_vlen_utf8(good), c("ab", ""))
+  expect_error(cellucid:::.decode_vlen_utf8(le(.Machine$integer.max)), "more strings than its bytes hold")
+  expect_error(cellucid:::.decode_vlen_utf8(c(le(-1L), le(0L))), "more strings than its bytes hold")
+  expect_error(cellucid:::.decode_vlen_utf8(raw(2)), "shorter than its count")
+  expect_error(cellucid:::.decode_vlen_utf8(c(le(1L), le(1000L), charToRaw("ab"))), "runs past the end")
+  expect_error(cellucid:::.decode_vlen_utf8(c(le(1L), le(-5L))), "runs past the end")
+  expect_error(cellucid:::.decode_vlen_utf8(c(le(2L), le(3L), charToRaw("abc"), raw(2))), "ends inside a string.s length")
 })

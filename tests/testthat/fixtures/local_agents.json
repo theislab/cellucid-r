@@ -42,7 +42,6 @@
       "agent_result",
       "agent_asking",
       "agent_answered",
-      "agent_tools_changed",
       "agent_failed",
       "viewer_stopped"
     ],

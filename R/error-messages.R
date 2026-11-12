@@ -111,7 +111,7 @@
 
 # `subject` is the name the caller used. `positions` is FALSE for a sparse
 # matrix, whose stored non-zero entries have no index the caller would
-# recognise; the counts are still exactly what was found.
+# recognize; the counts are still exactly what was found.
 .describe_non_finite <- function(values, subject, positions = TRUE) {
   dims <- if (is.matrix(values)) dim(values) else NULL
   scan <- .scan_non_finite(values, .non_finite_example_limit)
@@ -145,6 +145,6 @@
     scope, ", ", paste(counted, collapse = ", "), ".", where,
     " Coordinates, expression values, vectors and graph weights must be",
     " finite numbers: a missing value or an infinity has no position on a",
-    " plot and no place on a colour scale."
+    " plot and no place on a color scale."
   )
 }

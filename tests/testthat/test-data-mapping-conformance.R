@@ -9,7 +9,7 @@
 # (uniqueNamesNote), the vector-field key rule (vectorFieldKeys), by which
 # cellucid_prepare() names each vector field '<field>_<basis>' and checks that
 # the viewer reads it back as that field on 'X_<basis>' (in its modality's
-# namespace), and the default neighbour graph (defaultGraph), by which it
+# namespace), and the default neighbor graph (defaultGraph), by which it
 # chooses the graph it writes. All four are run here case for case. The other sections pin rules this package has no counterpart
 # for: the best-guess embedding and expression choices, the representations
 # enabled when a file opens, the default vector bindings, the "nothing to
@@ -20,12 +20,12 @@
 # cellucid_prepare() takes caller-named embedding ids and 1-based columns
 # instead.
 
-.conformance_sha256 <- "6f7b7ff0e4392ea00c7e21c7a868ec68d3ec83a63558227f9f7d2c300a666c32"
+.conformance_sha256 <- "a3b615e6377f3936ce5701764622ee74ee3c30b95d24303e815eb83476451200"
 
 test_that("both repositories hold the same pinned conformance fixture", {
   expect_pinned_fixture("data_mapping_conformance.json", .conformance_sha256)
   fixture <- cellucid_read_fixture("data_mapping_conformance.json")
-  expect_identical(fixture$version, 7L)
+  expect_identical(fixture$version, 9L)
   expect_identical(
     names(fixture),
     c(
@@ -119,7 +119,34 @@ test_that("the default modality matches every case of the shared conformance fix
   }
 })
 
-test_that("the default neighbour graph matches every case of the shared conformance fixture", {
+test_that("the embedding slots match every case of the shared conformance fixture", {
+  # Every width alike: the default rule's slots, then each empty width's
+  # best-ranked array (guessed); a wide array in 2d only when none is filled.
+  fixture <- cellucid_read_fixture("data_mapping_conformance.json")
+  expect_gt(length(fixture$embeddingSlots), 0L)
+  for (case in fixture$embeddingSlots) {
+    widths <- vapply(case$obsm, function(entry) {
+      if (isTRUE(entry$usable) && !is.null(entry$width)) as.integer(entry$width) else NA_integer_
+    }, integer(1L))
+    names(widths) <- vapply(case$obsm, function(entry) entry$key, character(1L))
+    failures <- case$loadFailures
+    resolved <- cellucid:::.resolve_embedding_slots(
+      widths, case$latentKey, case$modality,
+      load_check = function(key, columns) failures[[key]]
+    )
+    as_ref <- function(ref) if (is.null(ref)) NULL else list(key = ref$key, columns = as.integer(unlist(ref$columns)))
+    expected_slots <- lapply(c(`1d` = "1d", `2d` = "2d", `3d` = "3d"), function(slot) as_ref(case$expected$slots[[slot]]))
+    expect_identical(lapply(resolved$slots, as_ref), expected_slots, info = case$name)
+    expect_identical(resolved$guessed, as.character(unlist(case$expected$guessed)), info = case$name)
+    expect_identical(
+      lapply(resolved$rejected, function(pair) as.character(unlist(pair))),
+      lapply(case$expected$rejected, function(pair) as.character(unlist(pair))),
+      info = case$name
+    )
+  }
+})
+
+test_that("the default neighbor graph matches every case of the shared conformance fixture", {
   # cellucid_prepare() writes the graph this rule chooses (Seurat graphs, SCE
   # colPairs) as obsp['connectivities'], the one the viewer opens with.
   fixture <- cellucid_read_fixture("data_mapping_conformance.json")
@@ -138,6 +165,6 @@ test_that("a self-loop is no edge: a graph given with a unit diagonal (Seurat SN
   expect_identical(as.matrix(graph), as.matrix(methods::as(ring, "generalMatrix")))
   expect_error(
     cellucid:::.resolve_connectivities(Matrix::sparseMatrix(i = 1, j = 2, x = 1, dims = c(2L, 2L)), 2L),
-    "exactly symmetric: a directed neighbour graph"
+    "exactly symmetric: a directed neighbor graph"
   )
 })

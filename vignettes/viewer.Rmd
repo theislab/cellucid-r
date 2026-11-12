@@ -39,7 +39,7 @@ The viewer is yours to talk to. Everything a person can do in it is an
 action, and R sends any of them: `cellucid_act(viewer, "<type>", ...)`, or
 the action's own function (`?cellucid_color_by`, `?cellucid_highlight_cells`,
 and one for every other action). Each is one step of the viewer's history,
-labelled as R's, undone like any other; the request comes back at once, and
+labeled as R's, undone like any other; the request comes back at once, and
 `cellucid_action_result()` collects the viewer's answer -- a read's result,
 or what a change did. Undo, redo and a jump to any step are actions too
 (`cellucid_history_undo()`, `cellucid_history_redo()`,

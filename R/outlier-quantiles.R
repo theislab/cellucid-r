@@ -2,7 +2,7 @@
 # latent space it is given (latent_key) in uns['cellucid']['outlierQuantiles'].
 #
 # For each categorical obs column, each cell's quantile says how far it lies
-# from the centre of its category in the latent space (an embedding such as
+# from the center of its category in the latent space (an embedding such as
 # scVI or PCA, never the 2D/3D layout): the share of its category at that
 # distance or closer. The web app's outlier filter hides the cells above a
 # threshold, and reads these instead of the whole latent space. The rule is

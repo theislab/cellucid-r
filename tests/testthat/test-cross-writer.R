@@ -63,6 +63,7 @@ cross_writer_input <- function(args) {
     obs = cross_writer_frame(obs, cell_names)
   )
   if (!is.null(args$obs_keys)) spec$arguments$obs_keys <- I(args$obs_keys)
+  if (!is.null(args$obs_colors)) spec$arguments$obs_colors <- lapply(args$obs_colors, I)
   if (!is.null(args$gene_identifiers)) spec$arguments$gene_identifiers <- I(args$gene_identifiers)
   if (!is.null(args$centroid_min_points)) spec$arguments$centroid_min_points <- as.integer(args$centroid_min_points)
   if (!is.null(args$gene_expression)) {
@@ -126,6 +127,9 @@ cross_writer_cases <- function() {
   full$vector_field_default <- "velocity"
   full$normalize_embeddings <- FALSE
   full$centroid_min_points <- 3
+  # Scanpy's colors of a factor and of a character column written as a
+  # categorical (its values in code-point order); a longer list kept as given.
+  full$obs_colors <- list(cluster = c("#0000aa", "#00aa00", "#aa0000"), tissue = c("#111111", "#222222", "#333333"))
 
   dense_names <- list(NULL, c("g1", "g2", "g3"))
   embedding <- list(X_umap = matrix(seq_len(8) / 4, ncol = 2))
@@ -197,6 +201,7 @@ test_that("R and Python write the same AnnData from the same input", {
   expect_identical(dtype(5L, "X"), "<f4")
   expect_identical(dtype(6L, "X"), "<f8")
   expect_length(store_array(stores[[1L]], "X/data"), length(cases[[1L]]$gene_expression@x) - 2L)
+  expect_identical(store_array(stores[[1L]], "uns/tissue_colors"), c("#111111", "#222222", "#333333"))
   # Outlier quantiles for the columns with a category of 3 cells, and only
   # for them: not for the numbers, and not for maybe (2, 2, NA), stage (2, 1,
   # 2, NA), note and barcode (every value once) or many (127 levels, 6 cells).
@@ -293,8 +298,7 @@ test_that("the MuData cases cellucid-python checks itself against are what this 
 })
 
 test_that("both repositories hold the same MuData cross-writer harness", {
-  python <- file.path(cellucid_repository_root(), "..", "cellucid-python", "tests", "cross_writer_mudata.py")
-  skip_if_not(file.exists(python), "cellucid-python is not checked out beside this repository")
+  python <- cellucid_sibling_file("cellucid-python", "tests", "cross_writer_mudata.py")
   expect_identical(
     unname(tools::md5sum(python)),
     unname(tools::md5sum(testthat::test_path("python", "cross_writer_mudata.py")))

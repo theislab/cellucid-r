@@ -150,7 +150,7 @@ test_that("a served expression matrix is read in priority order, never copied in
   }
 })
 
-test_that("a neighbour graph is served and written with both axes in priority order, never copied in it", {
+test_that("a neighbor graph is served and written with both axes in priority order, never copied in it", {
   # Its row-compressed arrays are made a chunk at a time from the graph as
   # it is (src/chunks.c): row r is the graph's row order[r], its columns
   # renumbered and sorted. Rows straddle the chunks (2^18 entries) here.

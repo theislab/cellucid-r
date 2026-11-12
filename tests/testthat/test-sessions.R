@@ -19,9 +19,9 @@ golden_path <- function(name = "history_golden.cellucid-session") testthat::test
 golden_expected <- function() jsonlite::read_json(golden_path("history_golden.expected.json"), simplifyVector = FALSE)
 # The golden files' digests; the web app (tests/history-golden-fixture.test.mjs) and cellucid-python pin the same.
 .golden_sha256 <- c(
-  "history_golden.cellucid-session" = "7118bfd010f4dbb7644223d28cd99d4142ed049338c4ed24ae4c0ab7b944ec96",
-  "history_golden.expected.json" = "7df8be8f9fd7ff7cfc92a05bc7b68505b6b45284d4a9ebc3241dc5f92adddf44",
-  "history_golden_state.cellucid-session" = "4a592d66a26bcf61a489d4c165e8395a0d4b22fe6f467ca106ab183f6034bb31"
+  "history_golden.cellucid-session" = "9711bbc4dfd19fd91809a2ab3967cab54b6982c2a3907c73432200e72414ca4a",
+  "history_golden.expected.json" = "8684353157ec936017b777c395e1d60342dcd4f393ef2a0648fe4a7891a67c34",
+  "history_golden_state.cellucid-session" = "f9f0a6025679dacb91cbd00b0abd1cd6380ab1e829fa9ea529cbc59c1801e3dd"
 )
 golden <- function() cellucid_read_session(golden_path())
 
@@ -271,7 +271,7 @@ test_that("records are found by name or id and refused naming the others", {
   expect_error(cellucid_branch(tracker, "Gone"),
                'There is no branch "Gone"; the branches are "Main", "Without score", "Clusters", "Scratch" and "Tidy fork".', fixed = TRUE)
   expect_error(cellucid_step(tracker, "s11"),
-               'There is no step "s11" in the tracker "Annotation"; history_get lists its steps.', fixed = TRUE)
+               'There is no step "s11" in the tracker "Annotation"; cellucid_steps(tracker) lists its steps.', fixed = TRUE)
 })
 
 test_that("steps carry every field of the model", {
@@ -312,7 +312,7 @@ test_that("steps carry every field of the model", {
   expect_identical(cellucid_step(tracker, "s17")$parent, "s16")
   expect_identical(cellucid_branch(tracker, "Tidy fork")$base, "s16")
   expect_error(cellucid_step(tracker, "s15"), "There is no step")
-  expect_setequal(names(cellucid_step(tracker, "s4")$reads), c("cells", "mapping", "field-overlays", "views", "filters", "visibility", "highlights"))
+  expect_setequal(names(cellucid_step(tracker, "s4")$reads), c("cells", "mapping", "expression", "field-overlays", "views", "filters", "visibility", "highlights"))
   camera <- cellucid_step(tracker, "s10")
   expect_identical(list(camera$merged, camera$until - camera$at, camera$ms, camera$coalesce_key), list(3L, 2000, NULL, "camera:View 1"))
   flagged <- cellucid_step(tracker, "s12")
@@ -466,7 +466,7 @@ test_that("only what the chosen step uses is required", {
   skip_without_sce()
   object <- golden_sce()
   names(SummarizedExperiment::colData(object))[names(SummarizedExperiment::colData(object)) == "cell_type"] <- "kind"
-  # The bookmark colours by cell_type; the head colours by a gene.
+  # The bookmark colors by cell_type; the head colors by a gene.
   expect_error(cellucid_apply_session(object, golden(), step = "s5"), "The state at step s5 uses the obs column 'cell_type'")
   head <- cellucid_apply_session(object, golden())
   renamed <- head$rows[head$rows$kind == "categories-renamed", ]
@@ -589,6 +589,21 @@ test_that("labels rename columns and categories in place", {
   expect_identical(out$label, c("x0", "y", "x0", "y", "x0", "y"))
 })
 
+test_that("a logical column's categories are false and true, as the viewer reads it", {
+  skip_without_sce()
+  overlays <- session_overlays(renamed_categories = list(
+    list(source = "obs", field = "flag", category = TRUE, name = "kept")
+  ))
+  data <- tiny_sce()
+  data$flag <- c(TRUE, FALSE, TRUE, FALSE, FALSE, TRUE)
+  plan <- small_apply(small_session(list(set = list(`field-overlays` = overlays))), data = data)
+  expect_identical(plan$rows$status, "write")
+  expect_identical(plan$rows$from[[1]], "true")
+  expect_identical(plan$rows$cells, 3L)
+  out <- cellucid_apply_plan(plan)
+  expect_identical(out$flag, c("kept", "false", "kept", "false", "false", "kept"))
+})
+
 test_that("swapped column names rename at once", {
   skip_without_sce()
   overlays <- session_overlays(renamed_fields = list(
@@ -618,6 +633,414 @@ test_that("user fields apply by kind", {
   expect_true(all(is.na(out$pushed[c(2, 3, 4, 6)])))
   expect_identical(out$`copy of count`, as.double(0:5))
   expect_false("deleted one" %in% names(SummarizedExperiment::colData(out)))
+})
+
+test_that("a user category field's palette is read and checked", {
+  skip_without_sce()
+  # The colors a field made from highlight pages opens with (its pages'), one
+  # #rrggbb a category, or null (F124).
+  made <- session_user_category("user_cat_1", "annotation", c("a", "b"), c(0, 1, 255, 0, 1, 0))
+  made$palette <- list("#dc2626", "#16a34a")
+  plan <- small_apply(small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(made))))))
+  expect_identical(plan$rows$status, "write")
+  for (palette in list(list("#dc2626"), list("#DC2626", "#16a34a"), list("red", "#16a34a"), "#dc2626")) {
+    bad <- made
+    bad$palette <- palette
+    expect_error(
+      small_apply(small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(bad)))))),
+      "palette must be null or one #rrggbb color a category"
+    )
+  }
+})
+
+test_that("a field of the intersections of 41 pages applies", {
+  skip_without_sce()
+  # Each intersection combines any number of pages (F269); the session keys
+  # its label by its pages' positions ("0+1+...+40"), a record of labels; the
+  # column is its codes.
+  pages <- lapply(0:40, function(p) list(pageId = paste0("page_", p), label = paste0("P", p)))
+  every <- paste(0:40, collapse = "+")
+  categories <- c(paste0("P", 0:40), "First two", "Every page")
+  for (labels in list(stats::setNames(list("First two", "Every page"), c("0+1", every)))) {
+    made <- session_user_category("user_cat_1", "pages", categories, c(42, 41, 0, 1, 2, 40))
+    made$sourcePages <- pages
+    made$overlapStrategy <- "intersections"
+    made$intersectionLabels <- labels
+    plan <- small_apply(small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(made))))))
+    expect_identical(plan$rows$status, "write")
+    out <- cellucid_apply_plan(plan)
+    expect_identical(as.character(out$pages), c("Every page", "First two", "P0", "P1", "P2", "P40"))
+  }
+})
+
+test_that("a written column's colors are the ones it is shown in", {
+  skip_without_sce()
+  # A field's palette goes with its column as Scanpy keeps colors,
+  # uns['<key>_colors'] (metadata(x) of a SingleCellExperiment), one a
+  # category in the column's order -- every category, used or not (F139). A
+  # field without a palette opens in Cellucid's own category colors, and is
+  # written with them (F239); a column of no categories (a highlight) takes
+  # no colors: those under its name described another column.
+  made <- session_user_category("user_cat_1", "annotation", c("a", "b", "unused"), c(0, 1, 255, 0, 1, 0))
+  made$palette <- list("#dc2626", "#16a34a", "#2563eb")
+  plain <- session_user_category("user_cat_2", "plain", "x", rep(0, 6))
+  groups <- session_highlights(session_page("page_1", "QC", session_group("highlight_1", "Gate", c(0, 1))))
+  path <- small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(made, plain)), highlights = groups)))
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$plain_colors <- c("#000000", "#111111", "#222222")
+  S4Vectors::metadata(data)$cellucid_highlight__QC__Gate_colors <- "#000000"
+  S4Vectors::metadata(data)$cell_type_colors <- c("#aaaaaa", "#bbbbbb", "#cccccc")
+  plan <- small_apply(path, data)
+  expect_null(attr(plan, "cellucid_context")$data@metadata$annotation_colors) # a dry run writes nothing
+  out <- cellucid_apply_plan(plan)
+  meta <- S4Vectors::metadata(out)
+  expect_identical(levels(out$annotation), c("a", "b", "unused"))
+  expect_identical(meta$annotation_colors, c("#dc2626", "#16a34a", "#2563eb"))
+  expect_identical(meta$plain_colors, "#ff9900")
+  expect_false("cellucid_highlight__QC__Gate_colors" %in% names(meta))
+  expect_identical(meta$cell_type_colors, c("#aaaaaa", "#bbbbbb", "#cccccc")) # a column left as it is keeps its colors
+  # Applied again: unchanged, colors as they are.
+  S4Vectors::metadata(out)$annotation_colors <- c("#dc2626", "#16a34a", "#000000")
+  again <- small_apply(path, out, dry_run = FALSE)
+  expect_false(attr(again, "cellucid_apply_report")$applied)
+  expect_identical(S4Vectors::metadata(again)$annotation_colors, c("#dc2626", "#16a34a", "#000000"))
+  # Replaced (overwrite): the new palette replaces the colors.
+  other <- made
+  other$codes <- list(cells = NULL, values = typed("Uint8Array", rep(1, 6)))
+  other$palette <- list("#111111", "#222222", "#333333")
+  path <- small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(other, plain)), highlights = groups)))
+  replaced <- small_apply(path, again, dry_run = FALSE, overwrite = TRUE)
+  rows <- attr(replaced, "cellucid_apply_report")$plan$rows
+  expect_identical(rows$status[rows$name == "annotation"], "replace")
+  expect_identical(S4Vectors::metadata(replaced)$annotation_colors, c("#111111", "#222222", "#333333"))
+})
+
+test_that("colors follow a renamed column and merged categories", {
+  skip_without_sce()
+  overlays <- session_overlays(
+    renamed_fields = list(list(source = "obs", key = "leiden", name = "cluster"), list(source = "obs", key = "count", name = "number")),
+    renamed_categories = list(
+      # B merges into T, in B's place: the category keeps B's color.
+      list(source = "obs", field = "cell_type", category = "B", name = "T"),
+      list(source = "obs", field = "label", category = "x1", name = "y")
+    )
+  )
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$cell_type_colors <- c("#aa0000", "#00aa00", "#0000aa")
+  S4Vectors::metadata(data)$leiden_colors <- c("#111111", "#222222", "#333333")
+  S4Vectors::metadata(data)$cluster_colors <- "#999999" # stale: no column of that name
+  S4Vectors::metadata(data)$count_colors <- matrix(0, 2, 4) # not Scanpy's form: not carried
+  S4Vectors::metadata(data)$label_colors <- c("#444444", "#555555")
+  out <- small_apply(small_session(list(set = list(`field-overlays` = overlays))), data, dry_run = FALSE)
+  meta <- S4Vectors::metadata(out)
+  expect_identical(levels(out$cell_type), c("T", "NK"))
+  expect_identical(meta$cell_type_colors, c("#aa0000", "#0000aa"))
+  expect_identical(meta$cluster_colors, c("#111111", "#222222", "#333333"))
+  expect_false(any(c("leiden_colors", "count_colors", "number_colors") %in% names(meta)))
+  # A text column relabeled: Scanpy colors it by its sorted labels, which the rename reorders.
+  expect_false("label_colors" %in% names(meta))
+})
+
+test_that("merged categories drop colors that did not cover them", {
+  skip_without_sce()
+  overlays <- session_overlays(renamed_categories = list(
+    list(source = "obs", field = "cell_type", category = "NK", name = "T"),
+    list(source = "obs", field = "leiden", category = "0", name = "zero")
+  ))
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$cell_type_colors <- c("#aa0000", "#00aa00") # fewer than its 3 categories: Scanpy draws its own
+  S4Vectors::metadata(data)$leiden_colors <- "#111111" # a rename alone: left as it is
+  out <- small_apply(small_session(list(set = list(`field-overlays` = overlays))), data, dry_run = FALSE)
+  expect_identical(levels(out$cell_type), c("B", "T"))
+  expect_false("cell_type_colors" %in% names(S4Vectors::metadata(out)))
+  expect_identical(S4Vectors::metadata(out)$leiden_colors, "#111111")
+})
+
+# One field's entry of a view's colors: its categories recolored.
+recolor_entry <- function(field_id, ...) {
+  pairs <- list(...)
+  list(field = list(source = "obs", user = field_id),
+       colors = lapply(pairs, function(pair) list(category = pair[[1L]], color = pair[[2L]])))
+}
+
+views_value <- function(focus, count) {
+  view <- list(embedding = list(key = "X_umap", columns = list(0L, 1L)), followsDefault = TRUE,
+               centroids = list(points = FALSE, labels = FALSE))
+  list(layout = "grid", focus = focus, liveHidden = FALSE, camerasLinked = TRUE, views = rep(list(view), count))
+}
+
+test_that("a field's colors are the ones the view in focus shows", {
+  skip_without_sce()
+  # The colors a person or an agent gave a field's categories reach
+  # <key>_colors (L26-7/8): in the view in focus at the step, each category
+  # recolored there, the rest in the colors it opens with -- its palette,
+  # else Cellucid's own colors by position. Another view's colors stay how
+  # the data was shown.
+  stage <- session_user_category("user_cat_1", "stage", c("early", "mid", "late"), c(0, 1, 2, 0, 1, 2))
+  fate <- session_user_category("user_cat_2", "fate", c("a", "b"), c(0, 1, 0, 1, 0, 1))
+  fate$palette <- list("#dc2626", "#16a34a")
+  live <- list(recolor_entry("user_cat_1", list("early", "#111111")))
+  kept <- list(
+    list(field = list(source = "obs", key = "cell_type"), colors = list(list(category = "B", color = "#000000"))),
+    recolor_entry("user_cat_1", list("late", "#008080"), list("early", "#808080"), list("absent", "#ffffff")),
+    recolor_entry("user_cat_2", list("b", "#ffd700"))
+  )
+  made <- list(set = list(`field-overlays` = session_overlays(user_fields = list(stage, fate))))
+  root <- session_state(colors = list(views = list(list(), list())), views = views_value(0L, 2L))
+  recolored <- function(focus) list(set = list(colors = list(views = list(live, kept)), views = views_value(focus, 2L)))
+  out <- small_apply(small_session(made, recolored(1L), root = root), dry_run = FALSE)
+  meta <- S4Vectors::metadata(out)
+  expect_identical(meta$stage_colors, c("#808080", "#0077c8", "#008080"))
+  expect_identical(meta$fate_colors, c("#dc2626", "#ffd700"))
+  # The dataset column recolored in the view in focus (RCC-1).
+  expect_identical(meta$cell_type_colors, c("#000000", "#0077c8", "#ad50e0"))
+  rows <- attr(out, "cellucid_apply_report")$plan$rows
+  colors <- rows[rows$domain == "colors", ]
+  expect_identical(colors$kind, c("column-colors", "presentation"))
+  expect_identical(colors$name[[1L]], "cell_type")
+  expect_identical(colors$status, c("write", "not-applied"))
+  expect_identical(colors$note[[2L]], cellucid:::.apply_colors_note)
+  expect_identical(rows$note[rows$domain == "views"], "Presentation: not applied to the object.")
+  meta <- S4Vectors::metadata(small_apply(small_session(made, recolored(0L), root = root), dry_run = FALSE))
+  expect_identical(meta$stage_colors, c("#111111", "#0077c8", "#ad50e0"))
+  expect_identical(meta$fate_colors, c("#dc2626", "#16a34a"))
+  expect_false("cell_type_colors" %in% names(meta)) # recolored in another view only
+  # The colors at the step before (none recolored): the colors the fields open with.
+  path <- small_session(made, recolored(1L), root = root)
+  before <- small_apply(path, step = "s1", dry_run = FALSE)
+  expect_identical(S4Vectors::metadata(before)$stage_colors, c("#ff9900", "#0077c8", "#ad50e0"))
+  # At the head: the columns are unchanged (their colors as they are); the
+  # dataset column recolored there takes its colors, once.
+  again <- small_apply(path, before, dry_run = FALSE)
+  rows <- attr(again, "cellucid_apply_report")$plan$rows
+  expect_identical(rows$kind[rows$domain == "colors"], c("column-colors", "presentation"))
+  expect_identical(rows$status[rows$domain == "colors"], c("write", "not-applied"))
+  expect_identical(S4Vectors::metadata(again)$stage_colors, c("#ff9900", "#0077c8", "#ad50e0"))
+  third <- small_apply(path, again, dry_run = FALSE)
+  expect_false(attr(third, "cellucid_apply_report")$applied)
+  rows <- attr(third, "cellucid_apply_report")$plan$rows
+  expect_identical(rows$status[rows$domain == "colors"], c("unchanged", "not-applied"))
+  expect_identical(rows$note[rows$domain == "colors" & rows$kind == "presentation"], cellucid:::.apply_colors_note)
+})
+
+# A dataset column's entry of a view's colors: its categories recolored.
+dataset_recolor <- function(key, ...) {
+  pairs <- list(...)
+  list(field = list(source = "obs", key = key),
+       colors = lapply(pairs, function(pair) list(category = pair[[1L]], color = pair[[2L]])))
+}
+
+test_that("a recolored dataset column is written with the colors it is shown in", {
+  skip_without_sce()
+  # A column that came with the dataset, recolored in the view in focus,
+  # takes the colors it is shown in (RCC-1): the categories recolored, the
+  # rest in the colors it opens with -- the colors held for it, as drawn
+  # (#rgb widened, alpha dropped), else Cellucid's own by position. Applied
+  # again: unchanged. A column it cannot be written to says why (a column the
+  # object lacks is refused before, as every field the state uses).
+  recolors <- list(
+    dataset_recolor("cell_type", list("T", "#123456")),
+    dataset_recolor("leiden", list("1", "#00ff00")),
+    dataset_recolor("label", list("x0", "#ffffff")),
+    dataset_recolor("count", list("absent", "#ffffff"))
+  )
+  path <- small_session(list(set = list(colors = list(views = list(recolors)), views = views_value(0L, 1L))),
+                        root = session_state(colors = list(views = list(list())), views = views_value(0L, 1L)))
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$cell_type_colors <- c("#AA0000", "#0a0", "#0000aaff")
+  S4Vectors::metadata(data)$leiden_colors <- "#111111" # fewer than its 3 categories: the viewer opens it in Cellucid's colors
+  plan <- small_apply(path, data)
+  rows <- plan$rows[plan$rows$domain == "colors", ]
+  expect_identical(rows$kind, c(rep("column-colors", 4L), "presentation"))
+  expect_identical(rows$name, c("cell_type", "leiden", "label", "count", "Colors"))
+  expect_identical(rows$status, c("write", "write", "not-applied", "not-applied", "not-applied"))
+  expect_identical(rows$note, c(
+    NA, NA,
+    "The obs column \"label\" is not categorical; Scanpy keeps colors for a categorical column only.",
+    "The obs column \"count\" is not categorical; Scanpy keeps colors for a categorical column only.",
+    cellucid:::.apply_colors_note
+  ))
+  expect_identical(rows$column, rep(NA_character_, 5L))
+  expect_identical(rows$cells, rep(NA_integer_, 5L))
+  expect_identical(S4Vectors::metadata(attr(plan, "cellucid_context")$data)$cell_type_colors,
+                   c("#AA0000", "#0a0", "#0000aaff")) # a dry run writes nothing
+  out <- cellucid_apply_plan(plan)
+  report <- attr(out, "cellucid_apply_report")
+  expect_true(report$applied)
+  meta <- S4Vectors::metadata(out)
+  expect_identical(meta$cell_type_colors, c("#aa0000", "#123456", "#0000aa"))
+  expect_identical(meta$leiden_colors, c("#ff9900", "#00ff00", "#ad50e0"))
+  expect_false("label_colors" %in% names(meta))
+  skipped <- Filter(function(entry) identical(entry$kind, "column-colors"), report$provenance$skipped)
+  expect_identical(vapply(skipped, function(entry) entry$name, ""), c("label", "count"))
+  again <- small_apply(path, out, dry_run = FALSE)
+  expect_false(attr(again, "cellucid_apply_report")$applied)
+  rows <- attr(again, "cellucid_apply_report")$plan$rows
+  expect_identical(rows$status[rows$kind == "column-colors"], c("unchanged", "unchanged", "not-applied", "not-applied"))
+})
+
+test_that("a recolored dataset column renamed in the session takes its colors by its new labels", {
+  skip_without_sce()
+  # The colors value names a dataset column by the key the dataset gives it
+  # and its categories by the labels shown at the step: the column renamed
+  # and a category relabeled by the same apply are written under the new
+  # names, the colors in the column's order; a label the column lacks is
+  # said, the others written.
+  overlays <- session_overlays(
+    renamed_fields = list(list(source = "obs", key = "cell_type", name = "kind")),
+    renamed_categories = list(list(source = "obs", field = "cell_type", category = "B", name = "Bcell"))
+  )
+  recolors <- list(dataset_recolor("cell_type", list("Bcell", "#101010"), list("ghost", "#202020")))
+  root <- session_state(colors = list(views = list(list())), views = views_value(0L, 1L))
+  path <- small_session(list(set = list(`field-overlays` = overlays, colors = list(views = list(recolors)), views = views_value(0L, 1L))),
+                        root = root)
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$cell_type_colors <- c("#aa0000", "#00aa00", "#0000aa")
+  out <- small_apply(path, data, dry_run = FALSE)
+  expect_identical(levels(SummarizedExperiment::colData(out)$kind), c("Bcell", "T", "NK"))
+  meta <- S4Vectors::metadata(out)
+  expect_identical(meta$kind_colors, c("#101010", "#00aa00", "#0000aa"))
+  expect_false("cell_type_colors" %in% names(meta))
+  rows <- attr(out, "cellucid_apply_report")$plan$rows
+  row <- rows[rows$kind == "column-colors", ]
+  expect_identical(c(row$name, row$status, row$note),
+                   c("kind", "write", "Not written: the color of \"ghost\", which the obs column \"kind\" does not have."))
+  # Only labels the column lacks: nothing to write.
+  only <- list(dataset_recolor("leiden", list("9", "#202020"), list("8", "#303030")))
+  plan <- small_apply(small_session(list(set = list(colors = list(views = list(only)), views = views_value(0L, 1L))), root = root))
+  row <- plan$rows[plan$rows$kind == "column-colors", ]
+  expect_identical(c(row$status, row$note),
+                   c("not-applied", "Not written: the colors of \"9\", \"8\", which the obs column \"leiden\" does not have."))
+})
+
+test_that("colors the session holds are checked", {
+  skip_without_sce()
+  stage <- session_user_category("user_cat_1", "stage", "early", rep(0, 6))
+  made <- list(set = list(`field-overlays` = session_overlays(user_fields = list(stage))))
+  root <- session_state(colors = list(views = list(list())), views = views_value(0L, 1L))
+  bad_focus <- views_value(0L, 1L)
+  bad_focus$focus <- -1L
+  cases <- list(
+    list(colors = list(views = list(list(recolor_entry("user_cat_1", list("early", "#FFFFFF"))))), views = NULL,
+         message = "color must be one #rrggbb color"),
+    list(colors = list(views = list(list(list(field = list(source = "obs", user = ""))))), views = NULL,
+         message = "field.user must be a non-empty text"),
+    list(colors = list(views = list(list(list(field = list(source = "nope", key = "cell_type"))))), views = NULL,
+         message = "field.source must be \"obs\" or \"var\""),
+    list(colors = list(views = list(list())), views = views_value(1L, 2L),
+         message = "colors value holds 1 view, and the view in focus is view 1"),
+    list(colors = list(views = list(list())), views = bad_focus, message = "focus must be a non-negative whole number")
+  )
+  for (case in cases) {
+    changes <- list(colors = case$colors)
+    if (!is.null(case$views)) changes$views <- case$views
+    expect_error(small_apply(small_session(made, list(set = changes), root = root)), case$message, fixed = TRUE)
+  }
+})
+
+test_that("a session saved under the id an object was shown under applies when named", {
+  skip_without_sce()
+  # A viewer given dataset_id = serves the object under that id, and its
+  # session is saved under it (L26-7): naming it applies the session to the
+  # object, which declares its own id; another id is refused.
+  record <- small_fingerprint()
+  record$datasetId <- "pancreas-notebook"
+  gate <- session_highlights(session_page("page_1", "QC", session_group("highlight_1", "Gate", c(0, 1))))
+  path <- tempfile(fileext = ".cellucid-session")
+  session_file(path, record, list(list(id = "t1", name = "Tracker 1", root = session_state(), steps = list(list(set = list(highlights = gate))))))
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$cellucid <- list(id = "pancreas")
+  expect_error(cellucid_apply_session(data, path),
+               "saved on the dataset 'pancreas-notebook', and this object is 'pancreas' (its cellucid record's id). Apply it to the dataset it was saved on; when it is that dataset, shown under another id (dataset_id = when it was shown), name that id: dataset_id = 'pancreas-notebook'.",
+               fixed = TRUE)
+  expect_error(cellucid_apply_session(data, path, dataset_id = "pancreas"),
+               "saved on the dataset 'pancreas-notebook', and this object was shown as 'pancreas'", fixed = TRUE)
+  expect_error(cellucid_apply_session(data, path, dataset_id = "no/slash"), "dataset_id")
+  out <- cellucid_apply_session(data, path, dataset_id = "pancreas-notebook", dry_run = FALSE)
+  expect_true(attr(out, "cellucid_apply_report")$applied)
+  expect_identical(as.logical(out$cellucid_highlight__QC__Gate), c(TRUE, TRUE, FALSE, FALSE, FALSE, FALSE))
+  # A plan made so is applied so (the plan is made again first).
+  plan <- cellucid_apply_session(data, path, dataset_id = "pancreas-notebook")
+  expect_true(attr(cellucid_apply_plan(plan), "cellucid_apply_report")$applied)
+  # A pull of the session file takes the same id.
+  expect_error(cellucid_pull(data, path), "this object is 'pancreas'")
+  pulled <- cellucid_pull(data, path, dataset_id = "pancreas-notebook", return_summary = TRUE)
+  expect_identical(names(pulled$summary$columns), "cellucid_highlight__highlight_1")
+})
+
+test_that("a viewer given another dataset id takes its own session back", {
+  skip_without_sce()
+  skip_if_not_installed("httpuv")
+  # cellucid_view(object, dataset_id = ) serves the object under that id, and
+  # the viewer saves its session under it; applied back through the viewer's
+  # request, the session goes to the object it served, which declares its own
+  # id (L26-7). An object declaring another id is refused, as before.
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$cellucid <- list(id = "pancreas")
+  viewer <- cellucid:::.start_viewer(
+    data, list(dataset_id = "pancreas-notebook"), label = "data",
+    port = 0L, port_given = TRUE, host = "127.0.0.1", allowed_hosts = NULL, serve_web_ui = FALSE,
+    web_cache_dir = NULL, web_source_url = NULL, cache_bytes = 0, quiet = TRUE, bind = FALSE
+  )
+  on.exit(cellucid_stop(viewer), add = TRUE)
+  expect_identical(c(viewer$dataset_id, viewer$declared_id), c("pancreas-notebook", "pancreas"))
+  record <- small_fingerprint()
+  record$datasetId <- "pancreas-notebook"
+  stage <- session_user_category("user_cat_1", "stage", c("early", "late"), c(0, 1, 0, 1, 0, 1))
+  answered <- function() {
+    path <- tempfile(fileext = ".cellucid-session")
+    session_file(path, record, list(list(id = "t1", name = "Tracker 1", root = session_state(),
+                                         steps = list(list(set = list(`field-overlays` = session_overlays(user_fields = list(stage))))))))
+    entry <- new.env(parent = emptyenv())
+    entry$answer <- list(path = path)
+    id <- paste0("s", length(viewer$session_requests) + 1L)
+    viewer$session_requests[[id]] <- entry
+    structure(list(viewer = viewer, id = id), class = "cellucid_session_request")
+  }
+  out <- cellucid_apply_session(data, answered(), dry_run = FALSE)
+  expect_identical(as.character(out$stage), c("early", "late", "early", "late", "early", "late"))
+  other <- data
+  S4Vectors::metadata(other)$cellucid <- list(id = "garcia")
+  expect_error(cellucid_apply_session(other, answered()), "saved on the dataset 'pancreas-notebook', and this object is 'garcia'")
+})
+
+test_that("a pull of a session file writes a field's palette under its column", {
+  skip_without_sce()
+  made <- session_user_category("user_cat_1", "annotation", c("a", "b"), c(0, 1, 255, 0, 1, 0))
+  made$palette <- list("#dc2626", "#16a34a")
+  path <- small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(made)))))
+  data <- tiny_sce()
+  S4Vectors::metadata(data)$field__annotation_colors <- "#000000"
+  out <- cellucid_pull(data, path, field_prefix = "field__", return_summary = TRUE)
+  expect_identical(names(out$summary$columns), "field__annotation")
+  expect_identical(S4Vectors::metadata(out$data)$field__annotation_colors, c("#dc2626", "#16a34a"))
+  # Written beside a column of that name (on_conflict = "suffix"): under the name written.
+  data <- tiny_sce()
+  data$annotation <- 1
+  S4Vectors::metadata(data)$annotation_colors <- "#000000"
+  out <- cellucid_pull(data, path, on_conflict = "suffix", return_summary = TRUE)
+  written <- names(out$summary$columns)
+  expect_length(written, 1L)
+  expect_false(identical(written, "annotation"))
+  expect_identical(S4Vectors::metadata(out$data)[[paste0(written, "_colors")]], c("#dc2626", "#16a34a"))
+  expect_identical(S4Vectors::metadata(out$data)$annotation_colors, "#000000")
+})
+
+test_that("a column's colors live where the object keeps uns", {
+  # Seurat misc, metadata(x), a data frame's attributes: the cellucid
+  # record's places, under uns['<column>_colors']'s own name.
+  frame <- data.frame(a = factor(c("x", "y")), row.names = c("c1", "c2"))
+  attr(frame, "a_colors") <- c("#000000", "#111111")
+  out <- cellucid:::.object_with_columns(frame, list(list(name = "a", values = factor(c("y", "y")), colors = c("#123456", "#abcdef"))))
+  expect_identical(attr(out, "a_colors"), c("#123456", "#abcdef"))
+  out <- cellucid:::.object_with_columns(out, list(), remove = "a")
+  expect_null(attr(out, "a_colors"))
+  # The cellucid record is read by its exact name: a highlight column's
+  # colors (cellucid_highlight__..._colors) are not it.
+  skip_without_sce()
+  sce <- tiny_sce()
+  S4Vectors::metadata(sce)$cellucid_highlight__QC__Gate_colors <- c("#000000", "#111111")
+  expect_identical(cellucid:::.object_record(sce), list())
 })
 
 test_that("highlight groups of every page are named by page and label", {
@@ -855,6 +1278,45 @@ test_that("presentation domains are reported, never applied", {
   expect_identical(unlist(plan$rows[, c("kind", "domain", "name", "status", "note")], use.names = FALSE),
                    c("presentation", "camera", "Camera", "not-applied", "Presentation: not applied to the object."))
   expect_false(attr(cellucid_apply_plan(plan), "cellucid_apply_report")$applied)
+})
+
+test_that("the step's expression values are recorded in its apply's record, never applied", {
+  skip_without_sce()
+  gate <- session_highlights(session_page("page_1", "QC", session_group("highlight_1", "Gate", c(0, 1))))
+  root <- session_state(expression = list(normalize = FALSE, log1p = FALSE))
+  shown <- list(normalize = TRUE, log1p = TRUE)
+  path <- small_session(list(set = list(expression = shown)), list(set = list(highlights = gate)), root = root)
+  data <- tiny_sce()
+  applied <- small_apply(path, data = data, dry_run = FALSE)
+  report <- attr(applied, "cellucid_apply_report")
+  expect_true(report$applied)
+  presentation <- report$plan$rows[report$plan$rows$kind == "presentation", c("kind", "domain", "name", "status", "note")]
+  expect_identical(unlist(presentation, use.names = FALSE),
+                   c("presentation", "expression", "Expression values", "not-applied", "Presentation: not applied to the object."))
+  expect_identical(report$provenance$expression, shown)
+  expect_identical(lapply(cellucid_history_applied(applied), function(record) record$expression), list(shown))
+  # Recorded, never applied: the object's expression values are as stored.
+  expect_identical(SummarizedExperiment::assay(applied, "logcounts"), SummarizedExperiment::assay(data, "logcounts"))
+  # The step before (only the expression values changed) writes nothing, so records nothing.
+  expect_false(attr(small_apply(path, step = "s1", dry_run = FALSE), "cellucid_apply_report")$applied)
+  # The opening's values (as stored) are recorded as they are.
+  as_stored <- small_apply(small_session(list(set = list(highlights = gate)), root = root), dry_run = FALSE)
+  expect_identical(cellucid_history_applied(as_stored)[[1L]]$expression, list(normalize = FALSE, log1p = FALSE))
+})
+
+test_that("a session without expression values records NULL, and another shape is refused", {
+  skip_without_sce()
+  gate <- session_highlights(session_page("page_1", "QC", session_group("highlight_1", "Gate", c(0, 1))))
+  applied <- small_apply(small_session(list(set = list(highlights = gate))), dry_run = FALSE)
+  record <- cellucid_history_applied(applied)[[1L]]
+  expect_true("expression" %in% names(record))
+  expect_null(record$expression)
+  expect_identical(as_json_value(record["expression"]), list(expression = NULL))
+  root <- session_state(expression = list(normalize = FALSE, log1p = FALSE))
+  expect_error(small_apply(small_session(list(set = list(expression = list(normalize = TRUE), highlights = gate)), root = root)),
+               "expression value at step s1 has other fields than this version reads (missing log1p)", fixed = TRUE)
+  expect_error(small_apply(small_session(list(set = list(expression = list(normalize = TRUE, log1p = 1), highlights = gate)), root = root)),
+               "expression value at step s1's log1p must be true or false.", fixed = TRUE)
 })
 
 test_that("a steps-only file reads and is not applied", {
@@ -1156,6 +1618,25 @@ test_that("a file from a newer Cellucid is newer, never damaged", {
     m
   }))
   expect_error(cellucid_read_session(older), "^This session file is damaged: ")
+})
+
+test_that("a value nested past what R follows is refused in a sentence, as cellucid-python refuses it", {
+  # One eager value replaced by lists nested 5000 deep, written as text: JSON
+  # jsonlite reads, deeper than R's expression stack follows (before: R's
+  # own "evaluation nested too deeply" error).
+  skip_if(getRversion() < "4.4.0", "R names a stack overflow's class from 4.4.0 on")
+  deep <- rewritten(function(file) {
+    at <- which(vapply(file$manifest$chunks, function(entry) entry$kind, "") == "values")[[1L]]
+    meta <- file$manifest$chunks[[at]]
+    values <- jsonlite::parse_json(rawToChar(session_payload(meta, file$chunks[[at]])), simplifyVector = FALSE)
+    values[[1L]] <- "DEEP"
+    text <- sub("\"DEEP\"", paste0(strrep("[", 5000L), strrep("]", 5000L)), cellucid:::.js_json(values), fixed = TRUE)
+    stored <- session_store(meta[setdiff(names(meta), c("codec", "storedBytes", "uncompressedBytes"))], charToRaw(text))
+    file$manifest$chunks[[at]] <- stored$meta
+    file$chunks[[at]] <- stored$bytes
+    file
+  })
+  expect_error(cellucid_read_session(deep), cellucid:::.session_too_deep_message, fixed = TRUE)
 })
 
 test_that("another format is refused with the web app's sentence", {

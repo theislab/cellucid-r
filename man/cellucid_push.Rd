@@ -36,7 +36,7 @@ given.}
 (\code{\link{cellucid_act}()}), at once and invisibly: the column is sent now, or when the
 viewer's channel opens, so a notebook run top to bottom is fine.
 \code{\link{cellucid_action_result}(request)} returns the field's name, kind
-and id once the viewer added it (one step of its history, labelled as R's),
+and id once the viewer added it (one step of its history, labeled as R's),
 or stops with the viewer's reason when it refused the column (one that does
 not fit the dataset); \code{\link{cellucid_results}()} lists it once the
 viewer added it (in a notebook, from the next cell).
@@ -45,7 +45,7 @@ viewer added it (in a notebook, from the next cell).
 }
 \description{
 \code{cellucid_push()} shows a column -- clusters, labels, a score -- in the
-viewer as a field to colour, filter and analyse by: the viewer's
+viewer as a field to color, filter and analyze by: the viewer's
 \code{field.push} action (\code{\link{cellucid_field_push}()}) with its
 parameters made from the vector, its categories and codes (as uint8, uint16
 or uint32) or its numbers (as float32), its cells by original position. It

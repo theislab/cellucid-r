@@ -50,7 +50,7 @@ test_that("every message, warning and error of the package is raised as a condit
   root <- test_path("..", "..", "R")
   skip_if_not(dir.exists(root), "the package sources are not beside the tests")
   constructors <- c("simpleError", "simpleWarning", "simpleMessage", ".data_mapping_error", ".protocol_error",
-                    ".history_model_error")
+                    ".history_model_error", ".classed_warning")
   offenders <- character()
   for (file in sort(list.files(root, pattern = "\\.R$", full.names = TRUE))) {
     data <- utils::getParseData(parse(file, keep.source = TRUE), includeText = TRUE)

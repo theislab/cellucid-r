@@ -197,7 +197,7 @@ test_that("a latent key stores the outlier quantiles of every categorical obs co
   expect_identical(meta$shape, 6L)
   expect_identical(meta$shuffle, 4L)
   # The b cells (1, 3, 6) lie on a line through X_pca, at 7/3, 1/3 and 8/3
-  # steps from their centre; a and c have fewer than 3 cells.
+  # steps from their center; a and c have fewer than 3 cells.
   expect_identical(
     store_array(outliers, "fields/cluster"),
     as_float32(c(2 / 3, NaN, 1 / 3, NaN, NaN, 1))
@@ -224,7 +224,7 @@ test_that("a cell an embedding does not place (a NaN row) is written as given, a
   expect_true(all(is.nan(umap[3L, ])))
   expect_identical(umap[-3L, ], as_float32_matrix(args$embeddings$X_umap[-3L, ]))
   # cluster b is cells 1, 3, 6: with cell 6 unplaced, cells 1 and 3 are its
-  # two placed cells, each at the same distance from their centre.
+  # two placed cells, each at the same distance from their center.
   quantiles <- store_array(store, "uns/cellucid/outlierQuantiles/fields/cluster")
   expect_true(is.nan(quantiles[[6L]]))
   expect_identical(quantiles[c(1L, 3L)], as_float32(c(1, 1)))
@@ -686,7 +686,7 @@ test_that("each mistake is refused with its reason before anything is written", 
   refused("ends in \".zarr\", which format = \"zarr\" writes", format = "zarr.zip")
   refused("^format must be \"zarr\" or \"zarr\\.zip\"", format = "folder")
   refused("dataset_id 'a b' is not a portable identifier", dataset_id = "a b")
-  refused("^dataset_name is displayed verbatim", dataset_name = "Fixture ")
+  refused("^dataset_name is displayed verbatim", dataset_name = "Fix\u200bture")
   refused("^citation_text is required whenever citation_url is supplied\\.$", citation_url = "https://x.org")
   refused("source_url must be an absolute http:// or https:// address", source_name = "Lab", source_url = "example.org")
   refused("embeddings must contain at least one embedding", embeddings = list())
@@ -759,6 +759,14 @@ test_that("a column with no AnnData encoding fails the write and leaves nothing"
   expect_error(
     suppressMessages(do.call(cellucid_prepare, args)),
     "obs column 'day' holds 1 infinite value \\(first at row 2\\)"
+  )
+
+  # bit64's integers (identifiers past 2^53 among them): R writes no 64-bit
+  # integer, so the column is refused saying how to keep the values exact.
+  args$obs$day <- structure(as.double(1:6), class = "integer64")
+  expect_error(
+    suppressMessages(do.call(cellucid_prepare, args)),
+    "obs column 'day' is a bit64 integer64 column.*as.character\\(\\)"
   )
 })
 
@@ -872,4 +880,54 @@ test_that("what a killed writer left is removed by the next one", {
   expect_false(dir.exists(file.path(parent, paste0(".s.zarr.", dead, ".replaced"))))
   expect_true(cellucid:::.native_process_alive(Sys.getpid()))
   expect_false(cellucid:::.native_process_alive(dead))
+})
+
+test_that("obs_colors writes Scanpy's colors of categorical columns, and is checked (F148)", {
+  skip_if_not_installed("Matrix")
+  # cluster: a factor of levels c, b, a; batch: text that repeats, a categorical
+  # of x, y; barcode: unique text, a string array.
+  store <- prepare_fixture_store(obs_colors = list(cluster = c("#000001", "#000002", "#000003"), batch = c("#0000aa", "#0000bb", "#0000cc")))
+  expect_identical(store_array(store, "uns/cluster_colors"), c("#000001", "#000002", "#000003"))
+  expect_identical(store_json(store, "uns/cluster_colors/.zattrs")$`encoding-type`, "string-array")
+  # A longer list is kept as it is (Scanpy colors with its first ones).
+  expect_identical(store_array(store, "uns/batch_colors"), c("#0000aa", "#0000bb", "#0000cc"))
+  expect_setequal(list.dirs(file.path(store, "uns"), full.names = FALSE, recursive = FALSE), c("cellucid", "title", "cluster_colors", "batch_colors"))
+  none <- prepare_fixture_store(obs_colors = list())
+  expect_false(dir.exists(file.path(none, "uns/cluster_colors")))
+  refusals <- list(
+    list(list(cluster = c("#000001")), "obs_colors\\$cluster: 1 color for the 3 categories of 'cluster'"),
+    list(list(barcode = c("#1", "#2", "#3", "#4", "#5", "#6")), "obs_colors\\$barcode: 'barcode' is not written as a categorical"),
+    list(list(score = "#1"), "'score' is not written as a categorical"),
+    list(list(nope = "#1"), "obs_colors names 'nope', which is no obs column written"),
+    list(list(cluster = 1:3), "obs_colors\\$cluster must be a character vector of colors"),
+    list(list(cluster = c("#000001", "red", "#000003")), "obs_colors\\$cluster: \"red\" is not a hex color"),
+    list(list(cluster = c("#1", NA, "#3")), "obs_colors\\$cluster must be a character vector of colors"),
+    list(c(cluster = "#1"), "obs_colors must be a named list"),
+    list(list("#1"), "obs_colors must be a named list")
+  )
+  for (refusal in refusals) {
+    path <- store_path()
+    args <- prepare_fixture(path)
+    args$obs_colors <- refusal[[1L]]
+    expect_error(suppressMessages(do.call(cellucid_prepare, args)), refusal[[2L]])
+    expect_false(file.exists(path))
+  }
+})
+
+test_that("descriptive text is written trimmed, an identifier still refused for a space at either end (R9U-9)", {
+  skip_if_not_installed("Matrix")
+  # A space typed at either end of a name, description, citation text or
+  # source name is removed, as the web app reads such text and
+  # cellucid-python writes it; a space inside stays.
+  store <- prepare_fixture_store(
+    dataset_name = " PBMC  3k ", dataset_description = "One paragraph. \n",
+    citation_text = "﻿Smith J. A study. 2024. ", citation_url = "https://doi.org/10.1/x",
+    source_name = "GEO\t", source_url = "https://example.org/"
+  )
+  expect_identical(store_array(store, "uns/cellucid/name"), "PBMC  3k")
+  expect_identical(store_array(store, "uns/cellucid/description"), "One paragraph.")
+  expect_identical(store_array(store, "uns/cellucid/citation/text"), "Smith J. A study. 2024.")
+  expect_identical(store_array(store, "uns/cellucid/source/name"), "GEO")
+  expect_error(prepare_fixture_store(dataset_name = "   "), "dataset_name must be a non-empty string")
+  expect_error(prepare_fixture_store(dataset_id = "pbmc "), "dataset_id")
 })

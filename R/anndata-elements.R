@@ -96,6 +96,15 @@
     .ad_categorical(store, path, codes, levels, is.ordered(values), target)
     return(invisible(NULL))
   }
+  if (inherits(values, "integer64")) {
+    # R holds no 64-bit integer: the values are written as the viewer reads
+    # integers past 2^53, identifiers, as text.
+    .abort(
+      label, " is a bit64 integer64 column, which R cannot write as 64-bit ",
+      "integers. Write identifiers as text with as.character() (the viewer reads ",
+      "integers past 2^53 as text), or counts within 2^53 with as.numeric()."
+    )
+  }
   if (is.object(values) || !is.null(dim(values)) || is.list(values)) {
     .abort(
       label, " is a ", class(values)[[1L]], " column, which has no AnnData ",
@@ -142,7 +151,7 @@
       .abort(
         label, " holds ", .format_count(length(infinite)), " infinite ",
         .plural(length(infinite), "value", "values"), " (first at row ",
-        infinite[[1L]], "). A colour scale has no position for an infinity; ",
+        infinite[[1L]], "). A color scale has no position for an infinity; ",
         "replace it with NA, which is written as a missing value."
       )
     }
@@ -196,7 +205,7 @@
 # `dtype`. A `sliced` matrix -- the expression matrix, which the viewer reads
 # one gene's range at a time -- chunks its data and indices in 2^14 values
 # when written, 2^18 when served (.sliced_chunk_elements()); any other (the
-# neighbour graph, read whole) in 2^18.
+# neighbor graph, read whole) in 2^18.
 .ad_sparse <- function(store, path, format, shape, pointers, indices, values,
                        dtype = "<f4", sliced = FALSE) {
   pointer_dtype <- if (.value_length(values) >= 2147483648) "<i8" else "<i4"

@@ -17,6 +17,7 @@
 # several (each has its own genes); var_gene_id_column and modality then name
 # a column of, and the modality, the viewer opens with.
 .dataset_components <- function(data, given) {
+  if (!is.null(given$obs_colors)) given$obs_colors <- .require_obs_colors(given$obs_colors)
   if (is.null(data)) {
     if (!is.null(given$modalities)) {
       .abort("modalities chooses among the modalities of data, and no data was supplied.")
@@ -32,6 +33,9 @@
     return(components)
   }
   components <- .dataset_from(data)
+  # A column named here replaces the data's, and what the data said its
+  # column covers goes with that column.
+  if (!is.null(given$total_counts) && is.null(given$total_counts_over)) components$total_counts_over <- NULL
   for (name in setdiff(names(given), c("gene_expression", "var", "modalities"))) {
     if (!is.null(given[[name]])) components[[name]] <- given[[name]]
   }
@@ -130,6 +134,110 @@
   names[[if (length(gene) > 0L) gene[[1L]] else 1L]]
 }
 
+# --- Scanpy's colors of obs columns (uns['<column>_colors']) ---------------
+# The obs_colors component, one rule with cellucid-python's prepare()
+# (prepare_data/_inputs.py written_obs_colors): each categorical obs column
+# written keeps the colors its source holds for it (.colors_key,
+# .text_colors in round-trip.R), as Scanpy keeps them; a column not written
+# has none. `explicit`: given as obs_colors = (an entry that cannot be written
+# is refused) rather than held by `data` (left out, saying why).
+.obs_colors_component <- function(colors, explicit) {
+  structure(list(colors = colors, explicit = explicit), class = "cellucid_obs_colors")
+}
+
+# What an object holds for `columns`, read with `held(key)` from where it
+# keeps uns (Seurat misc, metadata(x)).
+.held_obs_colors <- function(held, columns) {
+  colors <- list()
+  for (column in columns) {
+    value <- held(.colors_key(column))
+    if (!is.null(value)) colors[[column]] <- value
+  }
+  .obs_colors_component(colors, explicit = FALSE)
+}
+
+# obs_colors = as given: a named list of obs column to its colors.
+.require_obs_colors <- function(value) {
+  named <- is.list(value) && !is.data.frame(value) &&
+    (length(value) == 0L || (!is.null(names(value)) && all(nzchar(names(value))) && !anyDuplicated(names(value))))
+  if (!named) {
+    .abort(
+      "obs_colors must be a named list of obs column to its colors, ",
+      "list(cell_type = c(\"#1f77b4\", ...)), each column once."
+    )
+  }
+  for (name in names(value)) {
+    if (is.null(.text_colors(value[[name]]))) {
+      .abort(
+        "obs_colors$", name, " must be a character vector of colors, one a category in the ",
+        "column's order (Scanpy's uns['", name, "_colors']), without NA."
+      )
+    }
+  }
+  .obs_colors_component(value, explicit = TRUE)
+}
+
+# How many categories a column is written with (.ad_column): a factor's
+# levels but NA, a character column's distinct values when one repeats or is
+# missing; NULL for a column not written as a categorical.
+.written_category_count <- function(values) {
+  if (is.factor(values)) return(sum(!is.na(levels(values))))
+  if (is.character(values) && !is.object(values) && is.null(dim(values)) && (anyNA(values) || anyDuplicated(values))) {
+    return(length(unique(values[!is.na(values)])))
+  }
+  NULL
+}
+
+# A color as the viewer reads one from a file (utils/hex-color.js): #rgb,
+# #rrggbb or #rrggbbaa, either case. cellucid-python's _inputs._HEX_COLOR.
+.hex_file_color <- "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+
+# The uns colors written for `obs` (the columns as written): for each
+# categorical column whose colors are hex text with at least one a category
+# (Scanpy's own condition for using them), as held (a longer list is kept:
+# Scanpy colors with its first ones).
+.written_obs_colors <- function(component, obs) {
+  out <- list()
+  if (is.null(component)) return(out)
+  for (key in names(component$colors)) {
+    if (!key %in% names(obs)) {
+      if (isTRUE(component$explicit)) {
+        .abort("obs_colors names '", key, "', which is no obs column written: ", .format_value_list(names(obs)), ".")
+      }
+      next
+    }
+    colors <- .text_colors(component$colors[[key]])
+    count <- .written_category_count(obs[[key]])
+    reason <- if (is.null(colors)) {
+      "the colors are not text (Scanpy's form)."
+    } else if (is.null(count)) {
+      paste0("'", key, "' is not written as a categorical, and colors go with categories.")
+    } else if (length(colors) < count) {
+      paste0(
+        length(colors), " ", .plural(length(colors), "color", "colors"), " for the ", count, " ",
+        .plural(count, "category", "categories"), " of '", key,
+        "'; Scanpy's form is one a category, in category order."
+      )
+    } else if (!all(grepl(.hex_file_color, colors[seq_len(count)]))) {
+      # The viewer opens a column in its colors only when each category's is
+      # hex (palettes.js scanpyCategoryPalette), as Scanpy writes them.
+      unread <- colors[seq_len(count)][!grepl(.hex_file_color, colors[seq_len(count)])][[1L]]
+      paste0(
+        "\"", unread, "\" is not a hex color (#rrggbb, #rgb or #rrggbbaa), and the viewer opens a column in ",
+        "its colors only when each category's is one, as Scanpy writes them (grDevices::col2rgb() reads a ",
+        "named color, grDevices::rgb() writes it as hex)."
+      )
+    }
+    if (!is.null(reason)) {
+      if (isTRUE(component$explicit)) .abort("obs_colors$", key, ": ", reason)
+      .inform(paste0("uns['", key, "_colors'] not written: ", reason))
+      next
+    }
+    out[[.colors_key(key)]] <- .uns_strings(colors)
+  }
+  out
+}
+
 # --- The plan ----------------------------------------------------------------
 
 .plan_dataset <- function(components) {
@@ -139,7 +247,7 @@
   .require_identity(components)
   dataset_id <- .validate_dataset_id(components$dataset_id)
   dataset_name <- .validate_dataset_name(components$dataset_name)
-  dataset_description <- .validate_optional_text(
+  dataset_description <- if (!is.null(components$dataset_description)) .validate_prose_text(
     components$dataset_description, "dataset_description", allow_empty = TRUE
   )
   citation <- .validate_linked_text(
@@ -156,7 +264,7 @@
   vectors <- .resolve_vector_fields(components$vector_fields, matrices, n_cells)
 
   # --- obs ----------------------------------------------------------------
-  obs <- components$obs
+  obs <- components[["obs"]]
   if (is.null(obs)) {
     obs <- data.frame(row = seq_len(n_cells))[, 0L, drop = FALSE]
   } else if (!is.data.frame(obs)) {
@@ -236,6 +344,26 @@
     spaces[[1L]] <- .align_single_space(spaces[[1L]], n_cells)
   }
 
+  # --- Each cell's total count (R/total-counts.R) -----------------------------
+  # Of the rows as written (the genes kept), in the cells' order, before the
+  # priority order moves them with every other per-cell element.
+  named_totals <- .total_counts_argument(components$total_counts, if (multimodal) names)
+  if (multimodal) {
+    over <- .total_counts_over_by_modality(components$total_counts_over, named_totals)
+    totals <- .modality_total_counts(spaces, names, named_totals, obs, obs_index, over)
+    spaces <- totals$spaces
+    total_counts <- if (length(totals$records) > 0L) totals$records
+  } else {
+    expression <- spaces[[1L]]$expression
+    over <- .total_counts_over_argument(components$total_counts_over, named = !is.null(named_totals))
+    totals <- .with_total_counts(
+      obs, .expression_row_totals(expression), named_totals,
+      cell_names = obs_index, has_matrix = !is.null(expression), over = over
+    )
+    obs <- totals$obs
+    total_counts <- totals$record
+  }
+
   # --- obsp -----------------------------------------------------------------
   graph <- NULL
   if (!is.null(components$connectivities)) {
@@ -285,8 +413,9 @@
     if (is.null(min_points)) min_points <- .default_outlier_min_points
     cellucid$outlierQuantiles <- .stored_outlier_quantiles(obs, latent, matrices[[latent]], min_points)
   }
+  if (!is.null(total_counts)) cellucid$totalCounts <- total_counts
   if (!is.null(priority)) cellucid$priority <- .priority_record(priority)
-  uns <- list(title = .uns_string(dataset_name), cellucid = cellucid)
+  uns <- c(list(title = .uns_string(dataset_name), cellucid = cellucid), .written_obs_colors(components$obs_colors, obs))
 
   shared <- list(
     obs = obs, obs_index = obs_index, matrices = matrices, vectors = vectors,
@@ -466,7 +595,7 @@
   invisible(NULL)
 }
 
-# The neighbour graph, obsp['connectivities'], as a csr_matrix: a symmetric
+# The neighbor graph, obsp['connectivities'], as a csr_matrix: a symmetric
 # dgCMatrix's column-compressed arrays are its row-compressed ones, written as
 # they are, or a .graph_in_priority() one, both axes in priority order: its
 # pointers counted once, when first needed (one integer a cell), and its

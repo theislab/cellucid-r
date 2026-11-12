@@ -12,7 +12,7 @@
 # summation order, because R's %*% and rowSums() and numpy add in different
 # orders.
 
-.transition_drift_sha256 <- "0c3a15648c21a6441f2e530d25a2837298dacd5113942f3ef280b048a1ea81e8"
+.transition_drift_sha256 <- "1488017dafe4085eb0e1a1041e7ddf5c7ae3e9717971f017897a15b71c5ce5f8"
 
 drift_case_matrix <- function(values, n_rows, n_cols) {
   matrix(vapply(values, as.numeric, numeric(1)), nrow = n_rows, ncol = n_cols, byrow = TRUE)

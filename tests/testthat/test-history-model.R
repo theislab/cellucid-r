@@ -9,7 +9,7 @@
 # record the schema names; the names rule and the constants are the schema's.
 
 # The digest of history_model.schema.json; the web app and cellucid-python pin the same one.
-.history_model_sha256 <- "bc403ababa0a52bf62a1446b6f3598135b1990cd5a4116818ab26e3696004bc7"
+.history_model_sha256 <- "0896116c1e791e370b7247d61e734bc22f96047f5d1ed49a39738cf4f8a5333c"
 
 schema_path <- function() file.path(cellucid_repository_root(), "inst", "history_model.schema.json")
 history_schema <- function() jsonlite::read_json(schema_path(), simplifyVector = FALSE)
@@ -20,6 +20,15 @@ test_that("the schema is pinned, the web app's and cellucid-python's", {
     path <- do.call(cellucid_sibling_file, as.list(copy))
     expect_identical(cellucid_file_sha256(path), .history_model_sha256, info = path)
   }
+})
+
+test_that("the schema is the model the web app's source makes now", {
+  # Against app/history/model.js itself, not only the web app's committed
+  # copy: a model changed (a domain added) without regenerating the three
+  # copies fails here, as it fails the web suite.
+  schema <- readChar(schema_path(), file.size(schema_path()), useBytes = TRUE)
+  expect_identical(cellucid_rendered_by_web("scripts/generate-history-model.mjs", "renderHistoryModel"), schema,
+                   info = "Run node scripts/generate-history-model.mjs in the web app, then Rscript tools/generate-history-model.R here.")
 })
 
 test_that("the generated model is current", {

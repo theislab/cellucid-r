@@ -116,7 +116,7 @@ test_that("a build is downloaded, checked, kept, and used again offline", {
   # The same published build: nothing is downloaded again.
   expect_silent(cellucid:::.establish_web_build(cache, url))
 
-  # A new build replaces the cache whole.
+  # A new build replaces the cache whole; only the file it changed is downloaded.
   index <- sub("fixture-build-1", "fixture-build-2", readLines(file.path(source, "index.html")), fixed = TRUE)
   writeLines(index, file.path(source, "index.html"))
   bytes <- readBin(file.path(source, "index.html"), "raw", 1e5)
@@ -125,13 +125,17 @@ test_that("a build is downloaded, checked, kept, and used again offline", {
   inventory$assets[[2]]$sha256 <- cellucid:::.native_sha256(bytes)
   inventory$assets[[2]]$bytes <- length(bytes)
   writeLines(jsonlite::toJSON(inventory, auto_unbox = TRUE), file.path(source, "cellucid-web-assets.json"))
-  build <- suppressMessages(cellucid:::.establish_web_build(cache, url))
+  expect_message(
+    build <- cellucid:::.establish_web_build(cache, url),
+    "Downloading the Cellucid web app \\(1 file,"
+  )
   expect_identical(build$inventory$build_id, "fixture-build-2")
   expect_identical(cellucid:::.verify_web_cache(cache)$build_id, "fixture-build-2")
 
   # A file the source serves wrong is refused, and the cache is kept.
   writeLines("tampered", file.path(source, "assets", "app.js"))
   inventory$build_id <- "fixture-build-3"
+  inventory$assets[[1]]$sha256 <- cellucid:::.native_sha256(charToRaw("the declared new app.js"))
   writeLines(jsonlite::toJSON(inventory, auto_unbox = TRUE), file.path(source, "cellucid-web-assets.json"))
   expect_error(suppressMessages(cellucid:::.establish_web_build(cache, url)), "app.js' byte length is")
   expect_identical(cellucid:::.verify_web_cache(cache)$build_id, "fixture-build-2")
@@ -144,7 +148,31 @@ test_that("a build is downloaded, checked, kept, and used again offline", {
   expect_identical(build$inventory$build_id, "fixture-build-2")
   expect_error(
     cellucid:::.establish_web_build(file.path(tempfile(), "web"), url),
-    "could not be downloaded.*Connect to the internet once"
+    "could not be downloaded from .*, and no copy of it is cached in .*Connect to the internet once, or set web_cache_dir"
+  )
+  # Quiet or not, the notice says the app is the cached build.
+  expect_message(cellucid:::.establish_web_build(cache, url, quiet = TRUE), "serving the cached web app \\(build fixture-build-2\\)")
+  # A cached copy that does not check out is not served, and the error says so.
+  writeLines("changed", file.path(cache, "assets", "app.js"))
+  expect_error(
+    cellucid:::.establish_web_build(cache, url),
+    "could not be downloaded from .*, and the copy cached in .* does not check out \\(.*app.js"
+  )
+})
+
+test_that("the offline messages are the ones cellucid-python prints, word for word", {
+  fill <- cellucid:::.fill_message
+  expect_identical(
+    fill(cellucid:::.web_app_offline_notice, source = "https://s.example", build_id = "b1"),
+    "Could not reach https://s.example; serving the cached web app (build b1)."
+  )
+  expect_identical(
+    fill(cellucid:::.web_app_unavailable, source = "https://s.example", reason = "timed out",
+         cache = fill(cellucid:::.web_app_not_cached, cache_dir = "/c/web")),
+    paste0(
+      "The Cellucid web app could not be downloaded from https://s.example (timed out), and no copy of it ",
+      "is cached in /c/web. Connect to the internet once, or set web_cache_dir to a folder that holds a verified build."
+    )
   )
 })
 

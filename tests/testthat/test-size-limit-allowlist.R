@@ -17,6 +17,10 @@ size_limit_allowlist <- list(
     "FORMAT",
     "The largest integer float32 holds exactly (2^24); counts above it are stored as float64."
   ),
+  "R/element-keys.R:.max_element_name_bytes" = c(
+    "PLAT",
+    "The longest file name every platform takes (255 bytes on Linux file systems, 255 UTF-8 characters on macOS, 255 UTF-16 units on Windows); an element name is a Zarr file name, as cellucid-python and the web app's writer check it."
+  ),
   "R/zip.R:.zip_u16_max" = c(
     "FORMAT",
     "The largest classic ZIP entry count; above it the archive carries ZIP64 records."

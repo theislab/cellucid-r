@@ -14,12 +14,15 @@ cellucid_prepare <- function(
     dataset_id = NULL,
     dataset_name = NULL,
     obs = NULL,
+    obs_colors = NULL,
     var = NULL,
     gene_expression = NULL,
     connectivities = NULL,
     vector_fields = NULL,
     modalities = NULL,
     gene_identifiers = NULL,
+    total_counts = NULL,
+    total_counts_over = NULL,
     dataset_description = NULL,
     citation_text = NULL,
     citation_url = NULL,
@@ -81,12 +84,15 @@ cellucid_prepare <- function(
     dataset_id = dataset_id,
     dataset_name = dataset_name,
     obs = obs,
+    obs_colors = obs_colors,
     var = var,
     gene_expression = gene_expression,
     connectivities = connectivities,
     vector_fields = vector_fields,
     modalities = modalities,
     gene_identifiers = gene_identifiers,
+    total_counts = total_counts,
+    total_counts_over = total_counts_over,
     dataset_description = dataset_description,
     citation_text = citation_text,
     citation_url = citation_url,
@@ -101,7 +107,7 @@ cellucid_prepare <- function(
     normalize_embeddings = normalize_embeddings,
     centroid_min_points = centroid_min_points
   ))
-  components$obs <- .without_positions(components$obs)
+  components[["obs"]] <- .without_positions(components[["obs"]])
   components$priority_seed <- priority_seed
   plan <- .plan_dataset(components)
   .write_output(target, write = plan$write)

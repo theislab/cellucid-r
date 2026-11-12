@@ -174,6 +174,47 @@ test_that("a backed assay keeps integer counts above 2^24 exact, decided on the 
   expect_identical(dtype_of(kept), "<f4")
 })
 
+test_that("a cells x genes DelayedArray is read under its transposition, each block transposed in memory", {
+  skip_if_not_installed("DelayedArray")
+  values <- backed_values()
+  cells_by_genes <- Matrix::t(values)
+  umap <- matrix(stats::rnorm(2L * nrow(cells_by_genes)), ncol = 2L)
+  prepare <- function(x, ...) {
+    store <- store_path()
+    suppressMessages(cellucid_prepare(
+      store, "zarr", embeddings = list(X_umap = umap), gene_expression = x, dataset_id = "d", dataset_name = "D", ...
+    ))
+    store
+  }
+  # The genes x cells view .expression_input() makes is a transposition, read
+  # from the matrix under it: DelayedArray's transposed view of a sparse seed
+  # cannot be read on Bioconductor 3.14 to 3.16 with matrixStats 1.x
+  # (R/backed-matrix.R, .delayed_untransposed()).
+  view <- Matrix::t(DelayedArray::DelayedArray(cells_by_genes))
+  expect_identical(dim(cellucid:::.delayed_untransposed(view)), dim(cells_by_genes))
+  expect_null(cellucid:::.delayed_untransposed(DelayedArray::DelayedArray(values)))
+  # No block is read through a transposition.
+  read <- cellucid:::.delayed_block_dgcmatrix
+  transposed_reads <- 0L
+  local_mocked_bindings(.delayed_block_dgcmatrix = function(block, transpose = FALSE) {
+    if (any(grepl("Aperm", utils::capture.output(DelayedArray::showtree(block)), fixed = TRUE))) {
+      transposed_reads <<- transposed_reads + 1L
+    }
+    read(block, transpose)
+  })
+  whole <- cellucid:::.backed_block_values
+  for (arguments in list(list(), list(gene_identifiers = c("g5", "g2", "g40", "g33")))) {
+    expected <- do.call(prepare, c(list(cells_by_genes), arguments))
+    for (seed in list(cells_by_genes, as.matrix(cells_by_genes))) {
+      for (block_values in c(whole, 400)) {
+        local_mocked_bindings(.backed_block_values = block_values)
+        expect_same_store(do.call(prepare, c(list(DelayedArray::DelayedArray(seed)), arguments)), expected)
+      }
+    }
+  }
+  expect_identical(transposed_reads, 0L)
+})
+
 test_that("preparing a DelayedArray assay warns nothing; only the OpenMP pause warning is muffled", {
   skip_without_sce()
   skip_if_not_installed("DelayedArray")

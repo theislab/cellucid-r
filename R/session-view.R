@@ -1,14 +1,14 @@
 # An R object as the viewer showed it, for applying a session to it: the
 # same extraction cellucid_view() serves (dataset-from.R, dataset-plan.R),
 # so a session is checked against exactly what it was saved on -- the cells
-# and their obs columns, the obsm embeddings (X_<reduction>), the neighbour
+# and their obs columns, the obsm embeddings (X_<reduction>), the neighbor
 # graph, and each modality's genes and matrix. cellucid-python's
 # anndata_session (AnnData, and MuDataSessionView for several modalities)
 # checks a session against the same picture.
 
 .session_view <- function(data, extra) {
   components <- .dataset_components(data, extra)
-  obs <- components$obs
+  obs <- components[["obs"]]
   cells <- rownames(obs)
   obsm <- components$embeddings
   for (field in names(components$vector_fields)) {

@@ -114,6 +114,7 @@
   # (expression-input.R): a served store holds the object and the order.
   if (!is.null(space$expression)) space$expression <- .expression_in_cell_order(space$expression, rows)
   if (!is.null(space$obs_index)) space$obs_index <- space$obs_index[rows]
+  if (!is.null(space$totals)) space$totals <- space$totals[rows]
   space$positions <- if (!is.null(placed) && !(length(placed) == n && identical(placed, seq_len(n)))) placed
   space$original <- rows - 1
   space$prefix_levels <- if (is.null(placed)) priority$levels else findInterval(priority$levels, placed)
@@ -126,7 +127,7 @@
   space
 }
 
-# The neighbour graph with both axes in priority order, without a reordered
+# The neighbor graph with both axes in priority order, without a reordered
 # copy: the graph and the order are held, and its row-compressed arrays are
 # made chunk by chunk as they are written or read (.ad_graph()).
 .graph_in_priority <- function(graph, priority) {
@@ -242,7 +243,7 @@
 
 # A Seurat object with its cells in `order` (indices of its cells): every
 # assay's layers and cell map (Assay5) or matrices (Assay), every reduction's
-# cell embeddings, every graph (both axes), every neighbour index (rows, and
+# cell embeddings, every graph (both axes), every neighbor index (rows, and
 # the cells they point at), the cell metadata and the identities. Subsetting
 # (x[, cells]) keeps a Seurat object's own order, so it cannot do this.
 # Images keep their cells by name, as an image's cells need not be the

@@ -6,7 +6,7 @@ print the SHA-256 of every key of the arrays both serve.
 INPUT_JSON describes the object (see test-served-cross-language.R): the cell
 and gene names, the cells x genes matrix as its compressed-column arrays (or
 as coordinates, float64, duplicates and stored zeros kept), the UMAP by
-rows, and optionally a symmetric neighbour graph (``graph``: its
+rows, and optionally a symmetric neighbor graph (``graph``: its
 compressed-column arrays, float32 weights), stored as
 ``obsp['connectivities']``. A matrix the store refuses prints ``{"__refused__": message}``. Prints one JSON object: each array's .zarray as its
 metadata, and the SHA-256 of every chunk of the array, and under

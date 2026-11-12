@@ -10,7 +10,7 @@
 # A written store (cellucid_prepare()) compresses every chunk. Every chunk of
 # a multi-byte array is byte-shuffled before it is compressed -- the first
 # byte of every value, then every second byte, and so on -- so the similar
-# high bytes of neighbouring values compress together; the expression values
+# high bytes of neighboring values compress together; the expression values
 # (X's data, a dense X) are not, because deflate finds their repeated values
 # only unshuffled (shuffled, real expression data grew 14-45%). Every chunk is
 # compressed with DEFLATE level 6 (zlib's default) into a zlib stream (RFC
@@ -67,7 +67,7 @@
 # (obs columns and index, embeddings, masks, cell maps, outlier quantiles) use
 # 2^16 elements per chunk, so a subsample -- the first rows of a store in
 # priority order -- reads little beyond its own cells; the other arrays read
-# whole (var, X's pointers, the neighbour graph) 2^18 (1 MiB of float32); the
+# whole (var, X's pointers, the neighbor graph) 2^18 (1 MiB of float32); the
 # data and indices of the expression matrix, read one gene's range (or its
 # first values) at a time, 2^14. These are the Python writer's constants
 # (CELL_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS, SLICED_CHUNK_ELEMENTS in

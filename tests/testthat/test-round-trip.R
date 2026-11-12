@@ -25,7 +25,7 @@ viewer_results <- function(n) {
                      color = "#e41a1c", enabled = TRUE)),
     list(kind = "categorical", id = "user_cat_1", cells = NULL, type = "uint8",
          values = c(0, 1, 255, rep(0, n - 3)),
-         meta = list(key = "annotation", categories = I(c("B", "T")), origin = "user")),
+         meta = list(key = "annotation", categories = I(c("B", "T")), colors = I(c("#e41a1c", "#377eb8")), origin = "user")),
     list(kind = "continuous", id = "signature:T score", cells = c(1, 3), type = "float32", values = c(0.5, -1),
          meta = list(key = "T score", origin = "analysis")),
     list(kind = "continuous", id = "user_obs_value_1", cells = NULL, type = "float32", values = rep(0, n),
@@ -63,6 +63,8 @@ test_that("one pull writes every highlight, label and score onto a Seurat object
   expect_identical(meta$cellucid_highlight__highlight_1[1:4], c(TRUE, FALSE, TRUE, FALSE))
   expect_identical(levels(meta$annotation), c("B", "T"))
   expect_identical(as.character(meta$annotation[1:3]), c("B", "T", NA))
+  # The colors the viewer shows it in go with it (RCC-1), where the object keeps uns.
+  expect_identical(pulled$data@misc$annotation_colors, c("#e41a1c", "#377eb8"))
   expect_equal(meta[["T score"]][1:4], c(NA, 0.5, NA, -1))
   expect_false("pushed" %in% names(meta))
   expect_false("cellucid_visible" %in% names(meta))
@@ -115,7 +117,7 @@ test_that("prune removes only what the viewer no longer holds", {
   # viewer goes from the record too.
   folder <- tempfile("exports_")
   dir.create(folder)
-  writeLines(c("obs_name,my_groups", "kind,categorical", paste0(colnames(object)[1], ",a")), file.path(folder, "my_groups.csv"))
+  writeLines(c("obs_name,my_groups", "kind,categorical", 'categories,"[""a""]"', paste0(colnames(object)[1], ",a")), file.path(folder, "my_groups.csv"))
   withfile <- cellucid_pull(again$data, file.path(folder, "my_groups.csv"))
   expect_identical(withfile@misc$cellucid$pulled$my_groups$pulled_from, "my_groups.csv")
   ws_send_json(client, list(type = "result_removed", epoch = "0123456789abcdef", revision = 30, kind = "geneSet",
@@ -293,17 +295,19 @@ test_that("a session file pulls the state it shows, its columns named with every
 test_that("the web app's exports pull onto a data frame in one call", {
   folder <- tempfile("exports_")
   dir.create(folder)
-  writeLines(c("obs_name,cellucid_highlight__highlight_1", "kind,highlight",
+  writeLines(c("obs_name,cellucid_highlight__highlight_1", "kind,highlight", "categories,",
                paste0("cell-", 1:6, ",", c("true", "false", "true", "false", "false", "false"))),
              file.path(folder, "highlight.csv"))
-  writeLines(c("obs_name,annotation", "kind,categorical", "cell-1,T", "cell-2,B", "cell-6,T"), file.path(folder, "annotation.csv"))
-  writeLines(c("obs_name,T score", "kind,continuous", "cell-4,1.5", "cell-2,"), file.path(folder, "score.csv"))
+  writeLines(c("obs_name,annotation", "kind,categorical", 'categories,"[""B"",""T""]"', "cell-1,T", "cell-2,B", "cell-6,T"),
+             file.path(folder, "annotation.csv"))
+  writeLines(c("obs_name,T score", "kind,continuous", "categories,", "cell-4,1.5", "cell-2,"), file.path(folder, "score.csv"))
   cellucid_write_gmt(list(T = "CD3E"), file.path(folder, "markers.gmt"))
   cells <- data.frame(n = 1:6, row.names = paste0("cell-", 1:6))
   pulled <- cellucid_pull(cells, folder, return_summary = TRUE)
   out <- pulled$data
   expect_identical(out$cellucid_highlight__highlight_1, c(TRUE, FALSE, TRUE, FALSE, FALSE, FALSE))
   expect_identical(as.character(out$annotation), c("T", "B", NA, NA, NA, "T"))
+  expect_identical(levels(out$annotation), c("B", "T"))
   expect_equal(out[["T score"]], c(NA, NA, NA, 1.5, NA, NA))
   expect_identical(pulled$summary$gene_sets, list(T = "CD3E"))
   expect_identical(attr(out, "cellucid")$gene_sets$T$genes, "CD3E")
@@ -311,14 +315,47 @@ test_that("the web app's exports pull onto a data frame in one call", {
   again <- cellucid_pull(out, folder, on_conflict = "suffix", return_summary = TRUE)
   expect_setequal(names(again$summary$columns), names(pulled$summary$columns))
   expect_identical(names(attr(again$data, "cellucid")$gene_sets), "T")
-  writeLines(c("obs_name,x", "kind,continuous", "cell-99,1"), file.path(folder, "bad.csv"))
+  writeLines(c("obs_name,x", "kind,continuous", "categories,", "cell-99,1"), file.path(folder, "bad.csv"))
   expect_error(cellucid_pull(cells, file.path(folder, "bad.csv")), "not in this object")
   writeLines(c("obs_name,x", "cell-1,1"), file.path(folder, "bad.csv"))
   expect_error(cellucid_pull(cells, file.path(folder, "bad.csv")), "kind row")
-  writeLines(c("obs_name,x", "kind,continuous", "cell-1,one"), file.path(folder, "bad.csv"))
+  writeLines(c("obs_name,x", "kind,continuous", "categories,", "cell-1,one"), file.path(folder, "bad.csv"))
   expect_error(cellucid_pull(cells, file.path(folder, "bad.csv")), "continuous column 'x' holds 'one'")
-  writeLines(c("obs_name,x", "kind,label", "cell-1,one"), file.path(folder, "bad.csv"))
+  writeLines(c("obs_name,x", "kind,label", "categories,", "cell-1,one"), file.path(folder, "bad.csv"))
   expect_error(cellucid_pull(cells, file.path(folder, "bad.csv")), "of kind 'label'")
+})
+
+test_that("a field's CSV keeps the field's category order and its empty categories (F125)", {
+  # Categories came back in the rows' order of first appearance, and a
+  # category no cell held was lost.
+  path <- tempfile(fileext = ".csv")
+  writeLines(c("obs_name,stage", "kind,categorical",
+               'categories,"[""Pre-endocrine"",""Progenitor"",""Endocrine"",""Unassigned""]"',
+               "cell-1,Endocrine", "cell-2,Progenitor", "cell-3,Pre-endocrine", "cell-4,"), path)
+  cells <- data.frame(n = 1:6, row.names = paste0("cell-", 1:6))
+  out <- cellucid_pull(cells, path)
+  expect_identical(levels(out$stage), c("Pre-endocrine", "Progenitor", "Endocrine", "Unassigned"))
+  expect_identical(as.character(out$stage), c("Endocrine", "Progenitor", "Pre-endocrine", NA, NA, NA))
+  # The categories row is the file's word on each column; anything else is refused.
+  refusals <- list(
+    list('categories,"[""a""]"', "cell-1,b", "categorical column 'x' holds 'b'"),
+    list("categories,", "cell-1,a", "categorical column 'x' lists no categories"),
+    list('categories,"[""a"",1]"', "cell-1,a", "not a JSON array of strings"),
+    list('categories,"[""a"""', "cell-1,a", "not a JSON array of strings"),
+    list('categories,"{""a"":1}"', "cell-1,a", "not a JSON array of strings"),
+    list('categories,"[""a"",""a""]"', "cell-1,a", "lists the category 'a' twice"),
+    # A label is the categories row's exactly: " a" is not "a".
+    list('categories,"[""a""]"', "cell-1, a", "holds ' a'")
+  )
+  for (refusal in refusals) {
+    writeLines(c("obs_name,x", "kind,categorical", refusal[[1]], refusal[[2]]), path)
+    expect_error(cellucid_pull(cells, path), refusal[[3]], fixed = TRUE)
+  }
+  writeLines(c("obs_name,x", "kind,continuous", 'categories,"[""a""]"', "cell-1,1"), path)
+  expect_error(cellucid_pull(cells, path), "continuous column 'x' lists categories", fixed = TRUE)
+  # The two-row layout (no categories row) is not an obs-column CSV.
+  writeLines(c("obs_name,x", "kind,categorical", "cell-1,a"), path)
+  expect_error(cellucid_pull(cells, path), "categories row", fixed = TRUE)
 })
 
 shared_fixture <- function(name, sha256) {
@@ -327,15 +364,17 @@ shared_fixture <- function(name, sha256) {
 }
 
 test_that("the shared obs-column CSV fixture keeps every declared kind", {
-  path <- shared_fixture("obs_columns.csv", "b0da8ee441532a3ac2199e9e22f827c82002c4e63ce1b7bec5fc3d4800ec41e9")
+  path <- shared_fixture("obs_columns.csv", "0353146eabba6a9fa76c565a5710dcce275471fcbfd7674f3a86d8c6e2799db2")
   cells <- data.frame(n = 1:6, row.names = c("c0", "c,1", "c2", "c3", "c4", "c5"))
   pulled <- cellucid_pull(cells, path, return_summary = TRUE)
   out <- pulled$data
   expect_identical(out$cellucid_highlight__highlight_1, c(TRUE, FALSE, TRUE, NA, FALSE, NA))
-  # Labels that read as numbers, or as True/False, stay labels.
-  expect_identical(levels(out$leiden), c("0", "1", "10"))
+  # Labels that read as numbers, or as True/False, stay labels; the levels
+  # are the categories row's, in its order (not the rows'), one no cell
+  # holds among them.
+  expect_identical(levels(out$leiden), c("10", "1", "0", 'unused, "quoted"'))
   expect_identical(as.character(out$leiden), c("0", "1", "10", "1", NA, NA))
-  expect_identical(levels(out$flag), c("True", "False"))
+  expect_identical(levels(out$flag), c("False", "True"))
   expect_identical(as.character(out$flag), c("True", "False", "True", NA, "False", NA))
   expect_equal(out$score, c(0.5, NA, -1.25, 3, 1000, NA))
 })

@@ -152,7 +152,7 @@ test_that("the channel runs over the comm: actions first, then events and hooks"
   skip_if_not_installed("Matrix")
   comms <- fake_comms()
   viewer <- widget_viewer(comms)
-  colour <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
+  color <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
   seen <- list()
   cellucid_on(viewer, "selection", function(event) seen$selection <<- event)
   connect(comms, viewer)
@@ -160,7 +160,7 @@ test_that("the channel runs over the comm: actions first, then events and hooks"
   sent <- jsonlite::fromJSON(texts[[2L]]$content$text, simplifyVector = FALSE)
   expect_identical(sent[c("type", "action", "params")],
                    list(type = "action", action = "color.by", params = list(field = list(source = "obs", key = "cluster"))))
-  expect_identical(sent$requestId, colour$id)
+  expect_identical(sent$requestId, color$id)
 
   ready <- example_event("ready")
   comms$post(model_of(viewer), list(t = "text", v = "out-1", s = 0L, text = as.character(jsonlite::toJSON(ready, auto_unbox = TRUE))))
@@ -180,7 +180,7 @@ test_that("the channel runs over the comm: actions first, then events and hooks"
   # Its answer comes back between cells, as base64 text: collected in the
   # next cell; before it came, a cell says what to do instead of waiting.
   expect_error(cellucid_action_result(highlight), "Run cellucid_action_result\\(\\) again in a later cell")
-  head <- charToRaw(paste0("{\"type\":\"action_result\",\"requestId\":\"", highlight$id, "\",\"step\":{\"id\":\"s1\",\"label\":\"Highlighted 2 cells\"}}"))
+  head <- charToRaw(paste0("{\"type\":\"action_result\",\"requestId\":\"", highlight$id, "\",\"step\":{\"id\":\"s1\",\"label\":\"Highlighted 2 cells\"},\"unrecorded\":null}"))
   answer <- c(cellucid:::.encode_uint32(length(head)), head, charToRaw("{\"group\":\"highlight_1\"}"))
   comms$post(model_of(viewer), list(t = "binary", v = "out-1", s = 0L, last = TRUE, b64 = jsonlite::base64_enc(answer)))
   expect_identical(cellucid_action_result(highlight), list(group = "highlight_1"))

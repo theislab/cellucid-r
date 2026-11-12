@@ -18,7 +18,7 @@
 # and a warning's or an error's text through C as well, and each makes it
 # native: the note "1 duplicate name was made unique, e.g. 'A' -> 'A-1'." (with
 # U+2192 for the arrow) reached every handler, and a test, as
-# "'A' <U+2192> 'A-1'". A condition object is signalled as it is, so its text
+# "'A' <U+2192> 'A-1'". A condition object is signaled as it is, so its text
 # is exactly the package's, in UTF-8; only a console that cannot show a
 # character shows its escape. The arguments are joined as message() joins
 # them: each made character, then all pasted with nothing between.
@@ -34,6 +34,16 @@
 # warning(..., call. = FALSE).
 .warn <- function(...) {
   warning(simpleWarning(.condition_text(...)))
+}
+
+# A warning of its own class carrying fields (`fields`), its text made as
+# .warn() makes it: raised with warning(.classed_warning(...)), so a caller
+# muffles it by its class and reads its fields.
+.classed_warning <- function(class, fields, ...) {
+  condition <- simpleWarning(.condition_text(...))
+  for (name in names(fields)) condition[[name]] <- fields[[name]]
+  class(condition) <- c(class, class(condition))
+  condition
 }
 
 # stop(..., call. = FALSE).

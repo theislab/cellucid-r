@@ -20,7 +20,7 @@ test_that("a Seurat object is written with its cells, embeddings, assay and grap
   # meta.data columns, and the active identity.
   columns <- unlist(attrs_of(store, "obs")$`column-order`)
   expect_true(all(c("nCount_RNA", "groups", "RNA_snn_res.1", "active_ident") %in% columns))
-  # X is the log-normalised data, gene-major CSC; one matrix per modality.
+  # X is the log-normalized data, gene-major CSC; one matrix per modality.
   data <- if (seurat_v5()) SeuratObject::LayerData(object, "data") else SeuratObject::GetAssayData(object, slot = "data")
   expect_equal(store_array(store, "X/indptr"), Matrix::t(data)@p)
   expect_equal(store_array(store, "X/data"), as_float32(Matrix::t(data)@x))
@@ -30,7 +30,7 @@ test_that("a Seurat object is written with its cells, embeddings, assay and grap
     sum(store_array(store, "var/highly_variable")),
     length(SeuratObject::VariableFeatures(object))
   )
-  # The SNN graph, its diagonal removed, as the neighbour graph.
+  # The SNN graph, its diagonal removed, as the neighbor graph.
   expect_true(dir.exists(file.path(store, "obsp", "connectivities")))
 })
 
@@ -231,4 +231,120 @@ test_that("a SummarizedExperiment needs an embedding, and an old SCE is refused"
     cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "a", dataset_name = "A", priority_seed = NULL),
     "updateObject"
   )
+})
+
+test_that("an object's record names knn and expression as launch defaults, left out as Python leaves them", {
+  declared <- cellucid:::.declared_components(
+    list(id = "d", name = "D", defaults = list(knn = "connectivities", expression = "X", latentKey = "X_pca", bogus = 1)),
+    "misc$cellucid"
+  )
+  expect_identical(declared$components$latent_key, "X_pca")
+  expect_null(declared$components$knn)
+  # Only a key that is no launch default is named.
+  expect_identical(declared$notes, "misc$cellucid$defaults: not written, no such launch default: c(\"bogus\").")
+})
+
+test_that("an object's record of the cells' totals over all genes keeps its column named", {
+  anndata <- cellucid:::.declared_components(
+    list(id = "d", name = "D", totalCounts = list(field = "nCount_RNA", over = "all genes")), "misc$cellucid"
+  )
+  expect_identical(anndata$components$total_counts, "nCount_RNA")
+  stored <- cellucid:::.declared_components(
+    list(id = "d", name = "D", totalCounts = list(field = "total_counts", over = "stored genes")), "misc$cellucid"
+  )
+  expect_null(stored$components$total_counts)
+  modalities <- cellucid:::.declared_components(
+    list(id = "d", name = "D", totalCounts = list(RNA = list(field = "nCount_RNA", over = "all genes"),
+                                                  ADT = list(field = "ADT:total_counts", over = "stored genes"))),
+    "misc$cellucid"
+  )
+  expect_identical(modalities$components$total_counts, c(RNA = "nCount_RNA"))
+})
+
+test_that("an object's Scanpy colors go with the columns written (F148)", {
+  skip_without_seurat()
+  object <- pbmc_seurat()
+  groups <- sort(unique(as.character(object$groups)))
+  object@misc$groups_colors <- c("#aa0000", "#00aa00")[seq_along(groups)]
+  object@misc$nCount_RNA_colors <- "#000000"
+  object@misc$absent_colors <- "#000000"
+  said <- character()
+  store <- withCallingHandlers(
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC", priority_seed = NULL),
+    message = function(message) {
+      said <<- c(said, conditionMessage(message))
+      invokeRestart("muffleMessage")
+    }
+  )
+  expect_identical(store_array(store, "uns/groups_colors"), object@misc$groups_colors)
+  expect_false(dir.exists(file.path(store, "uns/nCount_RNA_colors")))
+  expect_false(dir.exists(file.path(store, "uns/absent_colors")))
+  expect_true(any(grepl("uns['nCount_RNA_colors'] not written: 'nCount_RNA' is not written as a categorical", said, fixed = TRUE)))
+  # Too few for its categories: left out, saying why.
+  object@misc$groups_colors <- "#aa0000"
+  said <- character()
+  store <- withCallingHandlers(
+    cellucid_prepare(store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC", priority_seed = NULL),
+    message = function(message) {
+      said <<- c(said, conditionMessage(message))
+      invokeRestart("muffleMessage")
+    }
+  )
+  expect_false(dir.exists(file.path(store, "uns/groups_colors")))
+  expect_true(any(grepl(paste0("uns['groups_colors'] not written: 1 color for the ", length(groups), " categories of 'groups'"), said, fixed = TRUE)))
+  # obs_colors replaces them.
+  store <- suppressMessages(cellucid_prepare(
+    store_path(), "zarr", data = object, dataset_id = "pbmc", dataset_name = "PBMC", priority_seed = NULL,
+    obs_colors = list(groups = rep("#123456", length(groups)))
+  ))
+  expect_identical(store_array(store, "uns/groups_colors"), rep("#123456", length(groups)))
+})
+
+test_that("a SingleCellExperiment's colors in metadata(x) are written at the MuData root (F148)", {
+  skip_without_sce()
+  object <- small_sce()
+  object@metadata$cellucid <- list(id = "sce", name = "SCE")
+  object@metadata$cluster_colors <- c("#010101", "#020202", "#030303")
+  store <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = object, priority_seed = NULL))
+  expect_identical(store_array(store, "uns/cluster_colors"), c("#010101", "#020202", "#030303"))
+  expect_false(dir.exists(file.path(store, "mod/main/uns/cluster_colors")))
+  # One feature space in priority order: the rows move, the categories and their colors do not.
+  single <- small_sce(alt = FALSE)
+  single@metadata$cluster_colors <- c("#010101", "#020202", "#030303")
+  one <- suppressMessages(cellucid_prepare(store_path(), "zarr", data = single, dataset_id = "sce", dataset_name = "SCE", priority_seed = 7))
+  expect_identical(store_array(one, "obs/cluster/categories"), c("a", "b", "c"))
+  expect_identical(store_array(one, "uns/cluster_colors"), c("#010101", "#020202", "#030303"))
+  # cellucid_view() and cellucid_serve() serve the same plan, and take obs_colors as prepare does.
+  expect_true("obs_colors" %in% cellucid:::.view_plan_arguments)
+  served <- suppressMessages(memory_store_of(cellucid:::.dataset_components(
+    single, list(dataset_id = "sce", dataset_name = "SCE", obs_colors = list(cluster = c("#0a0a0a", "#0b0b0b", "#0c0c0c")))
+  )))
+  expect_false(is.null(cellucid:::.store_get(served, "uns/cluster_colors/.zattrs")))
+  expect_error(
+    cellucid:::.dataset_components(single, list(obs_colors = list(cluster = 1:3))),
+    "obs_colors\\$cluster must be a character vector of colors"
+  )
+})
+
+test_that("the layers of a Seurat assay not written are named, counts beside data included, in v3 and v5 assays", {
+  skip_without_seurat()
+  set.seed(9)
+  counts <- Matrix::rsparsematrix(10L, 12L, 0.4, rand.x = function(n) as.double(rpois(n, 3) + 1))
+  dimnames(counts) <- list(paste0("g", 1:10), paste0("c", 1:12))
+  logged <- counts
+  logged@x <- log1p(logged@x)
+  scaled <- matrix(rnorm(36L), 3L, 12L, dimnames = list(paste0("g", 1:3), colnames(counts)))
+  creators <- list(Assay = SeuratObject::CreateAssayObject)
+  if (seurat_v5()) creators$Assay5 <- SeuratObject::CreateAssay5Object
+  for (class in names(creators)) {
+    object <- suppressWarnings(SeuratObject::CreateSeuratObject(creators[[class]](counts = counts)))
+    object <- set_assay_layer(object, "data", logged)
+    object <- set_assay_layer(object, "scale.data", scaled)
+    object[["umap"]] <- SeuratObject::CreateDimReducObject(
+      embeddings = matrix(rnorm(24L), 12L, 2L, dimnames = list(colnames(counts), c("umap_1", "umap_2"))),
+      key = "umap_", assay = "RNA"
+    )
+    components <- cellucid:::.dataset_from(object)
+    expect_match(components$notes, 'assays\\$RNA layers not read: c\\("counts", "scale.data"\\)\\.', all = FALSE, info = class)
+  }
 })

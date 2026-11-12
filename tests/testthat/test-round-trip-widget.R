@@ -67,7 +67,7 @@ test_that("a lasso, then cellucid_pull() in the next cell: nothing waits", {
     list(label = "Lasso", tool = "lasso", pageId = "page_1", pageName = "Page 1", color = "#e41a1c", enabled = TRUE),
     c(1, 4), revision = 1))
   page_binary(comms, viewer, widget_result("categorical", "user_cat_1",
-    list(key = "annotation", categories = I(c("B", "T")), origin = "user"),
+    list(key = "annotation", categories = I(c("B", "T")), colors = I(c("#e41a1c", "#377eb8")), origin = "user"),
     NULL, c(0, 1, 255, 0, 1, 0), "uint8", revision = 2))
   page_binary(comms, viewer, widget_result("geneSet", "gene_set_1",
     list(name = "T", description = "", genes = I("CD3E"), symbols = NULL, origin = "markers"), numeric(0), revision = 3))
@@ -82,6 +82,7 @@ test_that("a lasso, then cellucid_pull() in the next cell: nothing waits", {
   expect_lt(elapsed, 1)
   expect_identical(pulled$cellucid_highlight__highlight_1, c(FALSE, TRUE, FALSE, FALSE, TRUE, FALSE))
   expect_identical(as.character(pulled$annotation), c("B", "T", NA, "B", "T", "B"))
+  expect_identical(attr(pulled, "annotation_colors"), c("#e41a1c", "#377eb8"))
   expect_identical(cellucid_gene_sets(viewer), list(T = "CD3E"))
   expect_identical(rownames(cellucid_subset(cells, viewer, "Lasso")), c("cell-2", "cell-5"))
 

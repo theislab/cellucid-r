@@ -12,17 +12,17 @@ test_that("actions inside a turn carry it, and turns do not nest", {
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "s", dataset_name = "S")
   client <- ws_welcomed(viewer)
   inside <- list()
-  turn <- cellucid_turn(viewer, "  Normalise   and cluster ", {
-    inside$colour <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
+  turn <- cellucid_turn(viewer, "  Normalize   and cluster ", {
+    inside$color <- cellucid_color_by(viewer, field = list(source = "obs", key = "cluster"))
     inside$highlight <- cellucid_highlight_cells(viewer, c("cell1", "cell2"), color = "#00ff00")
-    expect_error(cellucid_turn(viewer, "Inner", NULL), 'A turn \\("Normalise and cluster"\\) is open already; turns do not nest.')
+    expect_error(cellucid_turn(viewer, "Inner", NULL), 'A turn \\("Normalize and cluster"\\) is open already; turns do not nest.')
   })
   expect_match(turn, "^r-[0-9a-f]{12}$")
   after <- cellucid_history_undo(viewer)
   first <- ws_receive(client)$json
-  expect_identical(list(first$requestId, first$turn, first$turnLabel), list(inside$colour$id, turn, "Normalise and cluster"))
+  expect_identical(list(first$requestId, first$turn, first$turnLabel), list(inside$color$id, turn, "Normalize and cluster"))
   second <- ws_receive(client)$json
-  expect_identical(list(second$requestId, second$turn, second$turnLabel), list(inside$highlight$id, turn, "Normalise and cluster"))
+  expect_identical(list(second$requestId, second$turn, second$turnLabel), list(inside$highlight$id, turn, "Normalize and cluster"))
   third <- ws_receive(client)$json
   expect_identical(list(third$action, third$turn, third$turnLabel, third$requestId), list("history.undo", NULL, NULL, after$id))
   # A turn that stops on an error closes all the same.

@@ -11,7 +11,7 @@
 #
 # - commands (R -> viewer): text frames, one JSON object each, with exactly
 #   the keys .viewer_command_fields names; no credentials. Everything R
-#   changes or reads in the viewer is one `action` of the catalogue
+#   changes or reads in the viewer is one `action` of the catalog
 #   (inst/action_catalog.json, R/actions.R): {type, requestId, action, params,
 #   turn, turnLabel} -- the notebook turn it belongs to and what the turn was
 #   asked to do (cellucid_turn()), both null outside one. An action whose
@@ -29,7 +29,8 @@
 #   port and never the hooks;
 # - events (viewer -> R): text frames with exactly the keys
 #   .viewer_event_fields names, and binary frames for a selection, a result,
-#   an action's answer (action_result: its outcome as UTF-8 JSON), a
+#   an action's answer (action_result: its outcome as UTF-8 JSON, the step it
+#   made, or why a change made none, .viewer_action_unrecorded), a
 #   session bundle, and an agent's tools and a call's result (agent_tools,
 #   agent_result: UTF-8 JSON). An action is answered by one action_result, or by one
 #   command_error naming its requestId; a load_session by session_loaded (the
@@ -95,7 +96,23 @@
 .viewer_action_array_fields <- c("path", "type", "length")
 .viewer_action_step_fields <- c("id", "label")
 
-# A dotted action type, as the catalogue names one ("color.by").
+# Why a change made no step of the history (an action_result's `unrecorded`;
+# null beside a step and for an action that is no change, a read), each with
+# the sentence said after the call that asked ("cellucid_color_by(): ..."):
+# the shared fixture's action.unrecorded word for word (the web app's
+# VIEWER_ACTION_UNRECORDED, cellucid-python's _ACTION_UNRECORDED); an agent
+# is told the same reasons.
+.viewer_action_unrecorded <- c(
+  unchanged = "it changed nothing (it was so already), so no step was recorded.",
+  retracted = "it put back what the step just before it changed, so that step was taken out and no step was recorded.",
+  off = paste0("done, but the History settings do not record this kind of change, so no step was recorded ",
+               "and Undo does not take it back."),
+  paused = "done, but the history's recording is paused, so no step was recorded and Undo does not take it back.",
+  elsewhere = "done, but another tracker of the history was shown meanwhile, so no step was recorded.",
+  `no-history` = "done, but the dataset's history has not started yet, so no step was recorded."
+)
+
+# A dotted action type, as the catalog names one ("color.by").
 .viewer_action_type_pattern <- "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"
 
 .viewer_command_types <- sort(unique(c(names(.viewer_command_fields), names(.viewer_binary_command_fields))),
@@ -115,16 +132,14 @@
   history_changed = c("type", "kind", "tracker", "head", "step", "branch"),
   session_loaded = c("type", "requestId", "tracker", "head"),
   # The person is asked about an agent's call (the viewer's confirm card),
-  # and answered it; the tools an agent may use changed (the person's
-  # permission settings).
+  # and answered it.
   agent_asking = c("type", "requestId", "message", "detail"),
-  agent_answered = c("type", "requestId", "allowed"),
-  agent_tools_changed = "type"
+  agent_answered = c("type", "requestId", "allowed")
 )
 
 # Every agent event: handed to the viewer's agent port (R/agent-link.R),
 # never to the hooks, viewer$last or a printed notice.
-.viewer_agent_events <- c("agent_tools", "agent_result", "agent_asking", "agent_answered", "agent_tools_changed")
+.viewer_agent_events <- c("agent_tools", "agent_result", "agent_asking", "agent_answered")
 
 # What a history_changed says changed: a step recorded, the step shown moved
 # (undo, redo, a jump, a branch switched to), an edit of the history's
@@ -138,7 +153,7 @@
   selection = c("type", "source"),
   session_bundle = c("type", "requestId"),
   result = c("type", "epoch", "revision", "kind", "id", "nObs", "meta", "cells", "values"),
-  action_result = c("type", "requestId", "step"),
+  action_result = c("type", "requestId", "step", "unrecorded"),
   # An agent's tools (a JSON array) and a call's MCP tool result
   # ({content, isError, ...}), each as the body's UTF-8 JSON.
   agent_tools = c("type", "requestId"),
@@ -156,7 +171,7 @@
 # Each result kind, with the exact keys of its meta.
 .viewer_result_meta_fields <- list(
   highlight = c("label", "tool", "pageId", "pageName", "color", "enabled"),
-  categorical = c("key", "categories", "origin"),
+  categorical = c("key", "categories", "colors", "origin"),
   continuous = c("key", "origin"),
   geneSet = c("name", "description", "genes", "symbols", "origin"),
   visibility = character(0),
@@ -373,7 +388,7 @@
 
 # One binary event: header length, JSON header, body. A selection's body is
 # little-endian uint32 cell indices, strictly ascending, read in one
-# vectorised pass however many cells it holds.
+# vectorized pass however many cells it holds.
 .parse_viewer_binary_event <- function(frame) {
   if (!is.raw(frame) || length(frame) < 4L) .refuse_frame("A binary event is shorter than its header length.")
   header_length <- .read_uint32(frame[1:4])
@@ -406,9 +421,10 @@
 }
 
 # The answer to one action: the request it answers, the history step it made
-# ({id, label}, or NULL: a read, or a change that changed nothing), and its
-# outcome, the body's UTF-8 JSON (NULL when the action had nothing to report;
-# a read's result), as jsonlite reads JSON (simplifyVector = FALSE).
+# ({id, label}, or NULL: a read, or a change that made none), why a change
+# made none (`unrecorded`, a name of .viewer_action_unrecorded, or NULL), and
+# its outcome, the body's UTF-8 JSON (NULL when the action had nothing to
+# report; a read's result), as jsonlite reads JSON (simplifyVector = FALSE).
 .decode_action_result <- function(header, body) {
   if (!.is_exact_text(header$requestId)) .refuse_frame("action_result requestId must be exact text.")
   step <- header$step
@@ -418,6 +434,14 @@
       .refuse_frame("An action_result step names its id and label.")
     }
   }
+  unrecorded <- header$unrecorded
+  if (!is.null(unrecorded) && (!.is_exact_text(unrecorded) || !unrecorded %in% names(.viewer_action_unrecorded))) {
+    .refuse_frame("An action_result's unrecorded must be one of ", paste(names(.viewer_action_unrecorded), collapse = ", "),
+                  ", or null.")
+  }
+  if (!is.null(step) && !is.null(unrecorded)) {
+    .refuse_frame("An action_result's unrecorded must be null when the action made a step.")
+  }
   text <- .utf8_text(body)
   if (is.na(text)) .refuse_frame("An action_result body must be UTF-8 JSON.")
   outcome <- tryCatch(
@@ -425,7 +449,7 @@
     error = function(error) NULL
   )
   if (is.null(outcome)) .refuse_frame("An action_result body must be one JSON value.")
-  list(requestId = header$requestId, step = step, outcome = outcome$value)
+  list(requestId = header$requestId, step = step, unrecorded = unrecorded, outcome = outcome$value)
 }
 
 # One binary agent event (agent_tools, agent_result): its request, and its
@@ -710,12 +734,18 @@
       if (!.is_exact_text(meta$label, whitespace = TRUE) || !meta$tool %in% .viewer_highlight_tools) bad("names its label and tool")
       if (!.is_exact_text(meta$pageId) || !.is_exact_text(meta$pageName, whitespace = TRUE)) bad("names its page")
       if (!is.character(meta$color) || !grepl("^#[0-9a-fA-F]{6}$", meta$color) || !(isTRUE(meta$enabled) || isFALSE(meta$enabled))) {
-        bad("carries its page colour and whether it is enabled")
+        bad("carries its page color and whether it is enabled")
       }
       if (is.null(cells) || cells < 1 || !is.null(values)) bad("of a highlight names its cells and no values")
     },
     categorical = {
       if (!.is_exact_text(meta$key, whitespace = TRUE) || !.is_text_list(meta$categories, nonempty = TRUE)) bad("names its key and categories")
+      # The colors it is shown in, in the view in focus: one #rrggbb a category, in their order.
+      colors <- meta$colors
+      if (!is.list(colors) || length(colors) != length(meta$categories) ||
+          !all(vapply(colors, function(color) is.character(color) && length(color) == 1L && isTRUE(grepl("^#[0-9a-f]{6}$", color)), TRUE))) {
+        bad("of a categorical carries one #rrggbb color (lowercase) a category, in order")
+      }
       if (!values %in% c("uint8", "uint16", "uint32") || identical(cells, 0L)) bad("of a categorical carries codes")
     },
     continuous = {

@@ -14,7 +14,7 @@
 # term at all. What reaches it is every classed numeric that has no
 # is.numeric() method -- units::units, bit64::integer64, and any S3 class a
 # caller wrote -- where the attribute is the only thing that says what the
-# numbers mean. as.matrix() drops it silently: a data frame of one metre
+# numbers mean. as.matrix() drops it silently: a data frame of one meter
 # column and one kilometre column becomes a matrix of equal numbers, and the
 # store holds a 45-degree vector where the caller's data points 0.06
 # degrees off axis. There is no later check that can notice, because by then

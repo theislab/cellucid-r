@@ -265,7 +265,7 @@ test_that("cellucid_restore_original_order() reorders every part of a Seurat obj
   expect_identical(back[[]], object[[]])
   expect_null(methods::slot(back, "misc")$cellucid)
   expect_true(methods::validObject(back))
-  # A neighbour index points at its cells by row: the rows move, and so do the indices.
+  # A neighbor index points at its cells by row: the rows move, and so do the indices.
   neighbors <- methods::new("Neighbor", nn.idx = cbind(seq_len(n), c(2:n, 1L)), nn.dist = cbind(rep(0, n), as.double(seq_len(n))),
                             alg.idx = NULL, alg.info = list(), cell.names = colnames(object))
   object[["RNA.nn"]] <- neighbors

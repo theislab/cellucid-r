@@ -79,16 +79,24 @@
   per_block <- max(1, floor(.backed_block_values / max(1, across)))
   starts <- if (along == 0) numeric(0) else seq(1, along, by = per_block)
   bpcells <- inherits(matrix, "IterableMatrix")
+  untransposed <- if (bpcells) NULL else .delayed_untransposed(matrix)
+  # The block over the matrix's rows `i` and columns `j` (NULL: all of them).
+  take <- function(i, j) {
+    if (!is.null(untransposed)) {
+      return(.delayed_block_dgcmatrix(.subset_matrix(untransposed, j, i), transpose = TRUE))
+    }
+    .subset_matrix(matrix, i, j)
+  }
   read <- function(k) {
     first <- starts[[k]]
     index <- first:min(along, first + per_block - 1)
     block_rows <- if (by_rows) rows[index] else rows
     block <- if (by_rows) {
-      matrix[block_rows, , drop = FALSE]
+      take(block_rows, NULL)
     } else if (all_rows) {
-      matrix[, index, drop = FALSE]
+      take(NULL, index)
     } else {
-      matrix[block_rows, index, drop = FALSE]
+      take(block_rows, index)
     }
     col0 <- if (by_rows) 0 else first - 1
     if (bpcells) {
@@ -101,7 +109,7 @@
         rows = block_rows, col0 = col0
       ))
     }
-    block <- .without_omp_pause_warning(.delayed_block_dgcmatrix(block))
+    if (is.null(untransposed)) block <- .delayed_block_dgcmatrix(block)
     list(index = block@i, pointers = as.double(block@p), values = block@x, by_rows = FALSE, rows = block_rows, col0 = col0)
   }
   list(n = length(starts), read = read)
@@ -115,15 +123,48 @@
 # (DelayedArray 0.20 to 0.28, R 4.1 to 4.3) it went through dense blocks and
 # which(block != 0), which drops NA and NaN, so a missing value was written
 # as a zero.
-.delayed_block_dgcmatrix <- function(block) {
-  if (any(dim(block) == 0L)) return(Matrix::sparseMatrix(i = integer(), j = integer(), x = double(), dims = dim(block)))
-  read <- DelayedArray::read_block(
-    block, DelayedArray::RegularArrayGrid(dim(block))[[1L]], as.sparse = DelayedArray::is_sparse(block)
-  )
-  if (is.matrix(read)) {
-    return(methods::as(methods::as(methods::as(read, "dMatrix"), "generalMatrix"), "CsparseMatrix"))
-  }
-  methods::as(read, "dgCMatrix")
+# `transpose`: the block's transpose, made in memory from the dgCMatrix read.
+.delayed_block_dgcmatrix <- function(block, transpose = FALSE) {
+  .without_omp_pause_warning({
+    shape <- dim(block)
+    held <- if (any(shape == 0L)) {
+      Matrix::sparseMatrix(i = integer(), j = integer(), x = double(), dims = shape)
+    } else {
+      read <- DelayedArray::read_block(
+        block, DelayedArray::RegularArrayGrid(shape)[[1L]], as.sparse = DelayedArray::is_sparse(block)
+      )
+      if (is.matrix(read)) {
+        methods::as(methods::as(methods::as(read, "dMatrix"), "generalMatrix"), "CsparseMatrix")
+      } else {
+        methods::as(read, "dgCMatrix")
+      }
+    }
+    if (transpose) Matrix::t(held) else held
+  })
+}
+
+# `matrix[i, j]`, NULL taking every row or column.
+.subset_matrix <- function(matrix, i, j) {
+  if (is.null(i) && is.null(j)) return(matrix)
+  if (is.null(i)) return(matrix[, j, drop = FALSE])
+  if (is.null(j)) return(matrix[i, , drop = FALSE])
+  matrix[i, j, drop = FALSE]
+}
+
+# The matrix under a DelayedArray's transposition (the genes x cells view
+# .expression_input() makes of a cells x genes one, or one the caller made
+# with t()), or NULL when it is no transposition. Its blocks are read from
+# that matrix and transposed in memory, never through DelayedArray's
+# transposed view: up to Bioconductor 3.16 (DelayedArray 0.20 to 0.24, R 4.1
+# and 4.2) a sparse block read through it subsets a SparseArraySeed with
+# MatrixGenerics::rowAnyNAs(useNames = NA), which matrixStats 1.x, the one
+# CRAN serves those R versions, refuses ("Argument 'useNames' must be either
+# TRUE or FALSE"), so cellucid_prepare() of a cells x genes DelayedArray
+# failed there (CI run 43106603588).
+.delayed_untransposed <- function(matrix) {
+  seed <- matrix@seed
+  if (!methods::is(seed, "DelayedAperm") || !identical(as.integer(seed@perm), c(2L, 1L))) return(NULL)
+  DelayedArray::DelayedArray(seed@seed)
 }
 
 # SparseArray's conversion of a block to a dgCMatrix asks OpenMP to let its
@@ -148,14 +189,22 @@
   .inform("Reading ", name, " (", class(matrix)[[1L]], ") block by block, never whole.")
   tally <- .native_backed_tally(nrow(matrix))
   blocks <- .backed_blocks(matrix)
-  for (k in seq_len(blocks$n)) .native_backed_count(tally, blocks$read(k))
+  # Each cell's sum over every gene, in the same sweep (R/total-counts.R):
+  # the cells' totals cost no pass of their own.
+  cell_totals <- numeric(ncol(matrix))
+  for (k in seq_len(blocks$n)) {
+    block <- blocks$read(k)
+    .native_backed_count(tally, block)
+    cell_totals <- .add_block_to_cell_totals(cell_totals, block)
+  }
   counted <- .native_backed_counted(tally)
   summary <- counted[[5L]]
   non_finite <- c(nan = summary[[2L]], missing = summary[[3L]], positive = summary[[4L]], negative = summary[[5L]])
   if (sum(non_finite) > 0) {
     .abort(name, " must contain only finite values. ", .describe_non_finite_counts(non_finite, summary[[1L]], name))
   }
-  stats <- list(count = counted[[1L]], low = counted[[2L]], high = counted[[3L]], whole = counted[[4L]])
+  stats <- list(count = counted[[1L]], low = counted[[2L]], high = counted[[3L]], whole = counted[[4L]],
+                cell_totals = cell_totals)
   stats$extent <- .backed_extent(stats, seq_len(nrow(matrix)), zeros = summary[[6L]] > 0)
   if (any(stats$count > 0) && max(abs(stats$extent[1:2])) > .float32_max_magnitude) {
     .abort(

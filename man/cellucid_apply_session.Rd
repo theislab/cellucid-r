@@ -45,7 +45,11 @@ with \code{step}, the branch that step must be on.}
 \code{step}: the step the viewer showed (the tracker's head).}
 \item{...}{The arguments \code{\link{cellucid_view}()} was given that choose
 what is shown (\code{embeddings}, \code{obs}, \code{modalities}, \ldots), so
-the object is checked against what the viewer showed.}
+the object is checked against what the viewer showed. \code{dataset_id} among
+them is the id the object was shown under, when the viewer was given another
+than the one the object declares: its session is saved under that id. A
+viewer's request names it itself, for an object declaring the id the
+viewer's data declared.}
 \item{dry_run}{\code{TRUE} (the default) returns the plan and changes
 nothing; \code{FALSE} applies it at once.}
 \item{overwrite}{Replace a column or gene set an earlier apply wrote with
@@ -65,8 +69,9 @@ step's state uses: \code{obs}, \code{var}) and \code{rows}, a data frame of
 one row per change, in domain order: \code{kind} (\code{"column-renamed"},
 \code{"categories-renamed"}, \code{"categories-merged"},
 \code{"field-deleted"}, \code{"user-field"}, \code{"gene-set"},
-\code{"highlight"}, \code{"presentation"}), \code{domain}, \code{name} (the
-column, category or gene set it writes), \code{column} (the column a category
+\code{"highlight"}, \code{"column-colors"}, \code{"presentation"}),
+\code{domain}, \code{name} (the column, category or gene set it writes, or
+whose colors it writes), \code{column} (the column a category
 is in), \code{from} (a list column: the old name or category), \code{cells}
 (the cells it labels), \code{status} (\code{"write"}; \code{"unchanged"}: the
 object holds it already; \code{"replace"}: an earlier apply's, with
@@ -93,8 +98,13 @@ first, each a list: \code{session_sha256}, \code{tracker}, \code{branch},
 (\code{"r"}), \code{columns} (the columns it wrote), \code{renamed} (each
 rename it applied: \code{kind}, \code{column}, \code{from}, \code{to}),
 \code{skipped} (each change not applied: \code{kind}, \code{name},
-\code{note}) and \code{session} (the file, base64, with
-\code{keep_session = TRUE}). cellucid-python's
+\code{note}), \code{expression} (the expression values of the step
+applied, \code{list(normalize, log1p)}: what the person looked at the genes
+in, normalized to 10,000 counts per cell, log1p, both, or neither for the
+values as stored; \code{NULL} when the session holds none) and
+\code{session} (the file, base64, with \code{keep_session = TRUE}). The
+expression values are recorded, never applied: the object's expression
+matrices keep their values. cellucid-python's
 \code{uns['cellucid']['history_applied']} holds the same records. A record
 holds no \code{source} (where the viewer opened the dataset, which may be a
 private link); with \code{keep_session = TRUE} it keeps the whole file,
@@ -114,8 +124,10 @@ included.
 }
 \details{
 Only what the chosen step needs is checked, before anything is written: the
-dataset (its cell count, its id when the object's cellucid record names one,
-the data mapping the session was saved with and its gene count, and the
+dataset (its cell count, its id -- the one it was shown under,
+\code{dataset_id}, when given or when the session is a viewer's request for
+an object declaring the id the viewer's data declared; else the one the
+object's cellucid record names, when it names one --, the data mapping the session was saved with and its gene count, and the
 cells' order when the object has the embedding the session names: a
 cell-order digest of its stored values), the obs columns and genes the
 step's state uses, and every value of the state against the keys this
@@ -125,7 +137,7 @@ part).
 Applying the same step again changes nothing and says so (every row
 \code{"unchanged"} or \code{"not-applied"}). A column the person made is
 never replaced: its row says so and the rest applies. Presentation (filters,
-colours, views, the camera, analyses) is reported, one row per domain that
+colors, views, the camera, analyses) is reported, one row per domain that
 differs from the tracker's opening, never applied. A session shared as its
 steps only (without the values they leave behind) cannot be applied.
 
@@ -154,6 +166,39 @@ features to mark: the gene sets stay in \code{cellucid$gene_sets} only (a
 warning says so). A gene set the step no longer holds has no row: its record
 and its column stay. These columns are not rows of the plan, and
 \code{columns} in the apply's record lists cell-metadata columns only.
+
+Colors go with the columns, where the object keeps what an AnnData keeps in
+\code{uns} (Seurat \code{misc}, \code{metadata(x)} -- as zellkonverter
+carries \code{uns} -- or a data frame's attributes), under Scanpy's name
+\code{<column>_colors}: a categorical field written or replaced gets the
+colors it is shown in, one \code{"#rrggbb"} a level in the factor's order,
+every level, used or not -- in the view in focus at the step, the color the
+person or an agent gave a level, else the color it opens with: its
+\code{palette} (a field made from highlight pages takes its pages'), else
+Cellucid's own category colors by position. A column of the object (a
+factor) recolored in the view in focus gets the colors it is shown in, under
+its name after the step's renames and in its levels' order after the step's
+relabels: the color the person or an agent gave a level, else the color it
+opens with -- the colors held for it, when there are at least as many as its
+levels and each of the first ones is a hex color (\code{#rgb},
+\code{#rrggbb} or \code{#rrggbbaa}; written as drawn, \code{"#rrggbb"} in
+lowercase), a merged level taking its first source level's -- else
+Cellucid's own colors by position; one \code{"column-colors"} row each (in
+the \code{colors} domain, in the order the session lists them):
+\code{"write"}, \code{"unchanged"} when the object holds those colors
+already, or \code{"not-applied"} with the reason (a column that is not a
+factor, or none of whose levels the session recolored). The plan's
+\code{colors} row stays \code{"not-applied"} (every other color -- a
+continuous field's color map or range, another view's -- is how the data
+was shown) and says so when a field's or a column's colors went with its
+column. Any other column written or replaced
+gets none (colors left under its name described another column, and are
+removed). A renamed column carries its colors (a character
+vector; another form is removed); a factor whose levels merged keeps, for
+each level, the color of the first level it was made from (colors that did
+not cover its levels are removed); a text column relabeled loses its
+colors; a column left as it is keeps them. cellucid-python and the web app
+write the same, to \code{uns}.
 
 \code{obs['cellucid_original_position']} (a Cellucid-ready store's record of
 each cell's original position in priority order) is never written, renamed

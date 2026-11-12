@@ -10,7 +10,7 @@
 #   /obsm        the embeddings and vector fields, over every cell, and
 #                mudata's masks obsm/<m>: bool (n_cells, 1), which cells <m>
 #                measured
-#   /obsp        the neighbour graph, over every cell
+#   /obsp        the neighbor graph, over every cell
 #   /varm, /varp empty
 #   /uns         title and uns['cellucid'] (identity, citation, launch
 #                defaults, outlier quantiles): the dataset's, so at the root
@@ -19,7 +19,8 @@
 #   /varmap/<m>  uint32, one per root var row: its 1-based row in <m>, else 0
 #   /mod         attribute mod-order: the modality names, in order
 #   /mod/<m>     a Cellucid-ready AnnData minus uns['cellucid']: X gene-major,
-#                obs (the modality's cells; in priority order, by their
+#                obs (the modality's cells; their total counts when X holds
+#                counts and no column names them; in priority order, by their
 #                cells' priority, with each row's original row), var, empty
 #                layers,
 #                obsm, obsp, varm, varp and uns
@@ -87,6 +88,8 @@
     # The column is set into the frame, not given to data.frame(): before R
     # 4.3, data.frame() refuses a classed vector it has no method for.
     obs <- no_columns(length(space$obs_index))
+    # Its cells' totals over its genes stored (R/total-counts.R), before the original rows.
+    if (!is.null(space$totals)) obs[[.total_counts_column]] <- space$totals
     if (!is.null(space$original)) obs[[.original_position_column]] <- .uint32_column(space$original)
     .write_anndata_group(
       store, prefix, space,

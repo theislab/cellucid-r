@@ -14,12 +14,15 @@ cellucid_prepare(
   dataset_id = NULL,
   dataset_name = NULL,
   obs = NULL,
+  obs_colors = NULL,
   var = NULL,
   gene_expression = NULL,
   connectivities = NULL,
   vector_fields = NULL,
   modalities = NULL,
   gene_identifiers = NULL,
+  total_counts = NULL,
+  total_counts_over = NULL,
   dataset_description = NULL,
   citation_text = NULL,
   citation_url = NULL,
@@ -84,6 +87,21 @@ verbatim and stored as \code{uns['cellucid']['name']} and \code{uns['title']};
 see the note on displayed text below.}
 \item{obs}{Optional \code{data.frame} of cell metadata, one row per cell. Every
 column is stored, see the note on column encodings below.}
+\item{obs_colors}{Optional named list of Scanpy's colors of categorical
+\code{obs} columns, \code{list(cell_type = c("#1f77b4", "#ff7f0e"))}: one
+color a category, in the column's category order (a factor's levels; a
+character column's values in code-point order). Each is written as
+\code{uns['<column>_colors']}, where Scanpy keeps them and the viewer opens
+the column in them. From \code{data}: the colors the object holds for every
+column written (\code{misc[["<column>_colors"]]} of a Seurat object,
+\code{metadata(x)[["<column>_colors"]]}, where zellkonverter keeps
+\code{uns}); one that cannot be written (not text, fewer colors than
+categories, a color that is not hex, a column not written as a categorical)
+is left out with a message. Given here, each entry must name a categorical
+column written and give at least one hex color (\code{"#rrggbb"},
+\code{"#rgb"} or \code{"#rrggbbaa"}, the forms the viewer reads) a category,
+or it is refused; \code{list()} writes
+none.}
 \item{var}{Optional \code{data.frame} of gene metadata, one row per column of
 \code{gene_expression}. Every column is stored. Supplying it without
 \code{gene_expression} is an error.}
@@ -101,7 +119,7 @@ A stored zero of a sparse matrix is no value and is dropped; the matrix stays
 sparse. Rows are always cells;
 Cellucid never transposes the matrix, so transpose a genes x cells matrix with
 \code{t()} first.}
-\item{connectivities}{Optional cells x cells neighbour graph, a \pkg{Matrix}
+\item{connectivities}{Optional cells x cells neighbor graph, a \pkg{Matrix}
 sparse matrix or a numeric matrix, stored as
 \code{obsp['connectivities']} (a float32 \code{csr_matrix}). It must be exactly
 symmetric, with finite, non-negative weights; a stored zero is not an edge and
@@ -129,6 +147,34 @@ or the main experiment first. One modality is written as a plain AnnData.}
 order given. \code{NULL} stores every gene. The identifiers are matched against
 the gene names the viewer shows (\code{var_gene_id_column}, or the \code{var}
 row names) after repeated names were made unique, and must be distinct.}
+\item{total_counts}{Optional name of the \code{obs} column holding each cell's
+total count over \strong{all} its genes, computed before any gene was
+selected (Seurat's \code{nCount_RNA}). The viewer normalizes a gene by it
+(\code{x * 10,000 / total}) from this one column instead of reading every gene
+to sum them, and the totals are of the whole cell where the file stores a
+gene panel. Recorded as \code{uns['cellucid']['totalCounts']} with
+\code{over = "all genes"}; refused unless the expression matrix holds counts
+(every value a whole number of at least 0) and every cell's total is finite and
+at least the sum of its stored genes. With several modalities, a named
+character vector of one column of the cells' \code{obs} per modality:
+\code{c(RNA = "nCount_RNA")}. When \code{NULL} and the matrix holds counts,
+each cell's sum over the genes stored is written as \code{obs['total_counts']}
+(for a modality, \code{mod/<name>/obs/total_counts}, shown as
+\code{<name>:total_counts}), recorded with \code{over = "stored genes"} --
+unless \code{obs} already has a column of that name, which is kept as given
+(and recorded only when it is exactly those sums). cellucid-python's
+\code{prepare(total_counts = )} takes the same.}
+\item{total_counts_over}{Optional: what the column \code{total_counts} names
+covers. \code{NULL} is \code{"all genes"}, every gene measured;
+\code{"source panel"} is every gene of the source's gene panel -- a targeted
+or integration panel, more genes than are stored but not the whole
+transcriptome (the built-in atlas samples' 8,192 integration genes).
+Recorded as the \code{over} of \code{uns['cellucid']['totalCounts']} and
+checked as \code{"all genes"} is. With several modalities, one value for
+every modality \code{total_counts} names, or a named character vector by
+modality (\code{c(RNA = "source panel")}; a modality left out covers all
+genes). Refused without \code{total_counts}. cellucid-python's
+\code{prepare(total_counts_over = )} takes the same.}
 \item{dataset_description}{Optional description of the dataset, shown
 verbatim; stored as \code{uns['cellucid']['description']}.}
 \item{citation_text}{Optional text that says how to cite the dataset, stored as
@@ -152,7 +198,7 @@ Stored as \code{uns['cellucid']['defaults']['embedding<d>d']}, columns
 viewer's outlier filter measures in, such as \code{"X_pca"} or
 \code{"X_scVI"}: a latent space such as scVI or PCA, never a 2D or 3D layout.
 The outlier quantiles of every categorical \code{obs} column (each cell's
-distance to its category's centre, as the share of its category at that
+distance to its category's center, as the share of its category at that
 distance or closer) are computed here and stored in
 \code{uns['cellucid']['outlierQuantiles']}, so the viewer filters outliers at
 once instead of reading the whole latent space to compute them. See the
@@ -219,7 +265,7 @@ Invisibly, the absolute path of the written store.
 \description{
 \code{cellucid_prepare()} writes a Seurat, SingleCellExperiment or
 SummarizedExperiment object, or embeddings, cell and gene metadata, gene
-expression, a neighbour graph, and vector fields as a \emph{Cellucid-ready
+expression, a neighbor graph, and vector fields as a \emph{Cellucid-ready
 AnnData}: a standard AnnData store, written as AnnData Zarr (format 2, or 3
 with \code{zarr_format = 3}), that Python's \pkg{anndata} reads without a
 warning and the Cellucid web app opens directly, with the dataset's name,
@@ -233,7 +279,7 @@ The store is an AnnData Zarr group (Zarr format 2 unless \code{zarr_format = 3})
   and \code{indptr} and no stored zeros, or a dense array;
   \item \code{obs} and \code{var}: data frames, the index in \code{_index};
   \item \code{obsm}: every embedding and vector field, float32;
-  \item \code{obsp/connectivities}: the neighbour graph, float32 \code{csr_matrix};
+  \item \code{obsp/connectivities}: the neighbor graph, float32 \code{csr_matrix};
   \item \code{uns/title} and \code{uns/cellucid}: \code{schema} (1),
   \code{id}, \code{name}, and, when supplied, \code{description},
   \code{citation} (\code{text}, \code{url}), \code{source} (\code{name},
@@ -253,7 +299,7 @@ The store is an AnnData Zarr group (Zarr format 2 unless \code{zarr_format = 3})
 }
 Every element carries the \code{encoding-type} and \code{encoding-version}
 attributes \pkg{anndata} 0.8 and later write. Every chunk of values wider
-than one byte is byte-shuffled, so the similar high bytes of neighbouring
+than one byte is byte-shuffled, so the similar high bytes of neighboring
 values compress together -- except the expression values themselves, which
 compress best as they are -- and every chunk is compressed with DEFLATE level 6,
 which browsers decompress natively: in format 2 numcodecs' \code{Shuffle}
@@ -265,7 +311,7 @@ row per cell (data frame columns and index, embeddings as a chunk of rows with
 every column, masks, cell maps, outlier quantiles) holds 65,536
 (\code{2^16}) values per chunk, so a subsample -- the first rows of a store in
 priority order -- reads little beyond its own cells; arrays read whole
-(\code{var}, the expression matrix's pointers, the neighbour graph) up to
+(\code{var}, the expression matrix's pointers, the neighbor graph) up to
 262,144 (\code{2^18}); and the data and indices of the expression matrix,
 which the viewer reads one gene (or its first values) at a time, 16,384
 (\code{2^14}). Python's \code{cellucid.prepare()} writes the same store,
@@ -312,16 +358,16 @@ in the store, so it must be a portable file name on every platform: no slash,
 backslash, colon, asterisk, question mark, quotation mark, \code{<}, \code{>},
 \code{|}, or control character, no trailing space or dot, not a
 Windows device name, not \code{_index} for a column, and distinct from its
-neighbours by more than letter case (\code{"Sex"} and \code{"sex"} are one
+neighbors by more than letter case (\code{"Sex"} and \code{"sex"} are one
 folder on macOS and Windows).
 
 Note on displayed text: \code{dataset_name}, \code{dataset_description},
-\code{citation_text}, and \code{source_name} are drawn verbatim, so each must be
-free of control characters (\code{U+0001}--\code{U+001F},
-\code{U+007F}--\code{U+009F}), of the zero-width characters \code{U+200B},
-\code{U+2060}, and \code{U+FEFF}, and of leading or trailing whitespace of any
-kind. Nothing is trimmed: trimming would rewrite text the caller never asked to
-change.
+\code{citation_text}, and \code{source_name} are drawn as stored, with white
+space at either end removed (a tab, a line end, a space of any kind or
+\code{U+FEFF}), as the web app reads them; what remains must be free of control
+characters (\code{U+0001}--\code{U+001F}, \code{U+007F}--\code{U+009F}) and of
+the zero-width characters \code{U+200B}, \code{U+2060} and \code{U+FEFF}.
+Identifiers (\code{dataset_id}, keys, column names) are never trimmed.
 
 Note on required arguments: \code{out_path} and \code{format} carry no
 default, and without \code{data} neither do \code{embeddings},
@@ -341,7 +387,7 @@ applies to the other:
   \item \code{obsm}: every Seurat reduction and every \code{reducedDim} as
   \code{X_<name>}, the name's letter case kept (\code{X_umap},
   \code{X_UMAP}); one that does not cover every cell is left out and named;
-  \item expression: an assay's log-normalised \code{data} (else
+  \item expression: an assay's log-normalized \code{data} (else
   \code{counts}) as \code{X}; \code{logcounts} (else \code{counts}, else
   the first assay) as \code{X}; Seurat v5 split layers joined. A
   Cellucid-ready AnnData holds one matrix per modality, so \code{counts}
@@ -349,10 +395,10 @@ applies to the other:
   written;
   \item \code{var}: \code{meta.features} (Assay5 \code{meta.data}) with the
   variable features as \code{highly_variable}; \code{rowData};
-  \item \code{obsp/connectivities}: the first symmetric neighbour graph the
+  \item \code{obsp/connectivities}: the first symmetric neighbor graph the
   viewer's default rule would open with, its diagonal removed: one named
   \code{connectivities}, then Seurat's \code{<active assay>_snn}, then any
-  other shared-nearest-neighbour graph (\code{<assay>_snn}, or \code{SNN}, in
+  other shared-nearest-neighbor graph (\code{<assay>_snn}, or \code{SNN}, in
   any case; a \code{colPair} the same), in code-point order; a graph passed
   over (not symmetric, or not over every cell) or left out (\code{RNA_nn}) is
   named;
@@ -361,7 +407,10 @@ applies to the other:
   \code{uns['cellucid']}: \code{list(id = , name = , description = ,
   citation = list(text = , url = ), source = list(name = , url = ), defaults =
   list(embedding2d = "X_umap", latentKey = "X_pca", ...))}; a Seurat
-  \code{project.name} other than \code{"SeuratProject"} names it too.
+  \code{project.name} other than \code{"SeuratProject"} names it too;
+  \item Scanpy's colors of each \code{obs} column written,
+  \code{misc[["<column>_colors"]]} or \code{metadata(x)[["<column>_colors"]]},
+  as \code{uns['<column>_colors']} (\code{obs_colors}).
 }
 Matrices kept outside R's memory (BPCells, HDF5Array and other DelayedArray
 backends) stay there and are read a block at a time (about \eqn{2^{24}}

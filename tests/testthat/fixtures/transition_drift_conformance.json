@@ -1448,7 +1448,7 @@
    ]
   },
   {
-   "name": "general, sparse neighbours, rows normalized",
+   "name": "general, sparse neighbors, rows normalized",
    "exact": false,
    "normalizeRows": true,
    "nCells": 60,

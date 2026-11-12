@@ -74,7 +74,8 @@ session_user_category <- function(field_id, key, categories, codes, cells_of = N
   list(id = field_id, source = "obs", kind = "category", key = key, deleted = deleted, purged = FALSE,
        createdAt = session_start, sourceField = NULL, operation = list(type = "annotation"), categories = as.list(categories),
        codes = list(cells = if (is.null(cells_of)) NULL else session_cells(cells_of), values = typed(code_type, codes)),
-       sourcePages = list(), overlapStrategy = "first", overlapLabel = NULL, intersectionLabels = NULL, uncoveredLabel = NULL)
+       sourcePages = list(), overlapStrategy = "first", overlapLabel = NULL, intersectionLabels = NULL, uncoveredLabel = NULL,
+       palette = NULL)
 }
 
 session_user_values <- function(field_id, key, values, cells_of = NULL, deleted = FALSE) {

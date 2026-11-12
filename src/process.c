@@ -1,5 +1,5 @@
 /*
- * Whether a process runs on this machine, never signalling it (R/output.R:
+ * Whether a process runs on this machine, never signaling it (R/output.R:
  * the staging folders a killed cellucid_prepare() left are removed by the
  * next one), as cellucid-python's _scratch._process_alive() asks: kill(pid,
  * 0) on Linux and macOS, OpenProcess() and its exit code on Windows (where a
