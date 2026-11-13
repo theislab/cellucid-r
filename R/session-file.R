@@ -1,4 +1,4 @@
-# Reading a .cellucid-session file (session format 4, the History v2 shape):
+# Reading a .cellucid-session file (session format 4):
 # the history of what was done in the viewer, the file the viewer's Save
 # session writes and cellucid_session_result() collects. The web app's
 # app/session/README.md (what the manifest and chunks say), bundle/format.js

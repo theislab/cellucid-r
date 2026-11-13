@@ -1,8 +1,9 @@
 # The input format registry: every format the Cellucid viewer opens, by id.
 # inst/input_formats.json is byte for byte the web app's
-# tests/fixtures/input-formats.json (written from assets/js/data/input-formats.js)
-# and cellucid-python's packaged input_formats.json; the three repositories
-# pin the same SHA-256 (tests/testthat/test-input-formats.R).
+# tests/fixtures/input-formats.json (its home, written from
+# assets/js/data/input-formats.js) and cellucid-python's packaged
+# input_formats.json (tests/testthat/test-input-formats.R compares this copy
+# with the web repository's file).
 #
 # cellucid_view(path) and cellucid_serve(path) classify a file or folder with
 # it, as the web app and Python's cellucid serve do: a folder by its markers
@@ -332,8 +333,8 @@
 
 # A vlen-utf8 chunk: a count, then each string as its length and its bytes.
 # Every count and length it states is checked against the bytes it has before
-# anything is allocated from it: a count of 2^31 - 1 in four bytes once
-# allocated a vector that size.
+# anything is allocated from it: unchecked, a count of 2^31 - 1 in four bytes
+# would allocate a vector that size.
 .decode_vlen_utf8 <- function(bytes) {
   total <- length(bytes)
   if (total < 4L) .abort("the vlen-utf8 chunk is shorter than its count")

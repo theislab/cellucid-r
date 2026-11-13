@@ -193,3 +193,7 @@ test_that("a served object names its cells by its own order at the boundary", {
   expect_false(identical(positions, 0:5))
   expect_identical(store_array(served, "obs/_index"), viewer$cell_names[positions + 1L])
 })
+
+test_that("zarr-python read every pair of stores this file compared", {
+  expect_zarr_python_compared()
+})

@@ -12,7 +12,8 @@
 # byte of every value, then every second byte, and so on -- so the similar
 # high bytes of neighboring values compress together; the expression values
 # (X's data, a dense X) are not, because deflate finds their repeated values
-# only unshuffled (shuffled, real expression data grew 14-45%). Every chunk is
+# only unshuffled (shuffled, real expression data grows; measured:
+# 09_cellucid_ready_anndata_specification.md). Every chunk is
 # compressed with DEFLATE level 6 (zlib's default) into a zlib stream (RFC
 # 1950: a 0x78 header, deflate data, an Adler-32 trailer) by the zlib this
 # package links, a batch of chunks at a time on every core (src/deflate.c;
@@ -35,11 +36,11 @@
 # A store held in memory (cellucid_view(), cellucid_serve()) declares no
 # compressor and no shuffle filter, and its chunks are the values' bytes as
 # they are. It is read over the loopback interface, where compressing costs
-# far more than the bytes it saves: deflate runs on R's one main thread at
-# about 20 MB/s, the same thread that answers every request, while the browser
-# reads loopback at gigabytes a second. The shuffle is dropped with the
-# compressor, because it only ever helped the compressor and would cost a
-# permutation of every chunk on that thread.
+# far more than the bytes it saves: deflate runs on R's one main thread, the
+# same thread that answers every request, far slower than the browser reads
+# loopback (measured: 26_decisions_served_store_and_widgets.md). The shuffle
+# is dropped with the compressor, because it only ever helps the compressor
+# and would cost a permutation of every chunk on that thread.
 #
 # The store is a key plan: every element puts its keys, the metadata
 # documents as bytes and every chunk as a function that makes its bytes. A
@@ -71,28 +72,25 @@
 # data and indices of the expression matrix, read one gene's range (or its
 # first values) at a time, 2^14. These are the Python writer's constants
 # (CELL_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS, SLICED_CHUNK_ELEMENTS in
-# prepare_data/_store.py), with the measurements behind them.
+# prepare_data/_store.py; measured:
+# 09_cellucid_ready_anndata_specification.md).
 .chunk_elements_whole <- 262144
 .chunk_elements_cell <- 65536
 .chunk_elements_sliced <- 16384
 
 # A served store (held in memory) chunks the data and indices of its
 # expression matrices in 2^18 values (1 MiB of float32): a request on this
-# machine costs a fixed time whatever its length, at both ends -- measured on
-# an Apple M1 Pro over loopback, six connections: these handlers on R's thread
-# answer about 1,600 requests a second (0.6 ms each), cellucid-python's
-# http.server about 4,700, and a browser's fetch from a worker moves 46-79
-# MB/s in requests of 64 KiB (Chromium, Firefox, WebKit), 300-510 MB/s in
-# requests of 1 MiB and no more in larger ones -- so at 2^14 values a chunk a
-# pass over a matrix (an analysis, many genes) was bound by requests. 2^18
-# values is the least at which every engine's loopback rate has reached its
-# plateau. The viewer reads a served chunk in part (it is stored uncompressed: a
-# Range of one is only those bytes, made alone, .store_body()), so a gene, or
-# a subsample's first entries of one, reads no more than with smaller chunks.
-# A scheduling choice, measured; cellucid-python's served stores use the same
-# (SERVED_ENTRY_CHUNK_ELEMENTS in _served_store.py). A written store keeps
-# .chunk_elements_sliced: its chunks are compressed, and a chunk is the least
-# a reader of it decodes.
+# machine costs a fixed time whatever its length, at both ends, so in chunks
+# of 2^14 values a pass over a matrix (an analysis, many genes) is bound by
+# its requests, and 2^18 values is the least at which every engine's loopback
+# rate reaches its plateau (measured:
+# 26_decisions_served_store_and_widgets.md). The viewer reads a served chunk
+# in part (it is stored uncompressed: a Range of one is only those bytes, made
+# alone, .store_body()), so a gene, or a subsample's first entries of one,
+# reads no more than with smaller chunks. A scheduling choice;
+# cellucid-python's served stores use the same (SERVED_ENTRY_CHUNK_ELEMENTS in
+# _served_store.py). A written store keeps .chunk_elements_sliced: its chunks
+# are compressed, and a chunk is the least a reader of it decodes.
 .chunk_elements_served <- 262144
 
 # The values one chunk of an expression matrix's data and indices holds in

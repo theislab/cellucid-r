@@ -215,3 +215,7 @@ test_that("a range of a served chunk is made alone, the same bytes as the chunk'
     expect_true(all(tail[(held * 4 + 1):length(tail)] == as.raw(0)))
   }
 })
+
+test_that("zarr-python read every pair of stores this file compared", {
+  expect_zarr_python_compared()
+})

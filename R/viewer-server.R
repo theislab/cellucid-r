@@ -433,10 +433,10 @@
 # How long cellucid_stop() lets an open page answer the channel's close before
 # the server stops. httpuv writes a frame after another on its next turn of
 # its event loop (a frame's empty last buffer leaves its write unfinished
-# until then), and stopping the server drops what is not written yet: the
-# freeze and the close sent together lost the close (seen on macOS CI and
-# every time under Rosetta). A page answers the close at once and the wait
-# ends then; this bounds it for a page that never answers.
+# until then), and stopping the server drops what is not written yet: stopped
+# at once, the close sent after the freeze would never reach the page. A page
+# answers the close at once and the wait ends then; this bounds it for a page
+# that never answers.
 .viewer_close_seconds <- 1
 
 # The requestId prefix of the keep-alive pings: their pongs keep the

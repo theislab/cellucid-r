@@ -100,7 +100,8 @@
   # The columns kept as they are. as.data.frame() would pass them to
   # data.frame() as named arguments, and an argument's name is a symbol, which
   # an R session that is not UTF-8 (Windows R before 4.2) makes native: a
-  # column named in Greek became "<U+03B1>", and was then refused as a path.
+  # column named in Greek would become "<U+03B1>", and then be refused as a
+  # path.
   out <- if (length(keep) == 0L) {
     data.frame(row = seq_len(nrow(frame)))[, 0L, drop = FALSE]
   } else {

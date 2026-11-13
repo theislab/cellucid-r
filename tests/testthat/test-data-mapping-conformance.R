@@ -1,8 +1,9 @@
 # The shared data-mapping conformance fixture, run against this package.
 #
 # tests/testthat/fixtures/data_mapping_conformance.json is a byte-identical
-# copy of cellucid-python's tests/fixtures/data_mapping_conformance.json, which
-# the web app also carries; all three repositories pin the same SHA-256.
+# copy of the web app's tests/fixtures/data-mapping-conformance.json (its
+# home), which cellucid-python also carries; each package's test compares its
+# copy with the web repository's file.
 #
 # A writer applies four of its rules: making gene names unique
 # (makeUniqueNames), the one-line note that reports what that changed
@@ -10,7 +11,7 @@
 # cellucid_prepare() names each vector field '<field>_<basis>' and checks that
 # the viewer reads it back as that field on 'X_<basis>' (in its modality's
 # namespace), and the default neighbor graph (defaultGraph), by which it
-# chooses the graph it writes. All four are run here case for case. The other sections pin rules this package has no counterpart
+# chooses the graph it writes. All four are run here case for case. The other sections hold rules this package has no counterpart
 # for: the best-guess embedding and expression choices, the representations
 # enabled when a file opens, the default vector bindings, the "nothing to
 # plot" text, DataMapping validation, and the check of a mapping's modality
@@ -20,10 +21,11 @@
 # cellucid_prepare() takes caller-named embedding ids and 1-based columns
 # instead.
 
-.conformance_sha256 <- "a3b615e6377f3936ce5701764622ee74ee3c30b95d24303e815eb83476451200"
+test_that("the conformance fixture is the web app's, byte for byte", {
+  expect_shared_file("tests/testthat/fixtures/data_mapping_conformance.json", "tests/fixtures/data-mapping-conformance.json")
+})
 
-test_that("both repositories hold the same pinned conformance fixture", {
-  expect_pinned_fixture("data_mapping_conformance.json", .conformance_sha256)
+test_that("the conformance fixture has the sections this suite runs", {
   fixture <- cellucid_read_fixture("data_mapping_conformance.json")
   expect_identical(fixture$version, 9L)
   expect_identical(

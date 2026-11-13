@@ -81,10 +81,14 @@ test_that("a backed assay is written byte for byte as its dgCMatrix, in priority
     }
     # Blocks of a few cells or genes, and passes of a few hundred values: X
     # placed in many passes, each block of positions let go after its chunks.
-    local_mocked_bindings(.backed_block_values = 120, .backed_group_values = function(bytes_per_value) 300)
-    for (kind in names(kinds)) {
-      expect_same_store(do.call(prepare, c(list(kinds[[kind]]), arguments)), expected)
-    }
+    # The small blocks end with this turn of the loop, so the next one reads
+    # in the package's own blocks first.
+    local({
+      local_mocked_bindings(.backed_block_values = 120, .backed_group_values = function(bytes_per_value) 300)
+      for (kind in names(kinds)) {
+        expect_same_store(do.call(prepare, c(list(kinds[[kind]]), arguments)), expected)
+      }
+    })
   }
   expect_same_store(prepare(kinds[[1L]], "zarr.zip"), prepare(values, "zarr.zip"))
 })

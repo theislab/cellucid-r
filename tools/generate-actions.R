@@ -464,8 +464,8 @@ render_actions <- function(root) {
 }
 
 # _pkgdown.yml with its reference group of the actions' pages listing exactly
-# the generated functions (a hand-kept list kept two removed pages and missed
-# a new one, failing the site's build: CI run 43106603397).
+# the generated functions: a list kept by hand goes stale with every added or
+# removed action, and the site's build fails on a page it names that is gone.
 render_pkgdown <- function(root, names) {
   site <- readLines(file.path(root, "_pkgdown.yml"), warn = FALSE, encoding = "UTF-8")
   title <- which(site == pkgdown_actions_title)

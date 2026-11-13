@@ -1,22 +1,21 @@
 # cellucid_mcp(): the local MCP server for agent apps on this computer.
 #
 # - inst/mcp_tools.json is the web connector's tool list for this package's
-#   own inst/action_catalog.json (written by the web repository's
-#   node scripts/generate-action-catalog.mjs, which pins the same digest);
-#   cellucid-python pins the same file.
+#   own inst/action_catalog.json, byte for byte the web repository's
+#   tests/fixtures/mcp-tools.json (written by its
+#   node scripts/generate-action-catalog.mjs); cellucid-python holds the same
+#   copy.
 # - tests/testthat/fixtures/local_agents.json is shared with cellucid-python
-#   byte for byte: the agents folder, the record, the endpoint, the app names
-#   and the sentences an agent reads, so either package's server drives
-#   either package's viewer and says the same things.
+#   byte for byte (its home is cellucid-python's tests/fixtures/): the agents
+#   folder, the record, the endpoint, the app names and the sentences an
+#   agent reads, so either package's server drives either package's viewer
+#   and says the same things.
 # - The agent commands and events of the viewer channel, a viewer's agent
 #   port, its publication on this computer and its endpoint, and the MCP
 #   server itself over stdio (initialize, tools/list, tools/call, errors,
 #   cancellation, the person asked in the app, a tool list that never
 #   changes, a viewer it opens itself) against a fake page; and cellucid-python's server
 #   driving an R viewer, where that Python is found.
-
-.mcp_tools_sha256 <- "65b1e61533966676c2fb60f5c307cc00b43b0db952f044dc72fa8839297ffaa0"
-.local_agents_sha256 <- "f5a5f265380c9566ccfa5f5bb67165fb95261d4da8f4ac792c179b4b4d75ad00"
 
 agents_fixture <- function() cellucid_read_fixture("local_agents.json")
 
@@ -225,17 +224,18 @@ agent_http <- function(url, method = "GET", headers = list(), body = NULL, timeo
 # The generated tools and the shared fixture
 # =============================================================================
 
+test_that("mcp_tools.json is the web app's, byte for byte", {
+  expect_shared_file("inst/mcp_tools.json", "tests/fixtures/mcp-tools.json")
+})
+
 test_that("mcp_tools.json is the list the web app's source makes now", {
   path <- package_file("mcp_tools.json")
   expect_identical(cellucid_rendered_by_web("scripts/generate-action-catalog.mjs", "renderMcpTools"),
                    readChar(path, file.size(path), useBytes = TRUE),
-                   info = "Run node scripts/generate-action-catalog.mjs in the web app.")
+                   info = paste0("Run `", cellucid_sync_shared_files, "` in the web repository (cellucid)."))
 })
 
 test_that("mcp_tools.json is the web connector's list for this package's catalog", {
-  path <- package_file("mcp_tools.json")
-  expect_identical(cellucid_file_sha256(path), .mcp_tools_sha256,
-                   info = "regenerate it: node scripts/generate-action-catalog.mjs in the web repository; pin the digest it prints")
   document <- cellucid:::.mcp_tools_document()
   expect_identical(document$catalogDigest, cellucid_file_sha256(package_file("action_catalog.json")))
   catalog <- jsonlite::read_json(package_file("action_catalog.json"), simplifyVector = FALSE)
@@ -257,12 +257,8 @@ test_that("mcp_tools.json is the web connector's list for this package's catalog
   for (name in gsub("`", "", used)) expect_true(name %in% names, info = name)
 })
 
-test_that("the tools document is cellucid-python's, byte for byte", {
-  expect_identical(cellucid_file_sha256(cellucid_sibling_file("cellucid-python", "src", "cellucid", "mcp_tools.json")), .mcp_tools_sha256)
-})
-
 test_that("the local instructions name the R calls that bring an agent's work back, and they exist", {
-  # A local agent told the person to run a function that does not exist (live-8 L26-6).
+  # An agent repeats these calls to the person: one naming a function that does not exist is a dead end.
   text <- cellucid:::.mcp_tools_document()$instructions
   for (call in c("plan <- cellucid_apply_session(object, cellucid_request_session(viewer))", "cellucid_apply_plan(plan)")) {
     expect_true(grepl(call, text, fixed = TRUE), info = call)
@@ -281,11 +277,10 @@ test_that("a tools document made from another catalog is refused by name", {
 })
 
 test_that("the shared local agents fixture is cellucid-python's, byte for byte", {
-  expect_identical(cellucid_file_sha256(cellucid_sibling_file("cellucid-python", "tests", "fixtures", "local_agents.json")), .local_agents_sha256)
+  expect_shared_file("tests/testthat/fixtures/local_agents.json", "tests/fixtures/local_agents.json", repository = "cellucid-python")
 })
 
 test_that("the shared local agents fixture is this package's behavior", {
-  expect_pinned_fixture("local_agents.json", .local_agents_sha256)
   fixture <- agents_fixture()
   expect_identical(fixture$server$name, cellucid:::.mcp_server_name)
   expect_identical(fixture$server$title, cellucid:::.mcp_server_title)
@@ -818,11 +813,10 @@ mcp_expression <- function(arguments = "") {
 # Every wait ends on what it waits for or on the server ending (mcp_next()
 # fails at once, with its stderr). Starting and ending the server are waited
 # for on those events alone, never on a clock: they are R's start and
-# package load, and its teardown, as long as the computer makes them (an
-# antivirus starved by CPU load stretched a start past a minute on a
-# developer's Mac), and the server answers or ends either way. The other
-# waits are bounded by what the test sends and the fake page answers; their
-# deadline only turns a hang into a failure.
+# package load, and its teardown, as long as the computer makes them (under
+# load a start can take more than a minute), and the server answers or ends
+# either way. The other waits are bounded by what the test sends and the fake
+# page answers; their deadline only turns a hang into a failure.
 mcp_client <- function(command = file.path(R.home("bin"), "Rscript"), args = c("--vanilla", "-e", mcp_expression()), env = character()) {
   testthat::skip_if_not_installed("processx")
   client <- new.env()
@@ -990,7 +984,7 @@ test_that("an unknown protocol version is answered with the newest, and a last l
 
 test_that("the tool list is the same whatever the page does, and is never said to change", {
   # The person's settings are told to the agent after its tool results, never
-  # in its tool list (L26-9): a list change makes the app rewrite its cached
+  # in its tool list: a list change makes the app rewrite its cached
   # prompt and drop the earlier reasoning. So the list is the generated one
   # before a page opens, the same once a page (whatever its settings) took the
   # channel, reloaded or was replaced, and notifications/tools/list_changed is
@@ -1272,7 +1266,7 @@ test_that("cellucid_mcp() refuses open with viewer, and a bad argument, by name"
 test_that("cellucid-python's cellucid mcp drives an R viewer through its endpoint", {
   python <- require_python(
     "import mcp.server.lowlevel.server, cellucid.mcp, cellucid._agent_link",
-    c("CELLUCID_MCP_PYTHON", "CELLUCID_PYTHON"), "cellucid mcp (cellucid[mcp], cellucid-python of the matching commit)"
+    c("CELLUCID_MCP_PYTHON", "CELLUCID_PYTHON"), "cellucid mcp (cellucid[mcp], the current cellucid-python)"
   )
   testthat::skip_if_not_installed("processx")
   local_agents_dir()

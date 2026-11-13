@@ -2,37 +2,34 @@
 # (cellucid-python's tests/test_history_model.py, case for case).
 #
 # inst/history_model.schema.json is the web app's historyModelDocument
-# (app/history/model.js) byte for byte, pinned at the digest the web app and
-# cellucid-python pin. R/history-model-generated.R is written from it by
+# (app/history/model.js) byte for byte: its home is the web repository's
+# tests/fixtures/history-model.schema.json, and the test compares the two
+# files. R/history-model-generated.R is written from it by
 # tools/generate-history-model.R and must be current; the reading model
 # (R/history.R, the session, the apply plan) exposes every field of every
 # record the schema names; the names rule and the constants are the schema's.
 
-# The digest of history_model.schema.json; the web app and cellucid-python pin the same one.
-.history_model_sha256 <- "0896116c1e791e370b7247d61e734bc22f96047f5d1ed49a39738cf4f8a5333c"
+# What to run once the schema is the web app's again: the model's R file is
+# written from it.
+.generate_history_model <- ", then `Rscript tools/generate-history-model.R` here"
 
 schema_path <- function() file.path(cellucid_repository_root(), "inst", "history_model.schema.json")
 history_schema <- function() jsonlite::read_json(schema_path(), simplifyVector = FALSE)
 
-test_that("the schema is pinned, the web app's and cellucid-python's", {
-  expect_identical(cellucid_file_sha256(schema_path()), .history_model_sha256)
-  for (copy in list(c("cellucid", "tests", "fixtures", "history-model.schema.json"), c("cellucid-python", "src", "cellucid", "history_model.schema.json"))) {
-    path <- do.call(cellucid_sibling_file, as.list(copy))
-    expect_identical(cellucid_file_sha256(path), .history_model_sha256, info = path)
-  }
+test_that("the schema is the web app's, byte for byte", {
+  expect_shared_file("inst/history_model.schema.json", "tests/fixtures/history-model.schema.json", then = .generate_history_model)
 })
 
 test_that("the schema is the model the web app's source makes now", {
   # Against app/history/model.js itself, not only the web app's committed
-  # copy: a model changed (a domain added) without regenerating the three
-  # copies fails here, as it fails the web suite.
+  # file: a model changed (a domain added) without writing the copies again
+  # fails here, as it fails the web suite.
   schema <- readChar(schema_path(), file.size(schema_path()), useBytes = TRUE)
   expect_identical(cellucid_rendered_by_web("scripts/generate-history-model.mjs", "renderHistoryModel"), schema,
-                   info = "Run node scripts/generate-history-model.mjs in the web app, then Rscript tools/generate-history-model.R here.")
+                   info = paste0("Run `", cellucid_sync_shared_files, "` in the web repository (cellucid)", .generate_history_model, "."))
 })
 
 test_that("the generated model is current", {
-  expect_identical(cellucid:::.history_model_sha256, .history_model_sha256)
   # The generator is in the checkout only (.Rbuildignore).
   skip_if_not(cellucid_is_source_checkout(), "the generator is in the checkout only")
   generator <- new.env()

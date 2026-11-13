@@ -1,9 +1,10 @@
 # A notebook cell run again replaces its output: the viewer cellucid_view()
 # showed in the cell's earlier run, and no other cell shows, is stopped (its
 # object's matrices and chunk cache released), as cellucid-python stops the
-# widget a re-run cell replaced (round-2 audit MB-9). Where no cell id is
-# known (a terminal, a console, a front end that sends none), showing a
-# dataset again stops the earlier viewer of the same dataset id, and says so.
+# widget a re-run cell replaced. Where no cell id is known (a terminal, a
+# console, a front end that sends none), showing a dataset again stops the
+# earlier viewer of the same dataset id, and says so. Without this, every
+# re-run of a cell would keep one more viewer, and its object, alive.
 
 fake_viewer <- function(dataset_id) {
   viewer <- new.env(parent = emptyenv())

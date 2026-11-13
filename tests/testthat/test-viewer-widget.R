@@ -265,14 +265,13 @@ test_that("the widget address is exact", {
   expect_identical(cellucid:::.validate_widget_source_url("https://cellucid.example.org/app"), "https://cellucid.example.org/app")
 })
 
-# The widget's front end, byte for byte the Python package's: pinned here and
-# in cellucid-python's tests/test_notebook_widget_contract.py.
-.widget_js_sha256 <- "75258ef90ac240b3902dded04695a7b51efbd7755606076d598b6a64c49a466b"
-.widget_css_sha256 <- "3b9acad3ebc04ece34acf580446a72ed7f73f3497b747539a11bc33fe281d82b"
-
+# The widget's front end, byte for byte the Python package's (its home:
+# cellucid-python's src/cellucid/jupyter/static/).
 test_that("the widget's front end is the Python package's, byte for byte", {
-  expect_identical(cellucid_file_sha256(system.file("widget", "widget.js", package = "cellucid")), .widget_js_sha256)
-  expect_identical(cellucid_file_sha256(system.file("widget", "widget.css", package = "cellucid")), .widget_css_sha256)
+  for (name in c("widget.js", "widget.css")) {
+    expect_shared_file(file.path("inst", "widget", name), file.path("src", "cellucid", "jupyter", "static", name),
+                       repository = "cellucid-python")
+  }
 })
 
 test_that("in a Jupyter notebook no server is started that the kernel could never run", {

@@ -123,7 +123,7 @@ test_that("a multimodal object records each counts modality's totals", {
                "With several modalities")
 })
 
-test_that("a column over the source's gene panel is recorded as a source panel (F154)", {
+test_that("a column over the source's gene panel is recorded as a source panel", {
   # The built-in atlases' totals cover their 8,192-gene integration panels:
   # more genes than are stored, not the whole transcriptome.
   x <- total_counts_matrix()

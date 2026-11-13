@@ -45,8 +45,9 @@
 # The prefix sizes counted, ascending: n stepped down by 3/4 (each level
 # floor(previous * 3 / 4), exact in doubles below 2^51) to 1. n itself is not
 # a level, and a level the rounding repeats is kept once. The factor is
-# measured (cellucid-python's LEVEL_RATIO): a prefix read up to the next
-# level fetches at most 1.01x its exact bytes, for 0.09-0.27% of X.
+# cellucid-python's LEVEL_RATIO: a prefix read up to the next level fetches
+# barely more than its exact bytes, and the levels take a fraction of a
+# percent of X (measured: 09_cellucid_ready_anndata_specification.md).
 .prefix_levels <- function(n) {
   levels <- numeric(0)
   level <- as.double(n)

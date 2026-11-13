@@ -68,7 +68,8 @@
 # BPCells writes each block into memory as its own compressed arrays
 # (write_matrix_memory(), values as doubles), read as they are: its
 # dgCMatrix conversion builds the matrix through Matrix::sparseMatrix(),
-# which took two thirds of a pass (44M values: 2.2 s against 0.7 s).
+# which takes most of a pass's time (measured:
+# r_package/h_developer_docs/01_codebase_architecture.md).
 .backed_blocks <- function(matrix, rows = NULL) {
   dims <- dim(matrix)
   by_rows <- .backed_by_rows(matrix)
@@ -120,9 +121,9 @@
 # refuses them in a matrix held in memory: read in one piece (read_block()),
 # as the backend's sparse form when it is sparse, then converted. Not
 # DelayedArray's own coercion to a dgCMatrix: up to Bioconductor 3.18
-# (DelayedArray 0.20 to 0.28, R 4.1 to 4.3) it went through dense blocks and
-# which(block != 0), which drops NA and NaN, so a missing value was written
-# as a zero.
+# (DelayedArray 0.20 to 0.28, R 4.1 to 4.3) it goes through dense blocks and
+# which(block != 0), which drops NA and NaN, so a missing value would be
+# written as a zero.
 # `transpose`: the block's transpose, made in memory from the dgCMatrix read.
 .delayed_block_dgcmatrix <- function(block, transpose = FALSE) {
   .without_omp_pause_warning({
@@ -160,7 +161,7 @@
 # MatrixGenerics::rowAnyNAs(useNames = NA), which matrixStats 1.x, the one
 # CRAN serves those R versions, refuses ("Argument 'useNames' must be either
 # TRUE or FALSE"), so cellucid_prepare() of a cells x genes DelayedArray
-# failed there (CI run 43106603588).
+# would fail there.
 .delayed_untransposed <- function(matrix) {
   seed <- matrix@seed
   if (!methods::is(seed, "DelayedAperm") || !identical(as.integer(seed@perm), c(2L, 1L))) return(NULL)

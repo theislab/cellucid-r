@@ -882,7 +882,7 @@ test_that("what a killed writer left is removed by the next one", {
   expect_false(cellucid:::.native_process_alive(dead))
 })
 
-test_that("obs_colors writes Scanpy's colors of categorical columns, and is checked (F148)", {
+test_that("obs_colors writes Scanpy's colors of categorical columns, and is checked", {
   skip_if_not_installed("Matrix")
   # cluster: a factor of levels c, b, a; batch: text that repeats, a categorical
   # of x, y; barcode: unique text, a string array.
@@ -914,7 +914,7 @@ test_that("obs_colors writes Scanpy's colors of categorical columns, and is chec
   }
 })
 
-test_that("descriptive text is written trimmed, an identifier still refused for a space at either end (R9U-9)", {
+test_that("descriptive text is written trimmed, an identifier still refused for a space at either end", {
   skip_if_not_installed("Matrix")
   # A space typed at either end of a name, description, citation text or
   # source name is removed, as the web app reads such text and

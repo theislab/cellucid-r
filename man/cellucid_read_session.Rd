@@ -67,8 +67,8 @@ share and the file stores once, is joined once and its name never trusted; a
 part that names itself through others, and a value whose text would pass
 2^29 - 24 characters, are refused before anything is expanded), every record
 against the history model
-(\code{inst/history_model.schema.json}, the web app's, pinned by digest in
-the web app, cellucid-python and this package), every tracker's tree whole
+(\code{inst/history_model.schema.json}, byte for byte the web app's and
+cellucid-python's), every tracker's tree whole
 (one root, parents and children that agree, branches that are lines, groups
 that are runs of consecutive steps holding whole turns, the head on its
 active branch), what the share left out absent, the values the head shows

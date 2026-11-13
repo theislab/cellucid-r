@@ -19,9 +19,9 @@
 # python3) with cellucid and anndata importable (require_python(),
 # helper-objects.R): skipped on CRAN and where there is none, an error where
 # CELLUCID_PYTHON names one without them. The check imports what
-# python/served_store.py imports, so a cellucid-python of another commit
-# (CI installs the one R-CMD-check.yaml pins as CELLUCID_PYTHON_COMMIT) is
-# named as such, not met halfway through a test.
+# python/served_store.py imports, so a cellucid-python that lacks them (CI
+# installs cellucid-python's main, R-CMD-check.yaml's CELLUCID_PYTHON_BRANCH)
+# is named as such, not met halfway through a test.
 
 require_served_python <- function() {
   require_python(
@@ -30,7 +30,7 @@ require_served_python <- function() {
       "from cellucid._served_store import SERVED_ENTRY_CHUNK_ELEMENTS, PriorityStore;",
       "from cellucid.prepare_data._store import CELL_CHUNK_ELEMENTS, WHOLE_CHUNK_ELEMENTS"
     ),
-    "CELLUCID_PYTHON", "anndata and the served store of cellucid-python's matching commit"
+    "CELLUCID_PYTHON", "anndata and the served store of the current cellucid-python"
   )
 }
 

@@ -148,8 +148,15 @@ served_files <- function(folder) {
 # chunks for loopback (served_entries()), and every array the same dtype,
 # shape and values -- read by this package's own test reader, and by
 # zarr-python when one is found (compare_stores.py). `served` is the memory
-# store, or a folder of the bytes its server answered with.
+# store, or a folder of the bytes its server answered with. A file that calls
+# it ends with expect_zarr_python_compared(), which says so when zarr-python
+# read none of them.
+same_arrays <- new.env(parent = emptyenv())
+same_arrays$stores <- 0L
+same_arrays$by_zarr_python <- 0L
+
 expect_same_arrays <- function(folder, served) {
+  same_arrays$stores <- same_arrays$stores + 1L
   if (is.environment(served)) served <- dump_store(served)
   testthat::expect_setequal(list.files(served, recursive = TRUE, all.files = TRUE), served_files(folder))
   testthat::expect_identical(metadata_without_codecs(served), served_metadata(folder))
@@ -171,8 +178,29 @@ expect_same_arrays <- function(folder, served) {
     ))
     testthat::expect_identical(attr(output, "status"), NULL, info = paste(output, collapse = "\n"))
     testthat::expect_identical(output, paste("ok", length(arrays)))
+    same_arrays$by_zarr_python <- same_arrays$by_zarr_python + 1L
   }
   invisible(served)
+}
+
+# The last test of a file that calls expect_same_arrays(): zarr-python read
+# every pair of stores the file compared. Without a Python that has
+# zarr-python 3 those comparisons were left out, and this is the skip that
+# says so (on CRAN they never run).
+expect_zarr_python_compared <- function() {
+  stores <- same_arrays$stores
+  read <- same_arrays$by_zarr_python
+  same_arrays$stores <- 0L
+  same_arrays$by_zarr_python <- 0L
+  testthat::skip_on_cran()
+  if (is.null(zarr_python())) {
+    testthat::skip(paste0(
+      "no Python with zarr-python 3 (set CELLUCID_ANNDATA_PYTHON): zarr-python read none of the ", stores,
+      " pairs of stores this file compared"
+    ))
+  }
+  testthat::expect_gt(stores, 0L)
+  testthat::expect_identical(read, stores)
 }
 
 # --- The Python reference implementations ------------------------------------
@@ -227,12 +255,16 @@ optional_python <- function(check, variables, needs) {
   python
 }
 
-# A Python with zarr-python 3, for expect_same_arrays().
+# A Python with zarr-python 3, for expect_same_arrays(): looked for once a
+# run of the suite (each look starts an interpreter).
 zarr_python <- function() {
-  optional_python(
-    "import zarr, sys; sys.exit(int(zarr.__version__.split('.')[0]) < 3)",
-    c("CELLUCID_ANNDATA_PYTHON", "CELLUCID_PYTHON"), "zarr-python 3"
-  )
+  if (is.null(same_arrays$python)) {
+    same_arrays$python <- list(optional_python(
+      "import zarr, sys; sys.exit(int(zarr.__version__.split('.')[0]) < 3)",
+      c("CELLUCID_ANNDATA_PYTHON", "CELLUCID_PYTHON"), "zarr-python 3"
+    ))
+  }
+  same_arrays$python[[1L]]
 }
 
 memory_store_of <- function(components, cache_bytes = 268435456) {

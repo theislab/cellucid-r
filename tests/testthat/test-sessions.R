@@ -1,10 +1,11 @@
-# Session format 4 (History v2) in R: the golden history read exactly, and
+# Session format 4 in R: the golden history read exactly, and
 # applied -- cellucid-python's tests/test_sessions.py, case for case.
 #
 # The shared golden fixture (fixtures/history_golden, written by the web
 # repository's scripts/generate-history-golden.mjs with the history model's
-# own constructors and pinned by digest in the web app, cellucid-python and
-# cellucid-r) holds every kind of record the model has: trackers (a replay,
+# own constructors; its home is the web repository's tests/fixtures/, and
+# cellucid-python and cellucid-r each hold a copy the tests compare with it
+# byte for byte) holds every kind of record the model has: trackers (a replay,
 # one removed, one paused), branches (a nested fork, a locked and an archived
 # one), turns (a notebook's, an agent's with its summary), a group, a squashed
 # step of what changed while recording was paused, notes, a bookmark, a deleted
@@ -17,12 +18,8 @@
 
 golden_path <- function(name = "history_golden.cellucid-session") testthat::test_path("fixtures", "history_golden", name)
 golden_expected <- function() jsonlite::read_json(golden_path("history_golden.expected.json"), simplifyVector = FALSE)
-# The golden files' digests; the web app (tests/history-golden-fixture.test.mjs) and cellucid-python pin the same.
-.golden_sha256 <- c(
-  "history_golden.cellucid-session" = "9711bbc4dfd19fd91809a2ab3967cab54b6982c2a3907c73432200e72414ca4a",
-  "history_golden.expected.json" = "8684353157ec936017b777c395e1d60342dcd4f393ef2a0648fe4a7891a67c34",
-  "history_golden_state.cellucid-session" = "f9f0a6025679dacb91cbd00b0abd1cd6380ab1e829fa9ea529cbc59c1801e3dd"
-)
+# The golden session's SHA-256, which names the file in a session, a plan and an apply record.
+golden_sha256 <- function() cellucid_file_sha256(golden_path())
 golden <- function() cellucid_read_session(golden_path())
 
 # The dataset the golden session was saved on, as expected.json describes it:
@@ -63,20 +60,22 @@ as_json_value <- function(value) jsonlite::parse_json(jsonlite::toJSON(value, au
 # The golden fixture, read
 # =============================================================================
 
-test_that("the golden files are pinned, the web app's and cellucid-python's", {
-  for (name in names(.golden_sha256)) expect_identical(cellucid_file_sha256(golden_path(name)), .golden_sha256[[name]], info = name)
-  expect_identical(golden_expected()$sha256, .golden_sha256[["history_golden.cellucid-session"]])
-  expect_identical(cellucid_file_sha256(system.file("extdata", "history_golden.cellucid-session", package = "cellucid")),
-                   .golden_sha256[["history_golden.cellucid-session"]])
-  copies <- list(
-    list(c("cellucid", "tests", "fixtures", "history-golden.cellucid-session"), c("cellucid", "tests", "fixtures", "history-golden.expected.json"),
-         c("cellucid", "tests", "fixtures", "history-golden-state.cellucid-session")),
-    lapply(names(.golden_sha256), function(name) c("cellucid-python", "tests", "fixtures", "history_golden", name))
+test_that("the golden files are the web app's, byte for byte", {
+  golden_files <- c(
+    "history_golden.cellucid-session" = "history-golden.cellucid-session",
+    "history_golden.expected.json" = "history-golden.expected.json",
+    "history_golden_state.cellucid-session" = "history-golden-state.cellucid-session"
   )
-  for (pair in copies) {
-    paths <- vapply(pair, function(copy) do.call(cellucid_sibling_file, as.list(copy)), "")
-    expect_identical(unname(vapply(paths, cellucid_file_sha256, "")), unname(.golden_sha256), info = paths[[1L]])
+  for (name in names(golden_files)) {
+    expect_shared_file(file.path("tests", "testthat", "fixtures", "history_golden", name), file.path("tests", "fixtures", golden_files[[name]]))
   }
+  # The session the help pages' examples read is the golden one.
+  expect_shared_file("inst/extdata/history_golden.cellucid-session", "tests/fixtures/history-golden.cellucid-session")
+})
+
+test_that("the expected reading and the help pages' example name the golden session", {
+  expect_identical(golden_expected()$sha256, golden_sha256())
+  expect_identical(cellucid_file_sha256(system.file("extdata", "history_golden.cellucid-session", package = "cellucid")), golden_sha256())
 })
 
 test_that("the web app's current state only reads as one state", {
@@ -119,7 +118,7 @@ test_that("the header reads as written", {
   # Page chrome outside the history (the pressed selection tool): read, never applied.
   expect_identical(session$chrome, expected$chrome)
   expect_identical(session$active_tracker, expected$active_tracker)
-  expect_identical(session$sha256, .golden_sha256[["history_golden.cellucid-session"]])
+  expect_identical(session$sha256, golden_sha256())
   expect_identical(session$dataset_fingerprint$cellOrder$digest, golden_expected()$dataset$cell_order_digest)
   expect_identical(session$source, list(kind = "sample", dataset = golden_expected()$dataset$id))
   expect_null(session$cells)
@@ -350,7 +349,7 @@ test_that("the apply sequence gives the shared plans", {
     plan <- cellucid_apply_session(object, session, tracker = entry$tracker, branch = entry$branch, step = entry$step)
     expect_s3_class(plan, "cellucid_apply_plan")
     expect_identical(list(plan$tracker, plan$branch, plan$step), unname(entry$expect))
-    expect_identical(plan$session_sha256, .golden_sha256[["history_golden.cellucid-session"]])
+    expect_identical(plan$session_sha256, golden_sha256())
     expect_identical(as_json_value(lapply(plan$requires, as.list)), entry$requires)
     expect_identical(as_json_value(plan_rows(plan)), entry$rows, info = entry$name)
     expect_identical(names(plan$rows), c("kind", "domain", "name", "column", "from", "cells", "status", "note"))
@@ -408,7 +407,7 @@ test_that("keep_session keeps the file to rebuild the history", {
   provenance <- attr(object, "cellucid_apply_report")$provenance
   rebuilt <- tempfile(fileext = ".cellucid-session")
   writeBin(jsonlite::base64_dec(provenance$session), rebuilt)
-  expect_identical(cellucid_file_sha256(rebuilt), .golden_sha256[["history_golden.cellucid-session"]])
+  expect_identical(cellucid_file_sha256(rebuilt), golden_sha256())
   expect_identical(cellucid_steps(cellucid_tracker(cellucid_read_session(rebuilt)))$id, cellucid_steps(cellucid_tracker(golden()))$id)
 })
 
@@ -448,10 +447,17 @@ test_that("the cells must be the session's, in its order", {
   moved <- object
   SingleCellExperiment::reducedDim(moved, "umap") <- SingleCellExperiment::reducedDim(moved, "umap") + 1
   expect_error(cellucid_apply_session(moved, golden()), "cell-order digest of obsm['X_umap'] (columns 0, 1)", fixed = TRUE)
-  # The digest is the web app's on every cell count, 32-bit words exact.
-  values <- matrix(c(0, -0, NaN, 1e30, -1.5, 3), ncol = 2L)
-  expect_identical(cellucid:::.apply_cell_order_digest(values), cellucid:::.apply_cell_order_digest(values))
-  expect_match(cellucid:::.apply_cell_order_digest(values[, 1L, drop = FALSE], c(7, 2^32 - 1, 0)), "^[0-9a-f]{16}$")
+  # The digest is the web app's, 32-bit words exact: the reference values of
+  # the web app's own test of it (session-cell-order-digest-contract.test.mjs),
+  # over a zero, a negative zero, a NaN and a value float32 rounds.
+  values <- matrix(c(1.5, -2.25, 3, 0, 7, -0, NaN, 1e-30, 5, 0.1, 0.2, 0.3), ncol = 3L, byrow = TRUE)
+  digest <- cellucid:::.apply_cell_order_digest
+  expect_identical(digest(values), "30502b9d6c160185")
+  expect_identical(digest(values, c(0, 1, 2, 3)), "30502b9d6c160185")
+  expect_identical(digest(values, c(10, 4, 2, 9)), "3ffd095e4f30cb78")
+  expect_identical(digest(matrix(as.vector(t(values))[1:8], ncol = 2L, byrow = TRUE)), "296f85d2505a0788")
+  expect_identical(digest(matrix(as.vector(t(values))[1:4], ncol = 1L), c(5, 6, 7, 8)), "ea497757a7c4d82b")
+  expect_match(digest(values[, 1L, drop = FALSE], c(7, 2^32 - 1, 0, 1)), "^[0-9a-f]{16}$")
 })
 
 test_that("the dataset must be the session's", {
@@ -638,7 +644,7 @@ test_that("user fields apply by kind", {
 test_that("a user category field's palette is read and checked", {
   skip_without_sce()
   # The colors a field made from highlight pages opens with (its pages'), one
-  # #rrggbb a category, or null (F124).
+  # #rrggbb a category, or null.
   made <- session_user_category("user_cat_1", "annotation", c("a", "b"), c(0, 1, 255, 0, 1, 0))
   made$palette <- list("#dc2626", "#16a34a")
   plan <- small_apply(small_session(list(set = list(`field-overlays` = session_overlays(user_fields = list(made))))))
@@ -655,7 +661,7 @@ test_that("a user category field's palette is read and checked", {
 
 test_that("a field of the intersections of 41 pages applies", {
   skip_without_sce()
-  # Each intersection combines any number of pages (F269); the session keys
+  # Each intersection combines any number of pages; the session keys
   # its label by its pages' positions ("0+1+...+40"), a record of labels; the
   # column is its codes.
   pages <- lapply(0:40, function(p) list(pageId = paste0("page_", p), label = paste0("P", p)))
@@ -677,10 +683,10 @@ test_that("a written column's colors are the ones it is shown in", {
   skip_without_sce()
   # A field's palette goes with its column as Scanpy keeps colors,
   # uns['<key>_colors'] (metadata(x) of a SingleCellExperiment), one a
-  # category in the column's order -- every category, used or not (F139). A
-  # field without a palette opens in Cellucid's own category colors, and is
-  # written with them (F239); a column of no categories (a highlight) takes
-  # no colors: those under its name described another column.
+  # category in the column's order -- every category, used or not. A field
+  # without a palette opens in Cellucid's own category colors, and is written
+  # with them; a column of no categories (a highlight) takes no colors: those
+  # under its name describe another column.
   made <- session_user_category("user_cat_1", "annotation", c("a", "b", "unused"), c(0, 1, 255, 0, 1, 0))
   made$palette <- list("#dc2626", "#16a34a", "#2563eb")
   plain <- session_user_category("user_cat_2", "plain", "x", rep(0, 6))
@@ -772,7 +778,7 @@ views_value <- function(focus, count) {
 test_that("a field's colors are the ones the view in focus shows", {
   skip_without_sce()
   # The colors a person or an agent gave a field's categories reach
-  # <key>_colors (L26-7/8): in the view in focus at the step, each category
+  # <key>_colors: in the view in focus at the step, each category
   # recolored there, the rest in the colors it opens with -- its palette,
   # else Cellucid's own colors by position. Another view's colors stay how
   # the data was shown.
@@ -792,7 +798,7 @@ test_that("a field's colors are the ones the view in focus shows", {
   meta <- S4Vectors::metadata(out)
   expect_identical(meta$stage_colors, c("#808080", "#0077c8", "#008080"))
   expect_identical(meta$fate_colors, c("#dc2626", "#ffd700"))
-  # The dataset column recolored in the view in focus (RCC-1).
+  # The dataset column recolored in the view in focus.
   expect_identical(meta$cell_type_colors, c("#000000", "#0077c8", "#ad50e0"))
   rows <- attr(out, "cellucid_apply_report")$plan$rows
   colors <- rows[rows$domain == "colors", ]
@@ -833,7 +839,7 @@ dataset_recolor <- function(key, ...) {
 test_that("a recolored dataset column is written with the colors it is shown in", {
   skip_without_sce()
   # A column that came with the dataset, recolored in the view in focus,
-  # takes the colors it is shown in (RCC-1): the categories recolored, the
+  # takes the colors it is shown in: the categories recolored, the
   # rest in the colors it opens with -- the colors held for it, as drawn
   # (#rgb widened, alpha dropped), else Cellucid's own by position. Applied
   # again: unchanged. A column it cannot be written to says why (a column the
@@ -941,7 +947,7 @@ test_that("colors the session holds are checked", {
 test_that("a session saved under the id an object was shown under applies when named", {
   skip_without_sce()
   # A viewer given dataset_id = serves the object under that id, and its
-  # session is saved under it (L26-7): naming it applies the session to the
+  # session is saved under it: naming it applies the session to the
   # object, which declares its own id; another id is refused.
   record <- small_fingerprint()
   record$datasetId <- "pancreas-notebook"
@@ -974,7 +980,7 @@ test_that("a viewer given another dataset id takes its own session back", {
   # cellucid_view(object, dataset_id = ) serves the object under that id, and
   # the viewer saves its session under it; applied back through the viewer's
   # request, the session goes to the object it served, which declares its own
-  # id (L26-7). An object declaring another id is refused, as before.
+  # id. An object declaring another id is refused.
   data <- tiny_sce()
   S4Vectors::metadata(data)$cellucid <- list(id = "pancreas")
   viewer <- cellucid:::.start_viewer(

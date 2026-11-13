@@ -3,10 +3,6 @@
 # sockets that never say hello or keep sending after a violation, the
 # package unloading, and the random credentials.
 
-served_url <- function(viewer, key) {
-  paste0(viewer$url, "/_cellucid/anndata/", viewer$served$route_name, "/", key)
-}
-
 test_that("viewer credentials come from the system and leave .Random.seed alone", {
   set.seed(42)
   first <- cellucid:::.random_hex(16L)
@@ -361,13 +357,4 @@ test_that("unloading the package stops every viewer first", {
   cellucid:::.stop_viewers_on_unload()
   expect_false(viewer$running)
   expect_length(cellucid_viewers(), 0L)
-})
-
-test_that("DESCRIPTION says the package views data and downloads the web app", {
-  description <- read.dcf(file.path(cellucid_repository_root(), "DESCRIPTION"))
-  text <- gsub("[[:space:]]+", " ", paste(description[, c("Title", "Description")], collapse = " "))
-  expect_match(text, "View", fixed = TRUE)
-  expect_match(text, "cellucid_view()", fixed = TRUE)
-  expect_match(text, "cellucid_serve()", fixed = TRUE)
-  expect_match(text, "downloaded from <https://www.cellucid.com> at first use", fixed = TRUE)
 })

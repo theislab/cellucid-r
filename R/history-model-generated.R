@@ -3,8 +3,6 @@
 # after the model changes; tests/testthat/test-history-model.R fails while this
 # file is stale.
 
-# The SHA-256 of the history_model.schema.json this file was written from.
-.history_model_sha256 <- "0896116c1e791e370b7247d61e734bc22f96047f5d1ed49a39738cf4f8a5333c"
 .history_model_version <- 2L
 # Id forms (HISTORY_ID_PATTERNS) and a value's content hash.
 .history_id_patterns <- c(branch = "^b(0|[1-9][0-9]*)$", group = "^g(0|[1-9][0-9]*)$", journal = "^j(0|[1-9][0-9]*)$", note = "^n(0|[1-9][0-9]*)$", step = "^s(0|[1-9][0-9]*)$", tracker = "^t-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")

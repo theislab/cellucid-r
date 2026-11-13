@@ -346,8 +346,8 @@
 
 # Downloads in flight at once, as web_cache.py: the six connections per host a
 # browser opens to a site, so the source sees no more than a browser loading
-# the app asks of it. One file at a time took over six minutes for the 1,209
-# files of a build from www.cellucid.com (2026-11-11).
+# the app asks of it. One file at a time, a build of over a thousand files
+# takes minutes (measured: 26_decisions_served_store_and_widgets.md).
 .concurrent_downloads <- 6L
 
 # Several files of the source at once, each read whole and checked as

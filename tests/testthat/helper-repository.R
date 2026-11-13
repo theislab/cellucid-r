@@ -10,10 +10,10 @@
 #
 # Resolving the root wrongly is not a visible failure: it makes every
 # path-based assertion in test-current-contract.R disappear instead. Under
-# R CMD check the root used to resolve to the .Rcheck directory, where none of
-# DESCRIPTION, NEWS.md, README.md, NAMESPACE, man/ or R/ exists, and forty-two
-# assertions about the release identity stopped running while the suite stayed
-# green. An unrecognized layout is therefore an error here, never a quiet skip.
+# R CMD check a root taken to be the .Rcheck directory holds none of
+# DESCRIPTION, NEWS.md, README.md, NAMESPACE, man/ or R/, and every assertion
+# about the release identity would stop running while the suite stays green.
+# An unrecognized layout is therefore an error here, never a quiet skip.
 #
 # The checkout holds every file. The tarball holds only what .Rbuildignore did
 # not strip, so the pages that carry release and continuous-integration policy
@@ -76,7 +76,6 @@ cellucid_required_paths <- function() {
       "vignettes/installation.Rmd", "file", "both",
       ".Rbuildignore", "file", "checkout",
       "CITATION.cff", "file", "checkout",
-      "publishing.md", "file", "checkout",
       "_pkgdown.yml", "file", "checkout",
       "tools/generate-actions.R", "file", "checkout",
       ".github/workflows/R-CMD-check.yaml", "file", "checkout",
@@ -93,35 +92,43 @@ cellucid_required_paths <- function() {
 # The sibling repositories' checkouts: the web app ("cellucid") at
 # CELLUCID_WEB_ROOT (a worktree of it) and cellucid-python at
 # CELLUCID_PYTHON_ROOT when set, else the checkout beside this repository.
-# The sibling-copy tests compare the shared files (catalog, history model,
-# golden history, viewer protocol, MCP tools, cross-writer harness) with them,
-# as the web suite reads this package through CELLUCID_R_ROOT. A named root
-# must be a checkout of that repository. A sibling with no checkout returns
-# NULL, unless CELLUCID_SIBLINGS_REQUIRED is set (this repository's CI checks
-# out both siblings and sets it, also under R CMD check, where the sources sit
-# in <package>.Rcheck and nothing is beside them): then it is an error.
+# The tests compare this package's copy of every shared file with them
+# (expect_shared_file() below), as the web suite reads this package through
+# CELLUCID_R_ROOT. A named folder that is there must be a checkout of that
+# repository. A sibling that is not there (an installed package, a CRAN check,
+# a variable naming a folder that does not exist) returns NULL, unless
+# CELLUCID_REQUIRE_SIBLINGS is 1 (this repository's CI fetches both siblings
+# at main and sets it, also under R CMD check, where the sources sit in
+# <package>.Rcheck and nothing is beside them): then it is an error.
+cellucid_siblings_required <- function() identical(Sys.getenv("CELLUCID_REQUIRE_SIBLINGS", ""), "1")
+
 cellucid_sibling_variable <- function(repository) {
   switch(repository, cellucid = "CELLUCID_WEB_ROOT", `cellucid-python` = "CELLUCID_PYTHON_ROOT",
          stop("No sibling repository is called ", repository, ".", call. = FALSE))
+}
+
+# Where `repository` was looked for and not found, as one sentence.
+cellucid_sibling_not_there <- function(repository) {
+  variable <- cellucid_sibling_variable(repository)
+  named <- Sys.getenv(variable, "")
+  if (nzchar(named)) return(paste0(repository, " is not there: ", variable, " names ", named, ", which does not exist."))
+  paste0(repository, " is not checked out beside this repository (set ", variable, " to name its checkout).")
 }
 
 cellucid_sibling_root <- function(repository) {
   variable <- cellucid_sibling_variable(repository)
   marker <- if (identical(repository, "cellucid")) file.path("assets", "js") else "pyproject.toml"
   named <- Sys.getenv(variable, "")
-  if (nzchar(named)) {
-    if (!file.exists(file.path(named, marker))) stop(variable, " (", named, ") is not a checkout of ", repository, " (it has no ", marker, ").", call. = FALSE)
-    return(named)
-  }
-  root <- file.path(cellucid_repository_root(), "..", repository)
+  root <- if (nzchar(named)) named else file.path(cellucid_repository_root(), "..", repository)
   if (file.exists(file.path(root, marker))) return(root)
-  if (nzchar(Sys.getenv("CELLUCID_SIBLINGS_REQUIRED", ""))) {
-    stop("CELLUCID_SIBLINGS_REQUIRED is set but ", repository, " is not checked out beside this repository (or named by ", variable, ").", call. = FALSE)
+  if (nzchar(named) && file.exists(root)) {
+    stop(variable, " (", named, ") is not a checkout of ", repository, " (it has no ", marker, ").", call. = FALSE)
+  }
+  if (cellucid_siblings_required()) {
+    stop("CELLUCID_REQUIRE_SIBLINGS is 1, and ", cellucid_sibling_not_there(repository), call. = FALSE)
   }
   NULL
 }
-
-cellucid_web_root <- function() cellucid_sibling_root("cellucid")
 
 # A file of a sibling checkout ("cellucid" for the web app, or
 # "cellucid-python"): the test is skipped, saying so, only when that checkout
@@ -129,12 +136,36 @@ cellucid_web_root <- function() cellucid_sibling_root("cellucid")
 # (a shared file renamed or deleted on one side is a divergence, never a skip).
 cellucid_sibling_file <- function(repository, ...) {
   root <- cellucid_sibling_root(repository)
-  if (is.null(root)) {
-    testthat::skip(paste0(repository, " is not checked out beside this repository (", cellucid_sibling_variable(repository), " names it)."))
-  }
+  if (is.null(root)) testthat::skip(cellucid_sibling_not_there(repository))
   path <- file.path(root, ...)
   if (!file.exists(path)) testthat::fail(paste0("The ", repository, " checkout (", root, ") has no ", file.path(...), "."))
   path
+}
+
+# The one command that makes every copy of every shared file agree, run in
+# the web repository: it writes the generated files again and copies every
+# home into the packages.
+cellucid_sync_shared_files <- "node scripts/sync-shared-files.mjs"
+
+# This package's `ours` is byte for byte `repository`'s `theirs` (both named
+# from their repository's root): the web app's file for a file whose home is
+# the web repository, cellucid-python's for one only the two packages share.
+# No digest is written anywhere. Skipped, saying so, without that checkout,
+# unless the siblings are required (cellucid_sibling_file()): so it is a test
+# of its own, never the first expectation of a test that goes on. `then` names
+# what to run after the copies agree again, for a file generated code is
+# written from.
+expect_shared_file <- function(ours, theirs, repository = "cellucid", then = "") {
+  other <- cellucid_sibling_file(repository, theirs)
+  bytes <- function(path) readBin(path, "raw", file.size(path))
+  testthat::expect(
+    identical(bytes(file.path(cellucid_repository_root(), ours)), bytes(other)),
+    paste0(
+      ours, " is not byte for byte ", repository, "'s ", theirs, ". Run `", cellucid_sync_shared_files,
+      "` in the web repository (cellucid): it makes every copy of every shared file agree", then, "."
+    )
+  )
+  invisible(NULL)
 }
 
 # The `node` that runs the web app's code for `purpose`: skipped without Node,
@@ -142,8 +173,8 @@ cellucid_sibling_file <- function(repository, ...) {
 cellucid_node <- function(purpose) {
   node <- Sys.which("node")
   if (nzchar(node)) return(node)
-  if (nzchar(Sys.getenv("CELLUCID_SIBLINGS_REQUIRED", ""))) {
-    stop("CELLUCID_SIBLINGS_REQUIRED is set but Node is not installed: ", purpose, " cannot run.", call. = FALSE)
+  if (cellucid_siblings_required()) {
+    stop("CELLUCID_REQUIRE_SIBLINGS is 1 but Node is not installed: ", purpose, " cannot run.", call. = FALSE)
   }
   testthat::skip(paste0("Node is not installed: ", purpose, " cannot run."))
 }

@@ -94,8 +94,7 @@ test_that("a squashed step that only presented is counted", {
 
 test_that("a share of the cells is written as the web app writes it", {
   # formatShare (cellucid/assets/js/utils/format-units.js): whole from 10%, never 100% short of
-  # every cell; two significant figures below. Before round 9 this said "6%" for 5.5% and the
-  # web app "5.5%" (R9U-3).
+  # every cell; two significant figures below, so 5.5% is "5.5%" here as in the web app, not "6%".
   tracker <- words_tracker()
   root <- words_path(tracker)[1L]
   cases <- list(c(2000, "10%"), c(1100, "5.5%"), c(19999, "99%"), c(3, "0.015%"), c(19900, "99%"))

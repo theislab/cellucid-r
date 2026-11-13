@@ -261,7 +261,7 @@ test_that("an object's record of the cells' totals over all genes keeps its colu
   expect_identical(modalities$components$total_counts, c(RNA = "nCount_RNA"))
 })
 
-test_that("an object's Scanpy colors go with the columns written (F148)", {
+test_that("an object's Scanpy colors go with the columns written", {
   skip_without_seurat()
   object <- pbmc_seurat()
   groups <- sort(unique(as.character(object$groups)))
@@ -300,7 +300,7 @@ test_that("an object's Scanpy colors go with the columns written (F148)", {
   expect_identical(store_array(store, "uns/groups_colors"), rep("#123456", length(groups)))
 })
 
-test_that("a SingleCellExperiment's colors in metadata(x) are written at the MuData root (F148)", {
+test_that("a SingleCellExperiment's colors in metadata(x) are written at the MuData root", {
   skip_without_sce()
   object <- small_sce()
   object@metadata$cellucid <- list(id = "sce", name = "SCE")

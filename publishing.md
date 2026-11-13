@@ -86,7 +86,6 @@ Update these files with the new version number:
 | `NEWS.md` | Add a new section header (e.g., `# cellucid 0.9.6`); headers carry no date (CRAN records the publication day) |
 | `README.md` | The "Active package version" block |
 | `vignettes/installation.Rmd` | Every version mention, including the `packageVersion()` output |
-| `tests/testthat/test-current-contract.R` | The one pinned literal in `expect_identical(version, ...)` |
 
 Every one of those, apart from `DESCRIPTION` itself, is tagged with a
 `CELLUCID_VERSION` marker comment; `grep -rn CELLUCID_VERSION` lists them.
@@ -320,7 +319,7 @@ Common issues and fixes:
 
 The Cellucid preprint citation is not edited here. It is written once, in the
 `preferred-citation` block of `theislab/cellucid`'s `CITATION.cff`; from the
-workspace, `python cellucid-private/scripts/sync_citation.py` copies that block
+workspace, the citation sync script copies that block
 into this repository's `CITATION.cff` and regenerates the citation in
 `README.md` and `inst/CITATION`, and `--check` verifies every repository.
 `tests/testthat/test-citation-contract.R` fails if a copy here drifts.
@@ -354,7 +353,6 @@ R package names cannot contain `-`, so the package itself must stay `cellucid`.
 | `NEWS.md` | New section header added |
 | `README.md` | "Active package version" block |
 | `vignettes/installation.Rmd` | Every version mention |
-| `tests/testthat/test-current-contract.R` | The pinned release literal |
 | `cellucid-python/docs/user_guide/r_package/` | Manual: separate repository, no automated cross-check |
 
 ### GitHub Actions Workflows

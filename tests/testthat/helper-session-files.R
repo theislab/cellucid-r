@@ -1,4 +1,4 @@
-# Session files of format 4 (the History v2 shape), made in the tests.
+# Session files of format 4, made in the tests.
 #
 # The shared golden fixture (fixtures/history_golden) holds every kind of
 # record the history model has; these helpers write files of the same format
@@ -251,7 +251,7 @@ session_unframe <- function(bytes) {
   list(manifest = manifest, chunks = chunks)
 }
 
-# Write a session file of the History v2 shape (every record the model's).
+# Write a session file of format 4 (every record the model's).
 # Each tracker is list(id, name, root = list(domain = value), steps = list(...),
 # head?, branchNames? = list(b1 = "name")); each step list(set = list(domain =
 # value), parent?, branch?, type?, label?, status?, turn?, agent?, host?,

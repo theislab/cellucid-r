@@ -4,11 +4,9 @@
 # tests/testthat/fixtures/subsample_conformance.json is a byte-identical copy
 # of the web app's tests/fixtures/subsample-conformance.json, computed in
 # plain Python by its scripts/generate-subsample-conformance.py independently
-# of every implementation; the web app and cellucid-python pin the same
-# SHA-256. Positions in the fixture are 0-based; the function returns R's
-# 1-based positions.
-
-.subsample_sha256 <- "ee4b8462f66e6e441c2ab9f0948ca26d04451aa48017c38e577e3f13c8f1f48b"
+# of every implementation; the test compares the copy with the web
+# repository's file, as cellucid-python's does. Positions in the fixture are
+# 0-based; the function returns R's 1-based positions.
 
 .subsample_case <- function(case) {
   if (identical(case$method, "uniform")) {
@@ -29,8 +27,11 @@
                            columns = seq_len(case$dimensions), grid_size = case$gridSize)
 }
 
-test_that("the fixture is the pinned one", {
-  expect_pinned_fixture("subsample_conformance.json", .subsample_sha256)
+test_that("the fixture is the web app's, byte for byte", {
+  expect_shared_file("tests/testthat/fixtures/subsample_conformance.json", "tests/fixtures/subsample-conformance.json")
+})
+
+test_that("the fixture is of the version this suite reads", {
   expect_identical(cellucid_read_fixture("subsample_conformance.json")$version, 1L)
 })
 
@@ -50,8 +51,8 @@ test_that("ranks and sizes are the specification's", {
 
 test_that("a number's text is the one JavaScript's String() and Python's repr give, ties to the even digit, on every platform", {
   # Found in exact integer arithmetic (src/number_text.c), not by the C
-  # library's printf, which breaks a tie as each likes: Windows' wrote 2^-25
-  # as "...313", and the fixture's 2^-25 of 50,331,648 cells then came out 2.
+  # library's printf, which breaks a tie as each likes: Windows' writes 2^-25
+  # as "...313", and the fixture's 2^-25 of 50,331,648 cells would come out 2.
   # The texts are node's (JSON.stringify); the same digits a share's
   # subsample size is taken from, and a session value is hashed by.
   text <- function(x) cellucid:::.native_number_text(x)

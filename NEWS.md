@@ -54,7 +54,7 @@ the same version. Stores written by `cellucid_prepare()` and sessions saved
   refused with no way to name either).
 - The identity a Zarr store declares (`uns/cellucid` id and name) is read
   checking every count and length its vlen-utf8 chunk states against the
-  bytes it holds (R9Z-3): four bytes stating 2^31 - 1 strings allocated a
+  bytes it holds: four bytes stating 2^31 - 1 strings allocated a
   character vector that long before anything was read. Such a chunk is
   refused as a damaged store.
 - A viewer stopped with `cellucid_stop()` says **Viewer stopped** on its
@@ -69,8 +69,8 @@ the same version. Stores written by `cellucid_prepare()` and sessions saved
   1,209 files of a build took minutes); the build the cache holds is used as
   before, as cellucid-python now does too.
 - `cellucid_prepare()` refuses a `bit64::integer64` column saying to write
-  identifiers `as.character()` (the viewer reads integers past 2^53 as text,
-  F116) or counts within 2^53 `as.numeric()`, and refuses an element name
+  identifiers `as.character()` (the viewer reads integers past 2^53 as
+  text) or counts within 2^53 `as.numeric()`, and refuses an element name
   longer than 255 bytes in UTF-8, the longest file name every platform takes.
 - `cellucid_apply_session()` takes a logical column's categories as `false`
   and `true`, as the viewer shows them: a label renamed in the viewer is
@@ -152,7 +152,7 @@ the same version. Stores written by `cellucid_prepare()` and sessions saved
   was recorded." A read records no step by nature and warns nothing. Before,
   `request$step` was `NULL` with no reason, whether the change happened or
   not (cellucid-python's `ActionRequest.unrecorded`; the shared viewer
-  protocol fixture re-pinned).
+  protocol fixture says so).
 - `cellucid_dataset_summary()` lists every embedding the viewer's data
   mapping offers, on or off, with its obsm `key`, `columns`, `width`,
   `enabled`, `usable` and `reason`: the names `cellucid_view_embedding_set()`
@@ -293,11 +293,7 @@ the same version. Stores written by `cellucid_prepare()` and sessions saved
   titles and the step names a saved history holds.
 - US spelling everywhere else too: DESCRIPTION, the help, the vignettes and
   the messages said `neighbour graph`, `catalogue`, `labelled` and `centre`
-  in places; now "neighbor", "catalog", "labeled", "center". A new test,
-  `test-spelling.R`, reads every message of `R/`, the help pages, the
-  vignettes, README, DESCRIPTION and this release's section of this file against
-  the British word list the web app and cellucid-python share
-  (`tests/testthat/fixtures/spelling.json`, byte for byte, pinned by digest).
+  in places; now "neighbor", "catalog", "labeled", "center".
 - A refusal the viewer answers when the person stops a dataset's or a saved
   state's loading has the code `canceled` (it was `cancelled`), as the web app
   spells it; `history.branch.cancel` still answers `cancelled`.
@@ -397,6 +393,19 @@ the same version. Stores written by `cellucid_prepare()` and sessions saved
   refused with "This session file holds a value nested more deeply than this
   package reads …" (R 4.4 and later; cellucid-python says the same), not R's
   "evaluation nested too deeply" error.
+- The tests compare each file this package shares with the web app (the
+  action catalog, the MCP tools, the history model, the input formats, the
+  viewer protocol, the conformance fixtures, the category
+  colors, the golden history, the round-trip fixtures) with the web
+  repository's file, and each file it shares with cellucid-python alone (the
+  notebook widget's front end, `local_agents.json`, the transition-drift
+  fixture, the MuData cross-writer harness) with cellucid-python's, byte for
+  byte, through one helper (`expect_shared_file()`). Where a sibling is not
+  checked out (an installed package, a CRAN check) the comparison is skipped
+  and says why; CI fetches both siblings at `main` and sets
+  `CELLUCID_REQUIRE_SIBLINGS=1`, which makes a missing one a failure. A
+  difference names the one command that makes every copy agree
+  (`node scripts/sync-shared-files.mjs` in the web repository).
 
 ## In the web app
 

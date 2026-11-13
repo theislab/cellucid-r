@@ -4,20 +4,22 @@
 # inst/input_formats.json (installed as the package's input_formats.json,
 # which cellucid_view() and cellucid_serve() classify paths with) is a
 # byte-identical copy of the
-# web app's tests/fixtures/input-formats.json (written from
+# web app's tests/fixtures/input-formats.json (its home, written from
 # assets/js/data/input-formats.js) and of cellucid-python's packaged
-# input_formats.json; all three repositories pin the same SHA-256. It names
+# input_formats.json; each package's test compares its copy with the web
+# repository's file. It names
 # every format the viewer opens by its id, the name endings of each layout it
 # arrives in, the container signatures and the folder markers. The id is what
 # a dataset that states none is named after ("<format>_<name>_<structure>")
 # and what a server reports as the store's kind.
 
-.input_formats_sha256 <- "31a4853465dd05ec412f4645f9a9efdfb6a14393f0932b4c26883648ad01f6f9"
-
 registry_path <- function() system.file("input_formats.json", package = "cellucid", mustWork = TRUE)
 
-test_that("the three repositories hold the same pinned input format registry", {
-  expect_identical(cellucid_file_sha256(registry_path()), .input_formats_sha256)
+test_that("the input format registry is the web app's, byte for byte", {
+  expect_shared_file("inst/input_formats.json", "tests/fixtures/input-formats.json")
+})
+
+test_that("the packaged registry names the formats the viewer opens", {
   registry <- jsonlite::fromJSON(registry_path(), simplifyVector = FALSE)
   expect_identical(registry$schema, 1L)
   ids <- vapply(registry$formats, function(entry) entry$id, character(1))
@@ -56,7 +58,7 @@ test_that("a path is classified as the registry and the web app classify it", {
   writeLines("hello", text)
   # One sentence in the three implementations (the web app's openableNamesText,
   # cellucid-python's openable_files_text()): the ending that stands alone,
-  # h5Seurat (refused) left out (R9Y-4).
+  # h5Seurat (refused) left out.
   expected <- "an .h5ad file, a .loom file, an .h5 file, an .h5mu file, an .rds file, an .rda/.rdata file or a .zarr.zip archive"
   expect_identical(cellucid:::.openable_files_text(), expected)
   expect_error(classify(text), paste0(" is not a file Cellucid opens (", expected, ")."), fixed = TRUE)
@@ -129,8 +131,8 @@ test_that("an h5Seurat file is refused in the registry's words before it is serv
 })
 
 test_that("a vlen-utf8 chunk's counts and lengths are checked against its bytes before anything is allocated", {
-  # R9Z-3: four bytes stating 2^31 - 1 strings allocated a character vector
-  # that long before a string was read.
+  # Unchecked, four bytes stating 2^31 - 1 strings would allocate a character
+  # vector that long before a string is read.
   le <- function(value) writeBin(as.integer(value), raw(), size = 4L, endian = "little")
   good <- c(le(2L), le(2L), charToRaw("ab"), le(0L))
   expect_identical(cellucid:::.decode_vlen_utf8(good), c("ab", ""))

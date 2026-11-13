@@ -1,9 +1,9 @@
 # The viewer channel: what this package and the Cellucid viewer it opens say
 # to each other. The web app's data/viewer-protocol.js is the source of truth;
 # its document (the shared fixture tests/testthat/fixtures/viewer_protocol.json,
-# kept byte for byte in the web app and in cellucid-python, SHA-256 pinned in
-# each) is what tests/testthat/test-viewer-protocol.R checks these
-# declarations and the frames made here against.
+# byte for byte the web app's tests/fixtures/viewer-protocol.json and
+# cellucid-python's copy) is what tests/testthat/test-viewer-protocol.R checks
+# these declarations and the frames made here against.
 #
 # One WebSocket per viewer at <server>/_cellucid/ws. The viewer's first frame
 # is hello {type, viewerId, viewerToken}; the host answers welcome, or closes

@@ -129,8 +129,8 @@ test_that("genes kept from a genes x cells assay are read in place, in their ord
   cells <- paste0("c", 1:40)
   values <- Matrix::rsparsematrix(30L, 40L, 0.3, rand.x = function(n) round(stats::runif(n, 1, 50)))
   dimnames(values) <- list(genes, cells)
-  # The row subset gene_identifiers used to make copied every value: the
-  # kept genes are positions the gene-major arrays read.
+  # Keeping some genes copies no value (a row subset would copy every one):
+  # the kept genes are positions the gene-major arrays read.
   expression <- cellucid:::.expression_input(cellucid:::.feature_major(values), "gene_expression")
   kept <- cellucid:::.expression_select_genes(expression, c(3L, 7L, 8L))
   expect_identical(kept$matrix, expression$matrix)

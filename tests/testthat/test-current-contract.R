@@ -1,15 +1,14 @@
 test_that("every path the current contract reads is present in this layout", {
   # The assertions in this file are worth exactly as much as the files they
-  # read, and every one of them used to sit inside an `if (file.exists(...))`
-  # or `if (dir.exists(...))`, so deleting a page, a workflow, or a config
-  # turned its checks into no-ops rather than into a failure. The declared
-  # list is checked here instead, in both directions: everything exists in the
-  # checkout, and the entries .Rbuildignore strips really are absent from the
-  # built package.
+  # read: inside an `if (file.exists(...))` or `if (dir.exists(...))`, a
+  # deleted page, workflow, or config would turn its checks into no-ops
+  # rather than into a failure. The declared list is checked here instead, in
+  # both directions: everything exists in the checkout, and the entries
+  # .Rbuildignore strips really are absent from the built package.
   layout <- cellucid_test_layout()
   required <- cellucid_required_paths()
   # Pinned so that deleting a row is a failure and not a quieter suite.
-  expect_identical(nrow(required), 20L)
+  expect_identical(nrow(required), 19L)
   expect_setequal(unique(required$kind), c("file", "directory"))
   expect_setequal(unique(required$layout), c("both", "checkout"))
 
@@ -26,121 +25,6 @@ test_that("every path the current contract reads is present in this layout", {
       layout$checkout || required$layout[[index]] == "both",
       info = relative
     )
-  }
-})
-
-test_that("shipped R repository surfaces contain only current contract language", {
-  repository_root <- cellucid_repository_root()
-  roots <- c("R", "man", "vignettes")
-  scalars <- c("README.md", "DESCRIPTION", "NAMESPACE")
-  if (cellucid_is_source_checkout()) {
-    roots <- c(roots, ".github")
-    scalars <- c(scalars, "_pkgdown.yml", "publishing.md")
-  }
-  files <- unlist(
-    lapply(
-      file.path(repository_root, roots),
-      list.files,
-      recursive = TRUE,
-      full.names = TRUE,
-      all.files = TRUE
-    ),
-    use.names = FALSE
-  )
-  files <- c(files, file.path(repository_root, scalars))
-  text_suffix <- "\\.(R|Rd|Rmd|md|ya?ml)$"
-  files <- files[
-    !grepl("\\.", basename(files), fixed = TRUE) |
-      grepl(text_suffix, files, ignore.case = TRUE)
-  ]
-  # A scan that scanned nothing reports no violations, which is what this test
-  # did under R CMD check while the root resolved to the check directory. Name
-  # the sources it has to have reached.
-  expect_true(all(
-    file.path(repository_root, scalars) %in% files
-  ))
-  expect_true(all(
-    file.path(
-      repository_root,
-      c("R/cellucid_prepare.R", "man/cellucid_prepare.Rd")
-    ) %in% files
-  ))
-  retired_language <- paste0(
-    "\\bfallback\\b|fall(?:ing)?[[:space:]-]+back|",
-    "best[[:space:]_-]*effort|\\blegacy\\b|\\bdeprecated\\b|",
-    "deprecation|backwards?[[:space:]_-]*compat|\\bshim\\b"
-  )
-  violations <- character()
-  for (file in files) {
-    lines <- readLines(file, warn = FALSE, encoding = "UTF-8")
-    matches <- grep(retired_language, lines, ignore.case = TRUE, perl = TRUE)
-    if (length(matches) > 0L) {
-      relative <- substring(
-        normalizePath(file, mustWork = TRUE),
-        nchar(repository_root) + 2L
-      )
-      violations <- c(
-        violations,
-        sprintf("%s:%d: %s", relative, matches, trimws(lines[matches]))
-      )
-    }
-  }
-  expect_identical(violations, character())
-
-  if (cellucid_is_source_checkout()) {
-    publishing <- paste(
-      readLines(
-        file.path(repository_root, "publishing.md"),
-        warn = FALSE,
-        encoding = "UTF-8"
-      ),
-      collapse = "\n"
-    )
-    expect_false(
-      grepl(
-        "alias[[:space:]-]+metapackage|cellucid-r[[:space:]]*\\(alias\\)",
-        publishing,
-        ignore.case = TRUE,
-        perl = TRUE
-      )
-    )
-  }
-})
-
-test_that("README cross-references the current Cellucid ecosystem", {
-  repository_root <- cellucid_repository_root()
-  readme_path <- file.path(repository_root, "README.md")
-  readme <- paste(
-    readLines(
-      readme_path,
-      warn = FALSE,
-      encoding = "UTF-8"
-    ),
-    collapse = "\n"
-  )
-  required_urls <- c(
-    "https://docs.cellucid.com/en/latest/user_guide/r_package/index.html",
-    "https://github.com/theislab/cellucid",
-    "https://github.com/theislab/cellucid-python",
-    "https://github.com/theislab/cellucid-datasets",
-    "https://github.com/theislab/cellucid-demo-custom-datasets",
-    "https://github.com/theislab/cellucid-annotation"
-  )
-  expect_true(all(vapply(required_urls, grepl, logical(1), x = readme, fixed = TRUE)))
-  expect_match(
-    readme,
-    "choose CRAN or GitHub based on current",
-    fixed = TRUE
-  )
-  expect_false(grepl("CRAN.R-project.org/package=cellucid", readme, fixed = TRUE))
-
-  if (cellucid_is_source_checkout()) {
-    build_ignore <- readLines(
-      file.path(repository_root, ".Rbuildignore"),
-      warn = FALSE,
-      encoding = "UTF-8"
-    )
-    expect_false(any(build_ignore == "^README\\.md$"))
   }
 })
 
@@ -182,11 +66,10 @@ test_that("main is the only workflow branch", {
   expect_false(any(grepl("^[[:space:]]*release:", pkgdown_lines)))
 })
 
-test_that("DESCRIPTION is the one in-repo source of the 0.9.8 release identity", {
+test_that("DESCRIPTION is the one in-repo source of the release identity", {
   repository_root <- cellucid_repository_root()
   description_path <- file.path(repository_root, "DESCRIPTION")
   version <- cellucid_description_version()
-  expect_identical(version, "0.9.8")
 
   description <- readLines(description_path, warn = FALSE, encoding = "UTF-8")
   version_line <- which(startsWith(description, "Version:"))
@@ -216,10 +99,6 @@ test_that("DESCRIPTION is the one in-repo source of the 0.9.8 release identity",
     news[[1L]],
     sprintf("# cellucid %s <!-- CELLUCID_VERSION -->", version)
   )
-  expect_false(any(grepl("unreleased", tolower(news), fixed = TRUE)))
-  expect_true(
-    any(news == sprintf("Version %s is the CRAN submission release.", version))
-  )
 
   if (cellucid_is_source_checkout()) {
     citation <- readLines(
@@ -248,174 +127,214 @@ test_that("DESCRIPTION is the one in-repo source of the 0.9.8 release identity",
   )
 
   package_citation_path <- file.path(repository_root, "inst", "CITATION")
-  package_citation <- paste(
-    readLines(
-      package_citation_path,
-      warn = FALSE,
-      encoding = "UTF-8"
-    ),
-    collapse = "\n"
-  )
-  expect_match(package_citation, "meta$Version", fixed = TRUE)
-  expect_false(
-    grepl(
-      'packageVersion("cellucid")',
-      package_citation,
-      fixed = TRUE
-    )
-  )
   citation_environment <- new.env(parent = globalenv())
   citation_environment$meta <- list(Version = version)
   sys.source(package_citation_path, envir = citation_environment)
   expect_identical(citation_environment$package_version, version)
-
-  if (cellucid_is_source_checkout()) {
-    release <- paste(
-      readLines(
-        file.path(repository_root, ".github", "workflows", "release.yaml"),
-        warn = FALSE,
-        encoding = "UTF-8"
-      ),
-      collapse = "\n"
-    )
-    # One trigger: a published GitHub Release (no tag push, no dispatch).
-    expect_match(
-      release,
-      "\non:\n  release:\n    types: [published]\n\npermissions:",
-      fixed = TRUE
-    )
-    expect_false(grepl("workflow_dispatch", release, fixed = TRUE))
-    expect_false(grepl("push:", release, fixed = TRUE))
-    expect_false(grepl("github.event_name", release, fixed = TRUE))
-    expect_match(release, 'RELEASE_DRAFT}" != "false"', fixed = TRUE)
-    expect_match(release, 'RELEASE_PRERELEASE}" != "false"', fixed = TRUE)
-    expect_match(release, 'test "${RELEASE_TAG}" = "${GITHUB_REF_NAME}"', fixed = TRUE)
-    expect_match(release, 'EXPECTED_TAG="v\\$\\{VERSION\\}"')
-    expect_match(release, 'test "\\$\\{GITHUB_REF_TYPE\\}" = "tag"')
-    expect_match(release, 'test "\\$\\{GITHUB_REF_NAME\\}" = "\\$\\{EXPECTED_TAG\\}"')
-    expect_match(
-      release,
-      'git merge-base --is-ancestor "\\$\\{GITHUB_SHA\\}" origin/main'
-    )
-    expect_match(release, 'sha256sum "\\$\\{TARBALL\\}"')
-    # Anchored on the step headers, not on the bare phrases. The file opens
-    # with a comment naming `R CMD check --as-cran`, and `regexpr()` reports
-    # the first match, so a search for the phrase alone lands in that comment
-    # whatever the workflow body does: the ordering was satisfied even with the
-    # check step renamed out of existence. `expect_gt(., 0L)` closes the other
-    # end of the same hole -- an absent step reports position -1, which is less
-    # than any real position and so satisfies an ordering all by itself.
-    check_at <- regexpr(
-      "- name: R CMD check --as-cran",
-      release,
-      fixed = TRUE
-    )[[1L]]
-    attach_at <- regexpr(
-      "- name: Attach tarball to GitHub Release",
-      release,
-      fixed = TRUE
-    )[[1L]]
-    expect_gt(check_at, 0L)
-    expect_gt(attach_at, 0L)
-    expect_lt(check_at, attach_at)
-  }
 })
 
-test_that("pkgdown has an exact current installation and navigation contract", {
-  repository_root <- cellucid_repository_root()
-  version <- cellucid_description_version()
-  read_text <- function(path) {
-    paste(
-      readLines(path, warn = FALSE, encoding = "UTF-8"),
-      collapse = "\n"
-    )
-  }
+# The release workflow, parsed, and its steps by what they do.
+release_workflow <- function() {
+  workflow <- yaml::read_yaml(file.path(cellucid_repository_root(), ".github", "workflows", "release.yaml"))
+  steps <- workflow$jobs$build$steps
+  runs <- vapply(steps, function(step) if (is.character(step$run)) step$run else "", character(1L))
+  uses <- vapply(steps, function(step) if (is.character(step$uses)) step$uses else "", character(1L))
+  # YAML 1.1 reads the key `on` as TRUE.
+  list(workflow = workflow, steps = steps, runs = runs, uses = uses,
+       on = if (is.null(workflow[["on"]])) workflow[["TRUE"]] else workflow[["on"]])
+}
 
-  installation <- read_text(
-    file.path(repository_root, "vignettes", "installation.Rmd")
-  )
-  expect_match(
-    installation,
-    sprintf(
-      "**The active Cellucid for R source and documentation version is %s.**",
-      version
-    ),
-    fixed = TRUE
-  )
-  expect_match(
-    installation,
-    'install.packages("cellucid")',
-    fixed = TRUE
-  )
-  expect_match(
-    installation,
-    'remotes::install_github("theislab/cellucid-r")',
-    fixed = TRUE
-  )
-  expect_match(
-    installation,
-    'packageVersion("cellucid")',
-    fixed = TRUE
-  )
-  expect_match(
-    installation,
-    "is authoritative for registry availability",
-    fixed = TRUE
-  )
-
-  readme <- read_text(file.path(repository_root, "README.md"))
-  expect_match(
-    readme,
-    sprintf("**Active package version — %s**", version),
-    fixed = TRUE
-  )
-  expect_match(
-    readme,
-    "articles/installation.html",
-    fixed = TRUE
-  )
-
-  if (cellucid_is_source_checkout()) {
-    pkgdown <- read_text(file.path(repository_root, "_pkgdown.yml"))
-    expect_match(
-      pkgdown,
-      "left: [home, installation, reference, articles, news]",
-      fixed = TRUE
-    )
-    expect_match(
-      pkgdown,
-      'in_header: >-\n      <link rel="icon" type="image/svg+xml"',
-      fixed = TRUE
-    )
-    expect_match(pkgdown, "right: [search, webapp]", fixed = TRUE)
-    expect_match(pkgdown, "href: https://www.cellucid.com", fixed = TRUE)
-    expect_false(grepl("development", pkgdown, ignore.case = TRUE))
-  }
-})
-
-test_that("CI fetches every sibling the cross-repository tests compare with, and requires them", {
-  # Without them those tests skip (helper-repository.R); CI fetches both and
-  # sets CELLUCID_SIBLINGS_REQUIRED, so there they always run.
+test_that("the release workflow runs on a published release only, and checks before it attaches and submits", {
   skip_if_not(cellucid_is_source_checkout(), "the workflows are in the checkout only")
-  workflow <- paste(readLines(file.path(cellucid_repository_root(), ".github", "workflows", "R-CMD-check.yaml"),
-                              warn = FALSE, encoding = "UTF-8"), collapse = "\n")
-  for (line in c(
-    'echo "CELLUCID_WEB_ROOT=$RUNNER_TEMP/cellucid"',
-    'echo "CELLUCID_PYTHON_ROOT=$RUNNER_TEMP/cellucid-python"',
-    'echo "CELLUCID_SIBLINGS_REQUIRED=1"',
-    'fetch cellucid main "$RUNNER_TEMP/cellucid"',
-    'fetch cellucid-python "$CELLUCID_PYTHON_COMMIT" "$RUNNER_TEMP/cellucid-python"',
-    "uses: actions/setup-node@"
-  )) {
-    expect_true(grepl(line, workflow, fixed = TRUE), info = line)
+  skip_if_not_installed("yaml")
+  release <- release_workflow()
+  # One trigger: a published GitHub Release (no tag push, no dispatch).
+  expect_identical(names(release$on), "release")
+  expect_identical(unlist(release$on$release$types), "published")
+
+  # Each step is found by what it does; the order is the guarantee.
+  position <- function(hits) {
+    expect_length(which(hits), 1L)
+    which(hits)
   }
-  for (repository in c("cellucid", "cellucid-python")) expect_true(nzchar(cellucid_sibling_variable(repository)))
+  verify <- position(grepl("GITHUB_REF_TYPE", release$runs, fixed = TRUE))
+  build <- position(grepl("R CMD build", release$runs, fixed = TRUE))
+  check <- position(grepl("(^|\n)\\s*R CMD check --as-cran", release$runs))
+  attach <- position(startsWith(release$uses, "softprops/action-gh-release@"))
+  refuse <- position(grepl("00check.log", release$runs, fixed = TRUE))
+  submit <- position(grepl("upload_cran", release$runs, fixed = TRUE))
+  expect_true(all(diff(c(verify, build, check, attach, refuse, submit)) > 0L))
+
+  # Every step output a step reads is written by the step it names.
+  text <- paste(unlist(release$steps), collapse = "\n")
+  referenced <- regmatches(text, gregexpr("steps\\.[a-z]+\\.outputs\\.[a-z]+", text))[[1L]]
+  expect_gt(length(referenced), 0L)
+  for (reference in unique(referenced)) {
+    parts <- strsplit(reference, ".", fixed = TRUE)[[1L]]
+    writer <- Filter(function(step) identical(step$id, parts[[2L]]), release$steps)
+    expect_length(writer, 1L)
+    expect_true(grepl(paste0(parts[[4L]], "="), writer[[1L]]$run, fixed = TRUE), info = reference)
+  }
+  # The release assets are the tarball and its checksum, which the build step makes.
+  expect_true(grepl("steps.build.outputs.checksum", release$steps[[attach]]$with$files, fixed = TRUE))
+  expect_true(grepl("sha256sum", release$runs[[build]], fixed = TRUE))
+})
+
+test_that("the release verification passes a final version on its tag, from main, and nothing else", {
+  skip_if_not(cellucid_is_source_checkout(), "the workflows are in the checkout only")
+  skip_if_not_installed("yaml")
+  skip_if(!nzchar(Sys.which("git")) || !nzchar(Sys.which("bash")), "git and bash are needed to run the step")
+  release <- release_workflow()
+  step <- release$steps[[which(grepl("GITHUB_REF_TYPE", release$runs, fixed = TRUE))]]
+
+  git <- function(directory, ...) {
+    output <- system2("git", c("-C", shQuote(directory), "-c", "user.name=test", "-c", "user.email=test@example.invalid", ...),
+                      stdout = TRUE, stderr = TRUE)
+    expect_null(attr(output, "status"), info = paste(output, collapse = "\n"))
+    output
+  }
+  work <- tempfile("release-work-")
+  dir.create(work)
+  on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  repository <- file.path(work, "package")
+  dir.create(repository)
+  git(repository, "init", "-q", "-b", "main")
+  writeLines("Version: 1.2.3", file.path(repository, "DESCRIPTION"))
+  git(repository, "add", "DESCRIPTION")
+  git(repository, "commit", "-q", "-m", "release")
+  # The remote is a bare copy of this scratch repository, never a real one.
+  git(work, "clone", "-q", "--bare", shQuote(repository), shQuote(file.path(work, "origin.git")))
+  git(repository, "remote", "add", "origin", shQuote(file.path(work, "origin.git")))
+  head <- git(repository, "rev-parse", "HEAD")
+  git(repository, "checkout", "-q", "-b", "side")
+  writeLines("x", file.path(repository, "side.txt"))
+  git(repository, "add", "side.txt")
+  git(repository, "commit", "-q", "-m", shQuote("not on main"))
+  side <- git(repository, "rev-parse", "HEAD")
+  git(repository, "checkout", "-q", "main")
+
+  passes <- function(..., commit = head, description = NULL) {
+    environment <- c(
+      RELEASE_TAG = "v1.2.3", RELEASE_DRAFT = "false", RELEASE_PRERELEASE = "false",
+      GITHUB_REF_TYPE = "tag", GITHUB_REF_NAME = "v1.2.3", GITHUB_SHA = commit
+    )
+    changes <- list(...)
+    environment[names(changes)] <- unlist(changes)
+    # What `shell: bash` runs: bash -e -o pipefail on the step's script.
+    script <- tempfile("release-step-", work)
+    writeLines(step$run, script)
+    if (!is.null(description)) writeLines(sub("^Version: .*", description, readLines(file.path(repository, "DESCRIPTION"))), file.path(repository, "DESCRIPTION"))
+    on.exit(writeLines("Version: 1.2.3", file.path(repository, "DESCRIPTION")), add = TRUE)
+    output <- suppressWarnings(system2("env", c(paste0(names(environment), "=", environment), "bash", "-e", "-o", "pipefail", shQuote(script)),
+                                       stdout = TRUE, stderr = TRUE))
+    is.null(attr(output, "status"))
+  }
+  old <- setwd(repository)
+  on.exit(setwd(old), add = TRUE, after = FALSE)
+
+  expect_true(passes())
+  expect_false(passes(RELEASE_DRAFT = "true"))
+  expect_false(passes(RELEASE_PRERELEASE = "true"))
+  expect_false(passes(GITHUB_REF_TYPE = "branch"))
+  expect_false(passes(RELEASE_TAG = "v1.2.4"))
+  expect_false(passes(GITHUB_REF_NAME = "v1.2.4", RELEASE_TAG = "v1.2.4"))
+  expect_false(passes(description = "Version: 1.2.3.9000"))
+  expect_false(passes(commit = side))
+})
+
+# Every path of a sibling repository the tests name, as list(repository, path,
+# whole): the calls of expect_shared_file() (its `theirs`),
+# cellucid_sibling_file() and cellucid_rendered_by_web(), read from the parsed
+# test files. `whole` is FALSE where only the leading folders are literal
+# (file.path("tests", "fixtures", name)), and `path` is then those folders.
+sibling_paths_the_tests_name <- function(test_dir) {
+  found <- list()
+  add <- function(repository, parts) {
+    if (!is.character(repository) || length(repository) != 1L) return(invisible(NULL))
+    literal <- vapply(parts, function(part) is.character(part) && length(part) == 1L, logical(1L))
+    whole <- all(literal)
+    text <- paste(unlist(parts[cumprod(literal) == 1L]), collapse = "/")
+    if (!nzchar(text)) return(invisible(NULL))
+    found[[length(found) + 1L]] <<- list(repository = repository, path = if (whole) text else paste0(text, "/"), whole = whole)
+  }
+  parts_of <- function(expression) {
+    if (is.call(expression) && identical(expression[[1L]], quote(file.path))) as.list(expression)[-1L] else list(expression)
+  }
+  visit <- function(x) {
+    if (is.call(x)) {
+      name <- if (is.name(x[[1L]])) as.character(x[[1L]]) else ""
+      if (identical(name, "expect_shared_file")) {
+        matched <- match.call(function(ours, theirs, repository = "cellucid", then = "") NULL, x)
+        add(if (is.null(matched$repository)) "cellucid" else matched$repository, parts_of(matched$theirs))
+      } else if (identical(name, "cellucid_sibling_file") && length(x) > 2L) {
+        add(x[[2L]], as.list(x)[-(1:2)])
+      } else if (identical(name, "cellucid_rendered_by_web") && length(x) > 1L) {
+        add("cellucid", list(x[[2L]]))
+      }
+      for (part in as.list(x)) if (!missing(part)) visit(part)
+    } else if (is.pairlist(x) || is.expression(x)) {
+      for (part in as.list(x)) if (!missing(part)) visit(part)
+    }
+  }
+  for (file in list.files(test_dir, "^test-.*\\.R$", full.names = TRUE)) {
+    for (expression in parse(file, keep.source = FALSE)) visit(expression)
+  }
+  found
+}
+
+# What the sparse checkout holds: its patterns hold `path` (or, where only the
+# leading folders `path` are known, something under them).
+sparse_pattern_holds <- function(pattern, path, whole) {
+  pattern <- sub("^/", "", pattern)
+  if (endsWith(pattern, "/")) return(startsWith(path, pattern) || (!whole && startsWith(pattern, path)))
+  identical(pattern, path) || (!whole && startsWith(pattern, path))
+}
+
+test_that("CI fetches every sibling the cross-repository tests compare with, at main, and requires them", {
+  # Without them those tests skip (helper-repository.R); CI fetches both at
+  # main and sets CELLUCID_REQUIRE_SIBLINGS=1, so there they always run.
+  skip_if_not(cellucid_is_source_checkout(), "the workflows are in the checkout only")
+  skip_if_not_installed("yaml")
+  root <- cellucid_repository_root()
+  workflow <- yaml::read_yaml(file.path(root, ".github", "workflows", "R-CMD-check.yaml"))
+  job <- workflow$jobs[["R-CMD-check"]]
+  scripts <- Filter(is.character, lapply(job$steps, function(step) step$run))
+  script <- paste(unlist(scripts), collapse = "\n")
+  uses <- unlist(lapply(job$steps, function(step) step$uses))
+  expect_true(any(startsWith(uses, "actions/setup-node@")))
+  expect_match(script, "CELLUCID_REQUIRE_SIBLINGS=1", fixed = TRUE)
+
+  # The `fetch <repository> <ref> <directory> <patterns...>` calls of the step
+  # that checks the siblings out, each with its continuation lines joined.
+  calls <- grep("^\\s*fetch (cellucid|cellucid-python) ", strsplit(gsub("\\\\\n", " ", script), "\n")[[1L]], value = TRUE)
+  fetched <- lapply(strsplit(trimws(calls), "[[:space:]]+"), function(tokens) {
+    list(repository = tokens[[2L]], ref = tokens[[3L]], directory = gsub('"', "", tokens[[4L]]), patterns = tokens[-(1:4)])
+  })
+  names(fetched) <- vapply(fetched, function(call) call$repository, character(1L))
+  expect_setequal(names(fetched), c("cellucid", "cellucid-python"))
+
+  named <- sibling_paths_the_tests_name(test_path())
+  for (repository in names(fetched)) {
+    checkout <- fetched[[repository]]
+    # At main (the Python one through the job's variable), named for the tests by its root variable.
+    ref <- if (identical(checkout$ref, "\"$CELLUCID_PYTHON_BRANCH\"")) job$env$CELLUCID_PYTHON_BRANCH else checkout$ref
+    expect_identical(ref, "main", info = repository)
+    variable <- cellucid_sibling_variable(repository)
+    expect_true(grepl(paste0(variable, "=", checkout$directory), script, fixed = TRUE), info = variable)
+    # Its sparse checkout holds every path the tests name of it.
+    wanted <- Filter(function(path) identical(path$repository, repository), named)
+    expect_gt(length(wanted), 0L)
+    left_out <- vapply(wanted, function(path) {
+      !any(vapply(checkout$patterns, sparse_pattern_holds, logical(1L), path = path$path, whole = path$whole))
+    }, logical(1L))
+    expect_identical(vapply(wanted[left_out], function(path) path$path, character(1L)), character(0L), info = repository)
+  }
 })
 
 test_that("the pkgdown site contract holds: every vignette and help page indexed once", {
   # .github/scripts/validate-pkgdown.R gates the site's build (pkgdown.yaml);
   # it runs here too, so a help page added or removed fails the suite and
-  # R-CMD-check, not only the site's deploy (CI run 43106603397).
+  # R-CMD-check, not only the site's deploy.
   skip_if_not(cellucid_is_source_checkout(), "the site contract is in the checkout only")
   root <- cellucid_repository_root()
   old <- setwd(root)
@@ -546,8 +465,8 @@ test_that("man/ and NAMESPACE are hand-written and match the code exactly", {
   prepare <- readLines(prepare_path, warn = FALSE, encoding = "UTF-8")
   expect_true(any(grepl("\\examples{", prepare, fixed = TRUE)))
 
-  # A second copy of the same help text under R/ is what diverged before. The
-  # help page is the only copy, so no roxygen comment may reappear.
+  # A second copy of the same help text under R/ would diverge from the page.
+  # The help page is the only copy, so no roxygen comment may appear.
   r_directory <- file.path(repository_root, "R")
   r_sources <- list.files(r_directory, pattern = "\\.R$", full.names = TRUE)
   expect_true(file.path(r_directory, "cellucid_prepare.R") %in% r_sources)

@@ -1,14 +1,13 @@
 # The viewer channel's declarations, against the shared protocol fixture.
 #
 # tests/testthat/fixtures/viewer_protocol.json is a byte-identical copy of the
-# web app's tests/fixtures/viewer-protocol.json (written by
+# web app's tests/fixtures/viewer-protocol.json (its home, written by
 # assets/js/data/viewer-protocol.js, the source of truth) and of
-# cellucid-python's tests/fixtures/viewer_protocol.json; all three
-# repositories pin the same SHA-256. R receives events and sends commands, so
+# cellucid-python's tests/fixtures/viewer_protocol.json; each package's test
+# compares its copy with the web repository's file. R receives events and
+# sends commands, so
 # it must accept every example event and binary event, and produce every
 # example command -- a binary action byte for byte.
-
-.viewer_protocol_sha256 <- "c117822a5d87df03439fdbed9af460617764b59d9e560ba7c0e519ec5f708dae"
 
 protocol_fixture <- function() cellucid_read_fixture("viewer_protocol.json")
 
@@ -18,13 +17,12 @@ hex_raw <- function(hex) {
 
 raw_hex <- function(bytes) paste(as.character(bytes), collapse = "")
 
-test_that("the three repositories hold the same pinned viewer protocol", {
-  expect_pinned_fixture("viewer_protocol.json", .viewer_protocol_sha256)
+test_that("the viewer protocol is the web app's, byte for byte", {
+  expect_shared_file("tests/testthat/fixtures/viewer_protocol.json", "tests/fixtures/viewer-protocol.json")
+})
+
+test_that("the viewer protocol is of the schema this package speaks", {
   expect_identical(protocol_fixture()$schema, 5L)
-  for (copy in list(c("cellucid", "tests", "fixtures", "viewer-protocol.json"), c("cellucid-python", "tests", "fixtures", "viewer_protocol.json"))) {
-    path <- do.call(cellucid_sibling_file, as.list(copy))
-    expect_identical(cellucid_file_sha256(path), .viewer_protocol_sha256, info = path)
-  }
 })
 
 test_that("R declares exactly the fixture's channel, commands and events", {
@@ -69,8 +67,8 @@ test_that("R declares exactly the fixture's channel, commands and events", {
 
 test_that("a handler takes every event of the fixture but an agent app's, and a misspelt one is refused", {
   # cellucid-python's hooks take the same names (cellucid.jupyter.HOOK_EVENTS),
-  # pinned to the same fixture. A misspelt event used to be partially matched
-  # (match.arg()) or refused with R's generic words.
+  # pinned to the same fixture. A misspelt event is refused by name: never
+  # partially matched (match.arg()), never in R's generic words.
   fixture <- protocol_fixture()
   events <- c(names(fixture$events), names(fixture$binaryEvents))
   expect_setequal(cellucid:::.hook_events(), c(grep("^agent_", events, value = TRUE, invert = TRUE), "message"))
@@ -192,7 +190,7 @@ test_that("frames that break the protocol are refused with the reason", {
   refused("{\"type\":\"command_error\",\"command\":\"action\",\"requestId\":7,\"reason\":\"x\"}")
   refused(paste0("{\"type\":\"command_error\",\"command\":\"ping\",\"requestId\":null,\"reason\":\"",
                  strrep("x", cellucid:::.viewer_reason_limit + 1L), "\"}"))
-  # The commands schema 2 had are no longer the protocol's.
+  # A command that is not the protocol's.
   refused("{\"type\":\"command_error\",\"command\":\"setColorBy\",\"requestId\":null,\"reason\":\"x\"}")
   refused("{\"type\":\"data_mapping\",\"requestId\":\"r1\",\"origin\":\"notebook\",\"mapping\":{\"kind\":\"anndata\"}}")
   refused("{\"type\":\"data_mapping\",\"origin\":\"nowhere\",\"mapping\":{\"kind\":\"anndata\"}}")
@@ -253,7 +251,7 @@ test_that("frames that break the protocol are refused with the reason", {
 })
 
 test_that("a categorical result carries the colors it is shown in, one a category", {
-  # The colors of the view in focus (RCC-1): one lowercase #rrggbb a
+  # The colors of the view in focus: one lowercase #rrggbb a
   # category, in the categories' order; a pull writes them with the column.
   categorical <- function(colors) {
     header <- list(type = "result", epoch = "0123456789abcdef", revision = 1, kind = "categorical", id = "user_cat_1", nObs = 3,

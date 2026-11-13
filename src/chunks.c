@@ -154,7 +154,7 @@ SEXP cellucid_encode_values(SEXP values, SEXP first, SEXP count, SEXP chunk_leng
  * is left out, `origin` each output gene its row; `pointers` are the
  * transpose's column pointers over the kept genes (cellucid_row_pointers),
  * n_genes + 1 doubles. Keeping genes (gene_identifiers) copies nothing: the
- * map is read where a copy of the kept rows used to be made.
+ * map is read in place of a copy of the kept rows.
  *
  * The block holds the output genes g_low .. g_high whose values reach into
  * it; their rows lie between the smallest and the largest of their origins.

@@ -4,10 +4,8 @@
 # tests/testthat/fixtures/latent_outlier_conformance.json is a byte-identical
 # copy of the web app's tests/fixtures/latent-outlier-conformance.json, written
 # by its scripts/generate-latent-outlier-conformance.py with numpy,
-# independently of every implementation; both repositories pin the same
-# SHA-256.
-
-.latent_outlier_sha256 <- "a812db4dd25c9b5b44549c001a0e3927043042ca12ad7d8567c73f583ecf498d"
+# independently of every implementation; the test compares the copy with the
+# web repository's file.
 
 .float32_hex <- function(values) {
   bytes <- writeBin(values, raw(), size = 4L, endian = "little")
@@ -23,8 +21,11 @@
   cellucid:::.native_latent_outlier_quantiles(latent, codes, as.integer(n_categories), as.integer(min_points))
 }
 
-test_that("the shared conformance cases give the pinned bytes", {
-  expect_pinned_fixture("latent_outlier_conformance.json", .latent_outlier_sha256)
+test_that("the conformance fixture is the web app's, byte for byte", {
+  expect_shared_file("tests/testthat/fixtures/latent_outlier_conformance.json", "tests/fixtures/latent-outlier-conformance.json")
+})
+
+test_that("the shared conformance cases give the fixture's bytes", {
   document <- cellucid_read_fixture("latent_outlier_conformance.json")
   expect_identical(document$version, 2L)
   expect_length(document$cases, 5L)

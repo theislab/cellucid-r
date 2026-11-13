@@ -1,8 +1,9 @@
 # Actions: everything R changes or reads in an open viewer. The viewer's
 # action catalog (inst/action_catalog.json, written by the web app's
 # scripts/generate-action-catalog.mjs, byte for byte the web app's
-# tests/fixtures/action-catalog.json and cellucid-python's copy, SHA-256 pinned
-# in all three) names every action a person can take in the viewer, with its
+# tests/fixtures/action-catalog.json, its home, and cellucid-python's copy;
+# tests/testthat/test-actions.R compares the two files) names every action a
+# person can take in the viewer, with its
 # parameter schema; cellucid_act() sends any of them, and
 # R/actions-generated.R holds one function per action, generated from the
 # catalog by tools/generate-actions.R (with its help page and its export),

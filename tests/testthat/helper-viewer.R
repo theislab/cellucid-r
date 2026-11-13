@@ -277,3 +277,8 @@ ws_welcomed <- function(viewer) {
   testthat::expect_identical(welcome$json, list(type = "welcome"))
   client
 }
+
+# The address of one key of the store a viewer serves.
+served_url <- function(viewer, key) {
+  paste0(viewer$url, "/_cellucid/anndata/", viewer$served$route_name, "/", key)
+}

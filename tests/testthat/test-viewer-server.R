@@ -4,10 +4,6 @@
 # loopback port and is stopped when its test ends; nothing is downloaded (the
 # fixture web build) and no browser is opened.
 
-served_url <- function(viewer, key) {
-  paste0(viewer$url, "/_cellucid/anndata/", viewer$served$route_name, "/", key)
-}
-
 test_that("the data routes describe the dataset as cellucid-python's server does", {
   skip_without_sce()
   viewer <- test_viewer(small_sce(alt = FALSE), dataset_id = "sce", dataset_name = "SCE")
@@ -584,7 +580,7 @@ test_that("a prepared store or file given by path is served from disk", {
   )
   # The neighbor graph and the expression matrix a file opens on, in the
   # viewer's spelling, as cellucid-python's serve_anndata(knn_key=,
-  # expression_source=) states them (R used to refuse both).
+  # expression_source=) states them.
   viewer <- test_viewer(folder, knn_key = "connectivities", expression_source = "layer:counts")
   expect_identical(
     http_json(paste0(viewer$url, "/_cellucid/datasets"))$datasets[[1L]]$anndata$defaults,
@@ -626,8 +622,7 @@ test_that("a served object takes total_counts, the column of its cells' totals, 
   sce <- small_sce()
   adt <- SummarizedExperiment::assay(SingleCellExperiment::altExp(sce, "ADT"))
   SummarizedExperiment::colData(sce)$adt_total <- as.numeric(Matrix::colSums(adt)) + 1
-  viewer <- cellucid_serve(sce, total_counts = c(ADT = "adt_total"), quiet = TRUE)
-  on.exit(cellucid_stop(viewer), add = TRUE)
+  viewer <- test_viewer(sce, total_counts = c(ADT = "adt_total"))
   expect_true("total_counts" %in% cellucid:::.view_plan_arguments)
   expect_error(cellucid_serve(sce, total_counts = c(ADT = "nowhere"), quiet = TRUE), "which obs does not hold")
 })
@@ -669,7 +664,7 @@ test_that("a file served as it is says what a subsample of it reads, unless it i
   expect_true(any(grepl("Its cells are in their own order", messages, fixed = TRUE)))
 })
 
-test_that("a host this machine cannot serve from is refused saying so, not as a port taken (R9Y-5)", {
+test_that("a host this machine cannot serve from is refused saying so, not as a port taken", {
   skip_without_sce()
   # cellucid-python's bind_refusal() sentence, with R's spelling.
   for (host in c("no-such-host.invalid", "192.0.2.1")) {
@@ -681,4 +676,8 @@ test_that("a host this machine cannot serve from is refused saying so, not as a 
       fixed = TRUE
     )
   }
+})
+
+test_that("zarr-python read every pair of stores this file compared", {
+  expect_zarr_python_compared()
 })

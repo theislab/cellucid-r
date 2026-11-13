@@ -4,15 +4,14 @@
 # tests/testthat/fixtures/transition_drift_conformance.json is a byte-identical
 # copy of cellucid-python's tests/fixtures/transition_drift_conformance.json,
 # written by its scripts/generate_transition_drift_conformance.py with exact
-# rational arithmetic, independently of both packages; both repositories pin
-# the same SHA-256 and hold their implementation to it. An exact case (its
+# rational arithmetic, independently of both packages; the test compares the
+# copy with cellucid-python's file (its home), and both packages hold their
+# implementation to it. An exact case (its
 # product and row sums are exact in double precision in any summation order)
 # must be reproduced bit for bit; a general case within the per-value bound
 # the fixture states, twice the forward-error bound of the computation in any
 # summation order, because R's %*% and rowSums() and numpy add in different
 # orders.
-
-.transition_drift_sha256 <- "1488017dafe4085eb0e1a1041e7ddf5c7ae3e9717971f017897a15b71c5ce5f8"
 
 drift_case_matrix <- function(values, n_rows, n_cols) {
   matrix(vapply(values, as.numeric, numeric(1)), nrow = n_rows, ncol = n_cols, byrow = TRUE)
@@ -31,9 +30,13 @@ drift_case_transition <- function(case) {
   dense
 }
 
-test_that("the shared conformance cases give the pinned drift, dense and sparse", {
+test_that("the conformance fixture is cellucid-python's, byte for byte", {
+  expect_shared_file("tests/testthat/fixtures/transition_drift_conformance.json", "tests/fixtures/transition_drift_conformance.json",
+                     repository = "cellucid-python")
+})
+
+test_that("the shared conformance cases give the fixture's drift, dense and sparse", {
   skip_if_not_installed("Matrix")
-  expect_pinned_fixture("transition_drift_conformance.json", .transition_drift_sha256)
   document <- cellucid_read_fixture("transition_drift_conformance.json")
   expect_identical(document$version, 1L)
   cases <- document$cases

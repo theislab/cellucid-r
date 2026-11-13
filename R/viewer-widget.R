@@ -20,24 +20,27 @@
 #
 # Bodies and the channel's binary frames go to the page as the binary buffers
 # of a Jupyter message (frames after its content, outside its JSON and its
-# signature), as the Python kernel sends them: IRkernel's own send writes no
+# signature), as the Python kernel sends them, never as base64 inside its
+# JSON, which costs R's one thread far more (measured:
+# 26_decisions_served_store_and_widgets.md). IRkernel's own send writes no
 # buffers, so such a message is made with the kernel's reply and wire
-# functions, as comm_open is (.kernel_comms()). Measured on one 1 MiB body,
-# base64 and its JSON took 17.6 ms of R's one thread (60 MB/s); its buffer,
-# 0.3 ms. IRkernel's reader drops the buffers of a message it receives, so
-# the page's binary frames to R (selections, results, a session bundle) come
-# as base64 text (the widget's `_binary` trait).
+# functions, as comm_open is (.kernel_comms()). IRkernel's reader drops the
+# buffers of a message it receives, so the page's binary frames to R
+# (selections, results, a session bundle) come as base64 text (the widget's
+# `_binary` trait).
 #
-# IRkernel answers one message at a time, and each costs it about 1.7 ms of
+# IRkernel answers one message at a time, and each costs it a fixed time of
 # its own (the message read and checked, a busy and an idle status written)
-# before any of ours: 450 requests in 450 messages took 1.28 s, in 15 messages
-# 0.27 s. The widget so takes at most `.widget_fetch_messages` fetch messages
-# of the page at once (the `_fetch_messages` trait): while they are answered,
-# the page's next requests gather into the next message, so a burst goes in a
-# few large messages and a lone request at once. (The Python kernel answers a
-# message's requests on threads, as they come: it takes every message.) The
-# answers' JSON is written here in one pass (.widget_answers_json()), where
-# jsonlite's writer walked each answer's list.
+# before any of ours, so a burst of requests is answered far sooner in a few
+# messages than in a message each (measured:
+# 26_decisions_served_store_and_widgets.md). The widget so takes at most
+# `.widget_fetch_messages` fetch messages of the page at once (the
+# `_fetch_messages` trait): while they are answered, the page's next requests
+# gather into the next message, so a burst goes in a few large messages and a
+# lone request at once. (The Python kernel answers a message's requests on
+# threads, as they come: it takes every message.) The answers' JSON is written
+# here in one pass (.widget_answers_json()), not by jsonlite's writer, which
+# walks each answer's list.
 
 # The widget protocol the notebook's widget manager speaks (ipywidgets 8).
 .widget_protocol_version <- "2.1.0"

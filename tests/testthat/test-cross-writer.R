@@ -297,10 +297,6 @@ test_that("the MuData cases cellucid-python checks itself against are what this 
   }
 })
 
-test_that("both repositories hold the same MuData cross-writer harness", {
-  python <- cellucid_sibling_file("cellucid-python", "tests", "cross_writer_mudata.py")
-  expect_identical(
-    unname(tools::md5sum(python)),
-    unname(tools::md5sum(testthat::test_path("python", "cross_writer_mudata.py")))
-  )
+test_that("the MuData cross-writer harness is cellucid-python's, byte for byte", {
+  expect_shared_file("tests/testthat/python/cross_writer_mudata.py", "tests/cross_writer_mudata.py", repository = "cellucid-python")
 })

@@ -1,10 +1,13 @@
-# The viewer's actions from R: the catalog the package carries (pinned in
-# the three repositories), the functions and help pages generated from it
+# The viewer's actions from R: the catalog the package carries (byte for byte
+# the web repository's tests/fixtures/action-catalog.json, its home), the
+# functions and help pages generated from it
 # (tools/generate-actions.R), and how R values become an action's parameters.
 # The viewer is played here by the frames R queues before its page connects
 # (R/viewer-server.R .viewer_send_frame()), read as the viewer reads them.
 
-.action_catalog_sha256 <- "725d32e5357cebbcff332be5a599667cf42ebb63ce55bd73e39ce4a1469556c4"
+# What to run once the catalog is the web app's again: the functions, help
+# pages and exports are written from it.
+.generate_actions <- ", then `Rscript tools/generate-actions.R` here"
 
 catalog_path <- function() file.path(cellucid_repository_root(), "inst", "action_catalog.json")
 read_catalog <- function() jsonlite::read_json(catalog_path(), simplifyVector = FALSE)
@@ -27,15 +30,14 @@ queued_viewer <- function(n_cells = 6L, cell_names = paste0("c", seq_len(n_cells
 
 last_sent <- function(viewer) sent_command(viewer$queue[[length(viewer$queue)]]$frame)
 
-test_that("the three repositories carry the same pinned action catalog", {
-  expect_identical(cellucid_file_sha256(catalog_path()), .action_catalog_sha256)
+test_that("the action catalog is the web app's, byte for byte", {
+  expect_shared_file("inst/action_catalog.json", "tests/fixtures/action-catalog.json", then = .generate_actions)
+})
+
+test_that("the package reads the catalog it carries", {
   catalog <- read_catalog()
   expect_identical(catalog$schema, 1L)
   expect_gt(length(catalog$actions), 100L)
-  for (copy in list(c("cellucid", "tests", "fixtures", "action-catalog.json"), c("cellucid-python", "src", "cellucid", "action_catalog.json"))) {
-    path <- do.call(cellucid_sibling_file, as.list(copy))
-    expect_identical(cellucid_file_sha256(path), .action_catalog_sha256, info = path)
-  }
   # The installed package reads the same file.
   expect_identical(names(cellucid:::.action_catalog()), vapply(catalog$actions, function(action) action$type, ""))
 })
@@ -303,8 +305,8 @@ test_that("a change that made no step says why: kept on its request, warned when
 })
 
 test_that("the catalog is the one the web app's action definitions make now", {
-  # Against the definitions themselves, not only the web app's committed copy.
+  # Against the definitions themselves, not only the web app's committed file.
   expect_identical(cellucid_rendered_by_web("scripts/generate-action-catalog.mjs", "renderActionCatalog"),
                    readChar(catalog_path(), file.size(catalog_path()), useBytes = TRUE),
-                   info = "Run node scripts/generate-action-catalog.mjs in the web app, then Rscript tools/generate-actions.R here.")
+                   info = paste0("Run `", cellucid_sync_shared_files, "` in the web repository (cellucid)", .generate_actions, "."))
 })

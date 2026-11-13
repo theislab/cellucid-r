@@ -207,13 +207,12 @@
 #
 # cellucid_prepare() writes every chunk in order, so its store makes one block
 # of every value, once, on every core, and holds it while X is written (8
-# bytes a value with float32 data, where Matrix::t() made a dgCMatrix of 12).
-# A served store
-# lays the matrix out once, in the background (.laid_out_arrays()), as
-# cellucid-python's served store does: a gene read made a block of the genes
-# around it, kept within cache_bytes, and genes read across a matrix larger
-# than the cache made a block again for nearly every gene (1M cells x 100
-# values: 80 ms a gene, against 1 ms laid out).
+# bytes a value with float32 data, where Matrix::t() would make a dgCMatrix
+# of 12). A served store lays the matrix out once, in the background
+# (.laid_out_arrays()), as cellucid-python's served store does: a block of
+# the genes around each gene read, kept within cache_bytes, would be made
+# again for nearly every gene read across a matrix larger than the cache
+# (measured: 26_decisions_served_store_and_widgets.md).
 .gene_major_arrays <- function(store, path, matrix, shape, dtype, genes, cells = NULL) {
   visit <- if (is.null(cells)) integer(0) else as.integer(cells - 1L)
   n_cells <- shape[[1L]]

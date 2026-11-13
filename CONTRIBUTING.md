@@ -133,6 +133,14 @@ Run tests:
 devtools::test()
 ```
 
+Run the core suite after every change (eight files that cover each part of
+the package once, about a minute on an idle machine; the list is in `tools/test-core.R`, and
+`devtools::test()` stays the full run):
+
+```bash
+Rscript tools/test-core.R
+```
+
 Run a full check (recommended before PRs):
 
 ```r
@@ -202,6 +210,101 @@ If you change what a store holds (its layout or `uns['cellucid']`):
   `tests/testthat/test-anndata-interop.R` passing: it reads the store back with
   Python's `anndata` (set `CELLUCID_ANNDATA_PYTHON` to a Python with `anndata`
   and `zarr`, or have one as `python3`)
+
+---
+
+## Comments say what the code does; history goes to the decision records
+
+A comment says what the code does and why it must be so: the invariant it
+keeps, the failure it prevents, the unit of a number, the function that owns
+the other half. It is written in the present tense and stays true for as long
+as the code below it is unchanged. This holds for `R/`, `src/`, `tools/` and
+`tests/`. A help page under `man/` holds no history either: it is what a user
+reads.
+
+A comment never holds:
+
+1. a CI run number or address;
+2. a finding, audit or plan id (`F123`, `L25-3`, `R9W-5`, "round 9", "bug
+   hunt", a section of a plan), or a path into a repository the reader cannot
+   open;
+3. a date of our own work (a date of an outside version the code depends on,
+   such as a protocol revision, an R or a Bioconductor release, stays);
+4. who decided, or their words;
+5. what the code used to do, what was tried, what was found or fixed;
+6. numbers measured on a machine, with the machine, engine or dataset.
+
+Each of these goes, in the same change, to the page that records decisions
+for that part of the package. Those pages are on the documentation site,
+which is built from `cellucid-python/docs/`:
+
+| Code | Where its history goes |
+|---|---|
+| The served store, the viewer channel and the notebook widget (`viewer-server.R`, `viewer-widget.R`, `zarr-store.R`) | `cellucid-python/docs/user_guide/web_app/p_developer_docs/26_decisions_served_store_and_widgets.md` |
+| A measurement of the R package alone (matrices held outside R's memory, the writer) | The R architecture page, `cellucid-python/docs/user_guide/r_package/h_developer_docs/01_codebase_architecture.md`, under "Measurements" (the first one starts that section) |
+| What CI showed that a local run does not | The R testing page, `cellucid-python/docs/user_guide/r_package/h_developer_docs/02_testing_and_ci.md`, "What CI sees that a local run does not" |
+| A test that pins a behavior of the web app | The decision record of that subsystem; `cellucid-python/docs/user_guide/web_app/p_developer_docs/index.md` lists them |
+
+In a decision record, a decision goes to "Decisions and why", numbers to
+"Measurements that justify it", an attempt to "Tried and reverted". The
+record tells the story in plain words, with its date and its numbers; it
+holds no finding, audit or plan id either. Where a constant or a design rests
+on one, the comment keeps the reason in one clause and names the page:
+`(measured: 26_decisions_served_store_and_widgets.md)`.
+
+What stays in a comment: the failure the code prevents, told as a condition;
+pointers to tests, functions and pages that exist; facts about outside
+versions.
+
+Tests follow the same rule. A test's name says what it pins and holds no id.
+A test file's header says what the file pins and what breaks without it; the
+incident that led to it goes to the record.
+
+`tests/testthat/test-comment-history.R` checks the comments of `R`, `tests`, `tools` and `src`, the comments of `.github/workflows` (in a source checkout) and the `test_that` descriptions for finding ids, rounds, CI run addresses and plan pointers.
+
+**Before and after: a reason told through an incident**
+(`R/backed-matrix.R`, `.delayed_untransposed()`).
+
+```r
+# Before
+# ... up to Bioconductor 3.16 (DelayedArray 0.20 to 0.24, R 4.1
+# and 4.2) a sparse block read through it subsets a SparseArraySeed with
+# MatrixGenerics::rowAnyNAs(useNames = NA), which matrixStats 1.x, the one
+# CRAN serves those R versions, refuses ("Argument 'useNames' must be either
+# TRUE or FALSE"), so cellucid_prepare() of a cells x genes DelayedArray
+# failed there (CI run 43106603588).
+
+# After
+# ... up to Bioconductor 3.16 (DelayedArray 0.20 to 0.24, R 4.1
+# and 4.2) a sparse block read through it subsets a SparseArraySeed with
+# MatrixGenerics::rowAnyNAs(useNames = NA), which matrixStats 1.x, the one
+# CRAN serves those R versions, refuses ("Argument 'useNames' must be either
+# TRUE or FALSE"), so cellucid_prepare() of a cells x genes DelayedArray
+# would fail there.
+```
+
+The R testing page, "What CI sees that a local run does not", gains the run
+and what failed in it. The facts about Bioconductor and matrixStats stay in
+the comment: they are outside versions the code depends on.
+
+**Before and after: a measurement that justifies a design**
+(`R/viewer-widget.R`).
+
+```r
+# Before
+# Bodies and the channel's binary frames go to the page as the binary buffers
+# of a Jupyter message ... Measured on one 1 MiB body,
+# base64 and its JSON took 17.6 ms of R's one thread (60 MB/s); its buffer,
+# 0.3 ms.
+
+# After
+# Bodies and the channel's binary frames go to the page as the binary buffers
+# of a Jupyter message, never as base64 inside its JSON, which costs R's one
+# thread far more (measured: 26_decisions_served_store_and_widgets.md).
+```
+
+Record 26 already holds those numbers; a number it lacks is added there in
+the same change.
 
 ---
 

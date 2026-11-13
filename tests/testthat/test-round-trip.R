@@ -1,6 +1,6 @@
 # The round trip: what a person made in the viewer, pulled onto the object in
 # one call, and columns pushed into the viewer. The viewer is played by a
-# WebSocket client in this process that sends what app/viewer-host-results.js
+# WebSocket client in this process that sends what app/viewer-host/results.js
 # sends: one result per result, then the results inventory.
 
 # One result frame as the viewer sends it: header, then cells (0-based) and values.
@@ -37,7 +37,7 @@ viewer_results <- function(n) {
 }
 
 # What the viewer sends once its dataset opened: every result, then the
-# inventory (app/viewer-host-results.js), over the client's socket.
+# inventory (app/viewer-host/results.js), over the client's socket.
 send_snapshot <- function(viewer, client, held, n, epoch = "0123456789abcdef", dataset = viewer$dataset_id) {
   for (index in seq_along(held)) {
     result <- held[[index]]
@@ -63,7 +63,7 @@ test_that("one pull writes every highlight, label and score onto a Seurat object
   expect_identical(meta$cellucid_highlight__highlight_1[1:4], c(TRUE, FALSE, TRUE, FALSE))
   expect_identical(levels(meta$annotation), c("B", "T"))
   expect_identical(as.character(meta$annotation[1:3]), c("B", "T", NA))
-  # The colors the viewer shows it in go with it (RCC-1), where the object keeps uns.
+  # The colors the viewer shows it in go with it, where the object keeps uns.
   expect_identical(pulled$data@misc$annotation_colors, c("#e41a1c", "#377eb8"))
   expect_equal(meta[["T score"]][1:4], c(NA, 0.5, NA, -1))
   expect_false("pushed" %in% names(meta))
@@ -325,9 +325,9 @@ test_that("the web app's exports pull onto a data frame in one call", {
   expect_error(cellucid_pull(cells, file.path(folder, "bad.csv")), "of kind 'label'")
 })
 
-test_that("a field's CSV keeps the field's category order and its empty categories (F125)", {
-  # Categories came back in the rows' order of first appearance, and a
-  # category no cell held was lost.
+test_that("a field's CSV keeps the field's category order and its empty categories", {
+  # Taken from the rows, the categories would come in their order of first
+  # appearance, and a category no cell holds would be lost.
   path <- tempfile(fileext = ".csv")
   writeLines(c("obs_name,stage", "kind,categorical",
                'categories,"[""Pre-endocrine"",""Progenitor"",""Endocrine"",""Unassigned""]"',
@@ -358,13 +358,15 @@ test_that("a field's CSV keeps the field's category order and its empty categori
   expect_error(cellucid_pull(cells, path), "categories row", fixed = TRUE)
 })
 
-shared_fixture <- function(name, sha256) {
-  expect_pinned_fixture(name, sha256)
-  cellucid_fixture_path(name)
-}
+# The files the web app, cellucid-python and this package each read in their
+# round-trip tests (their home: the web repository's tests/fixtures/).
+test_that("the shared round-trip fixtures are the web app's, byte for byte", {
+  expect_shared_file("tests/testthat/fixtures/gene_sets.gmt", "tests/fixtures/gene-sets.gmt")
+  expect_shared_file("tests/testthat/fixtures/obs_columns.csv", "tests/fixtures/obs-columns.csv")
+})
 
 test_that("the shared obs-column CSV fixture keeps every declared kind", {
-  path <- shared_fixture("obs_columns.csv", "0353146eabba6a9fa76c565a5710dcce275471fcbfd7674f3a86d8c6e2799db2")
+  path <- cellucid_fixture_path("obs_columns.csv")
   cells <- data.frame(n = 1:6, row.names = c("c0", "c,1", "c2", "c3", "c4", "c5"))
   pulled <- cellucid_pull(cells, path, return_summary = TRUE)
   out <- pulled$data
@@ -386,7 +388,7 @@ test_that("GMT files round trip, by the rules the web app and Python share", {
   expect_identical(readLines(path), c("T cells\tmarkers\tCD3E\tCD3D", "B cells\t\tMS4A1", "B cells (2)\t\tCD79A", "a  b\t\tX"))
   expect_identical(cellucid_read_gmt(path),
                    list(`T cells` = c("CD3E", "CD3D"), `B cells` = "MS4A1", `B cells (2)` = "CD79A", `a  b` = "X"))
-  fixture <- shared_fixture("gene_sets.gmt", "071d3e007164ff4d9c311820ba3a1be3061b7fd4b80e59142df17690c37b8bfd")
+  fixture <- cellucid_fixture_path("gene_sets.gmt")
   expect_identical(cellucid_read_gmt(fixture),
                    list(`T cells` = c("CD3E", "CD3D"), `Set 2` = "X", `T cells (2)` = "CD2", B = "MS4A1"))
 })

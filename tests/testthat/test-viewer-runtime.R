@@ -1,9 +1,10 @@
 # What opened a viewer, as each entry point names it. The viewer names its
 # host in every sentence it says from the runtime of _cellucid/info (the
-# shared protocol's runtimes): ending an agent app's MCP server once froze the
-# page with "The notebook or R session that opened this viewer stopped". An R
-# session (cellucid_view(), cellucid_serve()) names itself "r", the agent
-# app's cellucid_mcp(open = ) "r-mcp"; the agents record carries the same.
+# shared protocol's runtimes): named as an R session, an agent app's MCP
+# server that ends would freeze the page with "The notebook or R session that
+# opened this viewer stopped". An R session (cellucid_view(),
+# cellucid_serve()) names itself "r", the agent app's cellucid_mcp(open = )
+# "r-mcp"; the agents record carries the same.
 
 published_runtime <- function(viewer) {
   records <- Filter(function(record) identical(record$viewer, viewer$viewer_id), cellucid:::.agent_discover())
